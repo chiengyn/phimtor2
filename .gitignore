@@ -34,5 +34,5 @@ data/
 phimtor2
 
 # Editor/IDE
-# .idea/
-# .vscode/
+ .idea/
+ .vscode/
