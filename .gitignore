@@ -27,6 +27,12 @@ go.work.sum
 # env file
 .env
 
+# Torrent data directory
+data/
+
+# Built binary
+phimtor2
+
 # Editor/IDE
 # .idea/
 # .vscode/
