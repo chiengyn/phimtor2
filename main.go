@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -17,6 +18,9 @@ type Config struct {
 	Port        int
 	DataDir     string
 	ReadaheadMB int
+	StorageMode string
+	PrefixMB    int
+	CacheMB     int
 }
 
 func loadConfig() Config {
@@ -24,11 +28,18 @@ func loadConfig() Config {
 		Port:        envInt("PORT", 8080),
 		DataDir:     envStr("DATA_DIR", "./data"),
 		ReadaheadMB: envInt("READAHEAD_MB", 16),
+		StorageMode: envStr("STORAGE_MODE", StorageModePrefixCache),
+		PrefixMB:    envInt("PREFIX_MB", 32),
+		CacheMB:     envInt("CACHE_MB", 2048),
 	}
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
 	flag.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "Torrent data directory")
 	flag.IntVar(&cfg.ReadaheadMB, "readahead", cfg.ReadaheadMB, "Streaming readahead in MB")
+	flag.StringVar(&cfg.StorageMode, "storage", cfg.StorageMode,
+		"Storage backend: "+StorageModePrefixCache+" or "+StorageModeCappedSQLite)
+	flag.IntVar(&cfg.PrefixMB, "prefix", cfg.PrefixMB, "Bytes pinned at the start of each video file, in MB")
+	flag.IntVar(&cfg.CacheMB, "cache", cfg.CacheMB, "Bounded cache budget for the bulk, in MB")
 	flag.Parse()
 
 	return cfg
@@ -57,7 +68,12 @@ func main() {
 		log.Fatalf("create data dir: %v", err)
 	}
 
-	manager, err := NewTorrentManager(cfg.DataDir, int64(cfg.ReadaheadMB)<<20)
+	manager, err := NewTorrentManager(StorageConfig{
+		Mode:        cfg.StorageMode,
+		DataDir:     cfg.DataDir,
+		PrefixBytes: int64(cfg.PrefixMB) << 20,
+		CacheBytes:  int64(cfg.CacheMB) << 20,
+	}, int64(cfg.ReadaheadMB)<<20)
 	if err != nil {
 		log.Fatalf("create torrent manager: %v", err)
 	}
@@ -76,7 +92,7 @@ func main() {
 
 	go func() {
 		log.Printf("phimtor2 listening on http://%s", addr)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("listen: %v", err)
 		}
 	}()

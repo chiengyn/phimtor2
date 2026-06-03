@@ -9,6 +9,7 @@ import (
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/storage"
 )
 
 type TorrentInfo struct {
@@ -38,27 +39,52 @@ func isVideoFile(path string) bool {
 }
 
 type TorrentManager struct {
-	client    *torrent.Client
-	mu        sync.RWMutex
-	torrents  map[string]*torrent.Torrent
-	readahead int64
+	client      *torrent.Client
+	storageImpl storage.ClientImplCloser
+	mu          sync.RWMutex
+	torrents    map[string]*torrent.Torrent
+	readahead   int64
+	prefixBytes int64
 }
 
-func NewTorrentManager(dataDir string, readaheadBytes int64) (*TorrentManager, error) {
+func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64) (*TorrentManager, error) {
+	storageImpl, err := newStorage(storageCfg)
+	if err != nil {
+		return nil, fmt.Errorf("create storage: %w", err)
+	}
+
 	cfg := torrent.NewDefaultClientConfig()
-	cfg.DataDir = dataDir
+	cfg.DataDir = storageCfg.DataDir
 	cfg.NoUpload = false
+	cfg.DefaultStorage = storageImpl
 
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
+		_ = storageImpl.Close()
 		return nil, fmt.Errorf("create torrent client: %w", err)
 	}
 
 	return &TorrentManager{
-		client:    client,
-		torrents:  make(map[string]*torrent.Torrent),
-		readahead: readaheadBytes,
+		client:      client,
+		storageImpl: storageImpl,
+		torrents:    make(map[string]*torrent.Torrent),
+		readahead:   readaheadBytes,
+		prefixBytes: storageCfg.PrefixBytes,
 	}, nil
+}
+
+// pinPrefixPieces raises the priority of the pieces that hold the first
+// prefixBytes of each video file so the client keeps them resident (and
+// pre-fetches them while idle), making playback start instantly. Must be called
+// after the torrent's metadata is available.
+func (m *TorrentManager) pinPrefixPieces(t *torrent.Torrent) {
+	info := t.Info()
+	if info == nil {
+		return
+	}
+	for idx := range prefixPieceIndices(info, m.prefixBytes) {
+		t.Piece(idx).SetPriority(torrent.PiecePriorityHigh)
+	}
 }
 
 func (m *TorrentManager) AddMagnet(magnetURI string) (string, error) {
@@ -73,7 +99,10 @@ func (m *TorrentManager) AddMagnet(magnetURI string) (string, error) {
 	m.torrents[infoHash] = t
 	m.mu.Unlock()
 
-	go func() { <-t.GotInfo() }()
+	go func() {
+		<-t.GotInfo()
+		m.pinPrefixPieces(t)
+	}()
 
 	return infoHash, nil
 }
@@ -95,7 +124,10 @@ func (m *TorrentManager) AddTorrentFile(r io.Reader) (string, error) {
 	m.torrents[infoHash] = t
 	m.mu.Unlock()
 
-	go func() { <-t.GotInfo() }()
+	go func() {
+		<-t.GotInfo()
+		m.pinPrefixPieces(t)
+	}()
 
 	return infoHash, nil
 }
@@ -188,4 +220,7 @@ func (m *TorrentManager) RemoveTorrent(infoHash string) error {
 
 func (m *TorrentManager) Close() {
 	m.client.Close()
+	if m.storageImpl != nil {
+		_ = m.storageImpl.Close()
+	}
 }
