@@ -66,8 +66,9 @@ Flat single `main` package. The pieces that only make sense read together:
 ## Docker
 
 `Dockerfile` builds a static `CGO_ENABLED=0`, amd64-only binary and runs it on a
-`debian:bookworm-slim` base with `ffmpeg` installed (so transcoding works;
-`capped-sqlite` remains unavailable without CGO).
+distroless base, with a statically linked `ffmpeg` copied in (so transcoding
+works while keeping the image small; `capped-sqlite` remains unavailable without
+CGO).
 `.github/workflows/docker.yml` builds and pushes to Docker Hub on pushes
 to `main` and `v*` tags, using `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets.
 `DOCKERHUB.md` is the registry description.
