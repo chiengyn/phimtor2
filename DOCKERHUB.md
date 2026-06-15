@@ -12,7 +12,8 @@ keep the whole file on disk.
 - Simple built-in web UI
 - Space-saving **prefix-cache** storage: pins the start of each file and keeps
   a bounded LRU cache for the rest
-- Small, static, distroless image (~22 MB), runs as a non-root user
+- On-the-fly transcoding (bundled `ffmpeg`) for non-browser-native containers
+- Runs as a non-root user
 
 ## Quick start
 
@@ -48,9 +49,9 @@ Configure via environment variables (or CLI flags):
 
 - This image is built **without CGO**, so the `capped-sqlite` storage mode is
   not available — use the default `prefix-cache` mode.
-- The image does **not** include `ffmpeg`. Browser-native formats
-  (`.mp4`, `.webm`, `.ogg`) stream directly; other containers (e.g. `.mkv`,
-  `.avi`) that require on-the-fly transcoding are not supported in this image.
+- Browser-native formats (`.mp4`, `.webm`, `.ogg`) stream directly; other
+  containers (e.g. `.mkv`, `.avi`) are transcoded on the fly via the bundled
+  `ffmpeg`.
 - `linux/amd64` only.
 
 ## Tags

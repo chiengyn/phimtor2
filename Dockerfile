@@ -16,23 +16,26 @@ COPY . .
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 RUN go build -trimpath -ldflags="-s -w" -o /out/phimtor2 .
 
-# Pre-create the data dir owned by the distroless nonroot uid (65532),
-# since the static image has no shell/mkdir at runtime.
-RUN mkdir -p /out/data && chown -R 65532:65532 /out/data
-
 # ---- runtime stage ----
-FROM gcr.io/distroless/static-debian12:nonroot
+# Debian slim (not distroless) so ffmpeg is available for on-the-fly transcoding
+# of non-browser-native containers (e.g. .mkv, .avi).
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --uid 10001 app
 
 WORKDIR /app
 
 COPY --from=build /out/phimtor2 /app/phimtor2
-COPY --from=build --chown=65532:65532 /out/data /data
 COPY static /app/static
 
 # Data directory (torrent cache). Mount a volume here to persist.
 ENV DATA_DIR=/data
+RUN mkdir -p /data && chown -R app:app /data /app
 
-USER nonroot
+USER app
 EXPOSE 8080
 VOLUME ["/data"]
 

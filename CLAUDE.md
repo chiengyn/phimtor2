@@ -61,13 +61,13 @@ Flat single `main` package. The pieces that only make sense read together:
   browser-native containers (`.mp4/.webm/.ogg`) are served directly via
   `http.ServeContent` (range/seek support). Anything else is piped through an
   **`ffmpeg` subprocess** (codec copy + AAC, fragmented MP4) — so transcoding
-  requires `ffmpeg` on PATH at runtime, which the distroless Docker image does
-  **not** include.
+  requires `ffmpeg` on PATH at runtime (the Docker image bundles it).
 
 ## Docker
 
-`Dockerfile` builds a static `CGO_ENABLED=0`, amd64-only binary on a distroless
-base (so `capped-sqlite` and `ffmpeg`-based transcoding are unavailable in that
-image). `.github/workflows/docker.yml` builds and pushes to Docker Hub on pushes
+`Dockerfile` builds a static `CGO_ENABLED=0`, amd64-only binary and runs it on a
+`debian:bookworm-slim` base with `ffmpeg` installed (so transcoding works;
+`capped-sqlite` remains unavailable without CGO).
+`.github/workflows/docker.yml` builds and pushes to Docker Hub on pushes
 to `main` and `v*` tags, using `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets.
 `DOCKERHUB.md` is the registry description.
