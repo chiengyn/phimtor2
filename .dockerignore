@@ -1,0 +1,16 @@
+.git
+.github
+.idea
+.vscode
+.codegraph
+.claude
+data
+.env
+*.test
+*.out
+coverage.*
+phimtor2
+Dockerfile
+.dockerignore
+README*
+LICENSE
