@@ -56,6 +56,13 @@
   video { max-width: 100%; max-height: calc(100vh - 180px); border-radius: 8px; background: #000; box-shadow: 0 0 40px rgba(0,0,0,0.8); }
   .plyr { width: 100%; max-width: 1100px; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.8); --plyr-color-main: #e94560; }
   .plyr video { max-height: calc(100vh - 180px); box-shadow: none; }
+
+  .subtitle-bar { display: flex; align-items: center; gap: 0.75rem; width: 100%; max-width: 1100px; }
+  .btn-sub { background: #2d2d4e; color: #e0e0e0; }
+  .btn-sub:hover { background: #3d3d5c; }
+  .subtitle-status { font-size: 0.8rem; color: #888; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn-sub-clear { background: transparent; color: #888; border: 1px solid #3d3d5c; }
+  .btn-sub-clear:hover { color: #e94560; border-color: #e94560; }
 </style>
 </head>
 <body>
@@ -89,6 +96,7 @@
 const API = '/api/torrents';
 let currentSrc = null;
 let player = null;
+let subtitleURL = null;
 
 async function addMagnet() {
   const input = document.getElementById('magnet-input');
@@ -150,6 +158,7 @@ function playFile(infoHash, fileIndex, fileName) {
   currentSrc = src;
 
   if (player) { player.destroy(); player = null; }
+  clearSubtitle();
 
   const pane = document.getElementById('player-pane');
   pane.innerHTML = `
@@ -158,16 +167,90 @@ function playFile(infoHash, fileIndex, fileName) {
       <source src="${src}" />
       Your browser does not support HTML5 video.
     </video>
+    <div class="subtitle-bar">
+      <label class="btn btn-sm btn-sub" for="subtitle-input">＋ Subtitles</label>
+      <input type="file" id="subtitle-input" accept=".srt,.vtt" hidden onchange="loadSubtitleFile(this.files[0]); this.value=''" />
+      <span id="subtitle-status" class="subtitle-status"></span>
+    </div>
   `;
 
-  player = new Plyr('#player');
+  player = new Plyr('#player', { captions: { active: true, update: true } });
 }
 
 function resetPlayer() {
   currentSrc = null;
   if (player) { player.destroy(); player = null; }
+  clearSubtitle();
   const pane = document.getElementById('player-pane');
   pane.innerHTML = '<span class="empty-msg">Select a file to play</span>';
+}
+
+// --- Subtitles -------------------------------------------------------------
+
+// Convert SubRip (.srt) text to WebVTT, the only format browsers render via
+// <track>. VTT differs only by a header and "." (not ",") in timestamps.
+function srtToVtt(text) {
+  const body = text
+    .replace(/^﻿/, '')                                   // strip BOM
+    .replace(/\r+/g, '')                                      // CRLF -> LF
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');        // 00:00:01,000 -> .000
+  return 'WEBVTT\n\n' + body;
+}
+
+async function loadSubtitleFile(file) {
+  if (!file || !player) return;
+  try {
+    const text = await file.text();
+    const ext = file.name.split('.').pop().toLowerCase();
+    let vtt;
+    if (ext === 'vtt') vtt = text.replace(/^﻿/, '');
+    else if (ext === 'srt') vtt = srtToVtt(text);
+    else throw new Error('unsupported format (use .srt or .vtt)');
+    setSubtitle(vtt, file.name);
+  } catch(e) {
+    alert('Subtitle error: ' + e.message);
+  }
+}
+
+// Core entry point — also reusable for subtitles fetched remotely (e.g.
+// OpenSubtitles): pass already-converted VTT text plus a display label.
+function setSubtitle(vttText, label) {
+  if (!player) return;
+  clearSubtitle();
+  subtitleURL = URL.createObjectURL(new Blob([vttText], { type: 'text/vtt' }));
+
+  const video = document.getElementById('player');
+  video.querySelectorAll('track').forEach(t => t.remove());
+  const track = document.createElement('track');
+  track.kind = 'captions';
+  track.label = label;
+  track.srclang = 'sub';
+  track.src = subtitleURL;
+  track.default = true;
+  video.appendChild(track);
+
+  // Plyr listens for the textTracks "addtrack" event and rebuilds its caption
+  // list; give it a tick before selecting and enabling the new track.
+  setTimeout(() => {
+    if (!player) return;
+    try { player.currentTrack = 0; player.toggleCaptions(true); } catch(e) {}
+  }, 150);
+
+  const status = document.getElementById('subtitle-status');
+  if (status) {
+    status.innerHTML = `${escHtml(label)} <button class="btn btn-sm btn-sub-clear" onclick="clearSubtitle(true)">✕</button>`;
+  }
+}
+
+function clearSubtitle(fromUI) {
+  if (subtitleURL) { URL.revokeObjectURL(subtitleURL); subtitleURL = null; }
+  if (fromUI && player) {
+    const video = document.getElementById('player');
+    if (video) video.querySelectorAll('track').forEach(t => t.remove());
+    try { player.toggleCaptions(false); } catch(e) {}
+    const status = document.getElementById('subtitle-status');
+    if (status) status.textContent = '';
+  }
 }
 
 function formatBytes(bytes) {
