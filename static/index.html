@@ -63,6 +63,18 @@
   .subtitle-status { font-size: 0.8rem; color: #888; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .btn-sub-clear { background: transparent; color: #888; border: 1px solid #3d3d5c; }
   .btn-sub-clear:hover { color: #e94560; border-color: #e94560; }
+
+  .os-panel { width: 100%; max-width: 1100px; background: #16213e; border: 1px solid #2d2d4e; border-radius: 8px; padding: 0.85rem; display: flex; flex-direction: column; gap: 0.65rem; }
+  .os-search-row { display: flex; gap: 0.5rem; }
+  .os-search-row input[type="text"] { flex: 1; }
+  .os-search-row input.os-lang { flex: 0 0 70px; text-align: center; }
+  .os-results { display: flex; flex-direction: column; gap: 0.25rem; max-height: 220px; overflow-y: auto; }
+  .os-result { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0.5rem; border-radius: 5px; cursor: pointer; font-size: 0.82rem; }
+  .os-result:hover { background: #1f2a4a; }
+  .os-lang-badge { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: #2d2d4e; color: #c4b5fd; padding: 0.1rem 0.35rem; border-radius: 3px; flex: 0 0 auto; }
+  .os-rel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; }
+  .os-hash { font-size: 0.65rem; font-weight: 700; background: #14532d; color: #86efac; padding: 0.1rem 0.35rem; border-radius: 3px; }
+  .os-dl { color: #666; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -94,9 +106,12 @@
 <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 <script>
 const API = '/api/torrents';
+const OS_API = '/api/subtitles';
 let currentSrc = null;
+let currentVideo = null;
 let player = null;
 let subtitleURL = null;
+let osResults = [];
 
 async function addMagnet() {
   const input = document.getElementById('magnet-input');
@@ -156,6 +171,7 @@ function playFile(infoHash, fileIndex, fileName) {
   const src = `${API}/${infoHash}/files/${fileIndex}/stream`;
   if (currentSrc === src) return;
   currentSrc = src;
+  currentVideo = { infoHash, fileIndex, fileName };
 
   if (player) { player.destroy(); player = null; }
   clearSubtitle();
@@ -170,7 +186,16 @@ function playFile(infoHash, fileIndex, fileName) {
     <div class="subtitle-bar">
       <label class="btn btn-sm btn-sub" for="subtitle-input">＋ Subtitles</label>
       <input type="file" id="subtitle-input" accept=".srt,.vtt" hidden onchange="loadSubtitleFile(this.files[0]); this.value=''" />
+      <button class="btn btn-sm btn-sub" onclick="toggleOsPanel()">🔍 OpenSubtitles</button>
       <span id="subtitle-status" class="subtitle-status"></span>
+    </div>
+    <div class="os-panel" id="os-panel" hidden>
+      <div class="os-search-row">
+        <input type="text" id="os-query" placeholder="Search query…" onkeydown="if(event.key==='Enter')searchOpenSubtitles()" />
+        <input type="text" class="os-lang" id="os-lang" value="en" title="Language code(s), e.g. en,vi" />
+        <button class="btn btn-sm btn-sub" onclick="searchOpenSubtitles()">Search</button>
+      </div>
+      <div class="os-results" id="os-results"></div>
     </div>
   `;
 
@@ -179,6 +204,8 @@ function playFile(infoHash, fileIndex, fileName) {
 
 function resetPlayer() {
   currentSrc = null;
+  currentVideo = null;
+  osResults = [];
   if (player) { player.destroy(); player = null; }
   clearSubtitle();
   const pane = document.getElementById('player-pane');
@@ -250,6 +277,67 @@ function clearSubtitle(fromUI) {
     try { player.toggleCaptions(false); } catch(e) {}
     const status = document.getElementById('subtitle-status');
     if (status) status.textContent = '';
+  }
+}
+
+// --- OpenSubtitles ---------------------------------------------------------
+
+function toggleOsPanel(force) {
+  const panel = document.getElementById('os-panel');
+  if (!panel) return;
+  const show = force !== undefined ? force : panel.hidden;
+  panel.hidden = !show;
+  if (show) {
+    const q = document.getElementById('os-query');
+    if (q && !q.value && currentVideo) {
+      q.value = currentVideo.fileName.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim();
+    }
+    if (q) q.focus();
+  }
+}
+
+async function searchOpenSubtitles() {
+  if (!currentVideo) return;
+  const results = document.getElementById('os-results');
+  const query = document.getElementById('os-query').value.trim();
+  const lang = document.getElementById('os-lang').value.trim() || 'en';
+  results.innerHTML = '<span class="loading-text">Searching…</span>';
+  try {
+    const params = new URLSearchParams({ languages: lang });
+    if (query) params.set('query', query);
+    const url = `${API}/${currentVideo.infoHash}/files/${currentVideo.fileIndex}/subtitles?${params}`;
+    const res = await fetch(url);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    osResults = await res.json();
+    if (!osResults.length) { results.innerHTML = '<span class="loading-text">No subtitles found.</span>'; return; }
+    results.innerHTML = osResults.map((s, i) => `
+      <div class="os-result" onclick="applyOsResult(${i})">
+        <span class="os-lang-badge">${escHtml(s.language || '?')}</span>
+        <span class="os-rel" title="${escHtml(s.release || '')}">${escHtml(s.release || '(untitled)')}</span>
+        ${s.fromHash ? '<span class="os-hash">hash match</span>' : ''}
+        <span class="os-dl">⬇ ${s.downloadCount || 0}</span>
+      </div>`).join('');
+  } catch(e) {
+    results.innerHTML = `<span class="loading-text">Error: ${escHtml(e.message)}</span>`;
+  }
+}
+
+async function applyOsResult(i) {
+  const s = osResults[i];
+  if (!s) return;
+  const results = document.getElementById('os-results');
+  const prev = results.innerHTML;
+  results.innerHTML = '<span class="loading-text">Downloading subtitle…</span>';
+  try {
+    const res = await fetch(`${OS_API}/download?file_id=${s.fileId}`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    const vtt = await res.text();
+    setSubtitle(vtt, s.release || s.language || 'OpenSubtitles');
+    toggleOsPanel(false);
+    results.innerHTML = prev;
+  } catch(e) {
+    results.innerHTML = prev;
+    alert('Subtitle download failed: ' + e.message);
   }
 }
 

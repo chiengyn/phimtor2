@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -202,6 +204,104 @@ func (m *TorrentManager) GetFileReader(infoHash string, fileIndex int) (io.ReadS
 	}
 
 	return reader, fi, nil
+}
+
+// GetFileInfo returns metadata for a file without opening a reader.
+func (m *TorrentManager) GetFileInfo(infoHash string, fileIndex int) (*FileInfo, error) {
+	t, ok := m.GetTorrent(infoHash)
+	if !ok {
+		return nil, fmt.Errorf("torrent not found")
+	}
+	if t.Info() == nil {
+		return nil, fmt.Errorf("torrent metadata not ready")
+	}
+	files := t.Files()
+	if fileIndex < 0 || fileIndex >= len(files) {
+		return nil, fmt.Errorf("file index out of range")
+	}
+	f := files[fileIndex]
+	return &FileInfo{
+		Index:          fileIndex,
+		Path:           f.Path(),
+		Length:         f.Length(),
+		BytesCompleted: f.BytesCompleted(),
+		IsVideo:        isVideoFile(f.Path()),
+	}, nil
+}
+
+// MovieHash computes the OpenSubtitles (OSDb) hash for a file: the file size
+// plus the 64-bit little-endian sum of its first and last 64 KiB. Because the
+// tail of a streaming torrent is often not on disk yet, the read is bounded by
+// ctx — on timeout the reader is closed to unblock the pending read and an
+// error is returned, letting the caller fall back to a text query.
+func (m *TorrentManager) MovieHash(ctx context.Context, infoHash string, fileIndex int) (string, error) {
+	t, ok := m.GetTorrent(infoHash)
+	if !ok {
+		return "", fmt.Errorf("torrent not found")
+	}
+	if t.Info() == nil {
+		return "", fmt.Errorf("torrent metadata not ready")
+	}
+	files := t.Files()
+	if fileIndex < 0 || fileIndex >= len(files) {
+		return "", fmt.Errorf("file index out of range")
+	}
+
+	f := files[fileIndex]
+	const chunk = 65536
+	size := f.Length()
+	if size < chunk {
+		return "", fmt.Errorf("file too small for moviehash")
+	}
+
+	reader := f.NewReader()
+	reader.SetResponsive()
+	reader.SetReadahead(chunk)
+
+	type result struct {
+		hash string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		hash := uint64(size)
+		buf := make([]byte, chunk)
+
+		if _, err := io.ReadFull(reader, buf); err != nil {
+			ch <- result{err: err}
+			return
+		}
+		hash += sumLE64(buf)
+
+		if _, err := reader.Seek(-chunk, io.SeekEnd); err != nil {
+			ch <- result{err: err}
+			return
+		}
+		if _, err := io.ReadFull(reader, buf); err != nil {
+			ch <- result{err: err}
+			return
+		}
+		hash += sumLE64(buf)
+
+		ch <- result{hash: fmt.Sprintf("%016x", hash)}
+	}()
+
+	select {
+	case <-ctx.Done():
+		reader.Close() // unblock the pending Read in the goroutine
+		return "", ctx.Err()
+	case r := <-ch:
+		reader.Close()
+		return r.hash, r.err
+	}
+}
+
+func sumLE64(b []byte) uint64 {
+	var s uint64
+	for i := 0; i+8 <= len(b); i += 8 {
+		s += binary.LittleEndian.Uint64(b[i : i+8])
+	}
+	return s
 }
 
 func (m *TorrentManager) RemoveTorrent(infoHash string) error {

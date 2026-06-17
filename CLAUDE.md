@@ -27,6 +27,10 @@ copied alongside the binary.
 
 Configuration is via env vars or matching CLI flags (see `config.go`):
 `PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`.
+The OpenSubtitles integration is **env-only** (no flags, since these are
+secrets): `OPENSUBTITLES_API_KEY` (required to enable the feature),
+`OPENSUBTITLES_USER_AGENT`, and optional `OPENSUBTITLES_USERNAME` /
+`OPENSUBTITLES_PASSWORD` (a login token raises the per-day download quota).
 
 ## Architecture
 
@@ -62,6 +66,16 @@ Flat single `main` package. The pieces that only make sense read together:
   `http.ServeContent` (range/seek support). Anything else is piped through an
   **`ffmpeg` subprocess** (codec copy + AAC, fragmented MP4) — so transcoding
   requires `ffmpeg` on PATH at runtime (the Docker image bundles it).
+
+- **Subtitles** are loaded client-side as WebVTT `<track>`s on the Plyr player
+  (`static/index.html`): the user picks a local `.srt`/`.vtt` (SRT is converted
+  to VTT in the browser), or searches **OpenSubtitles**. The OpenSubtitles path
+  is proxied through the Go server (`opensubtitles.go`) so the API key never
+  reaches the browser — `GET /api/torrents/{infoHash}/files/{i}/subtitles`
+  searches (text query + season/episode parsed from the file name, plus a
+  best-effort `TorrentManager.MovieHash`), and `GET /api/subtitles/download`
+  returns VTT. Moviehash is best-effort and usually unavailable: it needs the
+  file's last 64 KiB, which a partially-downloaded streaming torrent rarely has.
 
 ## Docker
 
