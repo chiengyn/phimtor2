@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Phimtor</title>
+<link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
@@ -53,6 +54,8 @@
   .player-pane .empty-msg { color: #444; font-size: 1rem; }
   #player-title { font-size: 0.85rem; color: #888; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   video { max-width: 100%; max-height: calc(100vh - 180px); border-radius: 8px; background: #000; box-shadow: 0 0 40px rgba(0,0,0,0.8); }
+  .plyr { width: 100%; max-width: 1100px; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.8); --plyr-color-main: #e94560; }
+  .plyr video { max-height: calc(100vh - 180px); box-shadow: none; }
 </style>
 </head>
 <body>
@@ -81,9 +84,11 @@
   </main>
 </div>
 
+<script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 <script>
 const API = '/api/torrents';
 let currentSrc = null;
+let player = null;
 
 async function addMagnet() {
   const input = document.getElementById('magnet-input');
@@ -144,18 +149,23 @@ function playFile(infoHash, fileIndex, fileName) {
   if (currentSrc === src) return;
   currentSrc = src;
 
+  if (player) { player.destroy(); player = null; }
+
   const pane = document.getElementById('player-pane');
   pane.innerHTML = `
     <span id="player-title">${escHtml(fileName)}</span>
-    <video id="player" controls autoplay>
+    <video id="player" controls autoplay playsinline>
       <source src="${src}" />
       Your browser does not support HTML5 video.
     </video>
   `;
+
+  player = new Plyr('#player');
 }
 
 function resetPlayer() {
   currentSrc = null;
+  if (player) { player.destroy(); player = null; }
   const pane = document.getElementById('player-pane');
   pane.innerHTML = '<span class="empty-msg">Select a file to play</span>';
 }
