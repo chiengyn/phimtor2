@@ -4,101 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A self-hosted torrent video streamer. A Go HTTP server (chi router) wraps
-`anacrolix/torrent`, exposes a small REST API plus a single-page web UI, and
-streams video files from a torrent to the browser while they download. The
-defining feature is **space-saving storage** — it never keeps the whole file on
-disk.
+**phimtor2** is a self-hosted movie/TV platform built from **three independent Go
+services**, each its own module with its own `CLAUDE.md`. Two of them (admin,
+viewer) share a single MySQL database; the streamer stands alone.
 
-## Repository layout
+| Module | Purpose | Default port | Storage | Detail |
+|--------|---------|--------------|---------|--------|
+| **`admin/`** | TMDB metadata importer + admin UI (writes the catalog) | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
+| **`viewer/`** | Public read-only browse/discovery + watch UI | `8082` | MySQL (read-only) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
+| **`streamer/`** | Torrent video streamer (space-saving storage) | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
 
-The repo holds **two independent Go modules**, each its own service:
+When working inside a module, read **that module's `CLAUDE.md`** — file paths in
+each are relative to the module directory. There are currently **no tests** in
+any module.
 
-- **`streamer/`** — the torrent video streamer described in this file
-  (`module github.com/chiengyn/phimtor2/streamer`). Everything in the
-  Architecture and Docker sections below lives here; file paths like `torrent.go`
-  or `server.go` are relative to `streamer/`.
-- **`admin/`** — a separate TMDB metadata admin service
-  (`module github.com/chiengyn/phimtor2/admin`): an admin pastes a themoviedb.org
-  id/link and it stores movie/TV info (Vietnamese, English fallback) into MySQL.
-  Has its own `admin/CLAUDE`-level details in `admin/`.
+## The shared MySQL catalog (admin ⇄ viewer)
 
-The repo-root `docker-compose.yml` provisions the shared **MySQL** used by
-`admin/`. There are currently **no tests** in either module.
+`admin/` and `viewer/` are two ends of one database:
 
-## Commands
+- **`admin/` owns the schema.** It runs the embedded migrations in
+  `admin/migrations/` on startup (`admin/store.go`) and is the only writer.
+- **`viewer/` only reads.** It **never migrates** and assumes the tables already
+  exist (`viewer/main.go`).
 
-Run from `streamer/`:
+So schema changes live in `admin/` (a new numbered `admin/migrations/NNNN_*.sql`),
+and any new column the viewer should surface must be added to **both** modules'
+`models.go`/`store.go` query layers (they are intentionally duplicated, not a
+shared package). Both connect with `parseTime=true&charset=utf8mb4` so dates scan
+into `time.Time` and Vietnamese text round-trips; both retry the initial ping so
+they survive MySQL not being ready yet under compose.
 
-```bash
-go build -o phimtor2 .      # build (default CGO; prefix-cache mode only needs CGO_ENABLED=0)
-go run .                    # run with defaults (listens on :8080, data in ./data)
-go vet ./...                # vet
-```
+The catalog is **Vietnamese-first with English fallback**: TMDB fields are
+fetched in `vi-VN` and any empty field is backfilled from `en-US`. UI strings in
+both services are Vietnamese ("Phim lẻ" = movies, "Phim bộ" = TV series).
 
-The server serves `static/index.html` via a **cwd-relative path**
-(`server.go:35`), so it must be launched from `streamer/` (or wherever
-`static/` lives). The Docker image handles this by `WORKDIR /app` with `static/`
-copied alongside the binary.
+## Repo-wide commands & layout
 
-Configuration is via env vars or matching CLI flags (see `config.go`):
-`PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`.
-The OpenSubtitles integration is **env-only** (no flags, since these are
-secrets): `OPENSUBTITLES_API_KEY` (required to enable the feature),
-`OPENSUBTITLES_USER_AGENT`, and optional `OPENSUBTITLES_USERNAME` /
-`OPENSUBTITLES_PASSWORD` (a login token raises the per-day download quota).
-
-## Architecture
-
-Flat single `main` package. The pieces that only make sense read together:
-
-- **`TorrentManager`** (`torrent.go`) owns the `anacrolix/torrent` client and a
-  map of active torrents. On every add (`AddMagnet`/`AddTorrentFile`) it spawns a
-  goroutine that waits for `GotInfo()` then calls `pinPrefixPieces` to raise the
-  priority of the pieces holding the first `PREFIX_MB` of each video file — so
-  playback starts instantly.
-
-- **Pluggable storage** is the core design. `newStorage` (`storage.go`) selects a
-  backend by `STORAGE_MODE`:
-  - `prefix-cache` (default) — a custom two-tier `storage.ClientImplCloser` in
-    `storage_prefixcache.go`. One blob file per piece. **Prefix tier** (pieces
-    overlapping each video's first `PREFIX_MB`) is persisted in `<DATA_DIR>/prefix`
-    with a bolt completion DB and never evicted. **Cache tier** is a bounded LRU
-    (`CACHE_MB`) in `<DATA_DIR>/cache`, treated as ephemeral and **wiped on
-    startup**. It reports a `Capacity` to the client so evicted pieces are
-    gracefully re-downloaded on later reads.
-  - `capped-sqlite` — the library's built-in capped sqlite storage. **Requires
-    CGO.** Selected via a build-tag pair: `storage_sqlite.go` (`//go:build cgo`)
-    vs `storage_sqlite_stub.go` (`//go:build !cgo`, returns an error). A non-CGO
-    build silently lacks this mode.
-
-- **`prefixPieceIndices`** (`storage.go`) is the shared contract between the two
-  worlds above: the manager uses it to set piece *priority*, and the prefix-cache
-  storage uses the same function to decide which pieces route to the *persistent
-  tier*. Keep these consistent — both must agree on what "the prefix" is.
-
-- **Streaming + transcode** (`server.go` `handleStream`, `transcode.go`):
-  browser-native containers (`.mp4/.webm/.ogg`) are served directly via
-  `http.ServeContent` (range/seek support). Anything else is piped through an
-  **`ffmpeg` subprocess** (codec copy + AAC, fragmented MP4) — so transcoding
-  requires `ffmpeg` on PATH at runtime (the Docker image bundles it).
-
-- **Subtitles** are loaded client-side as WebVTT `<track>`s on the Plyr player
-  (`static/index.html`): the user picks a local `.srt`/`.vtt` (SRT is converted
-  to VTT in the browser), or searches **OpenSubtitles**. The OpenSubtitles path
-  is proxied through the Go server (`opensubtitles.go`) so the API key never
-  reaches the browser — `GET /api/torrents/{infoHash}/files/{i}/subtitles`
-  searches (text query + season/episode parsed from the file name, plus a
-  best-effort `TorrentManager.MovieHash`), and `GET /api/subtitles/download`
-  returns VTT. Moviehash is best-effort and usually unavailable: it needs the
-  file's last 64 KiB, which a partially-downloaded streaming torrent rarely has.
-
-## Docker
-
-`streamer/Dockerfile` builds a static `CGO_ENABLED=0`, amd64-only binary and runs
-it on a distroless base, with a statically linked `ffmpeg` copied in (so
-transcoding works while keeping the image small; `capped-sqlite` remains
-unavailable without CGO).
-`.github/workflows/docker.yml` builds and pushes to Docker Hub on pushes
-to `main` and `v*` tags (build context `./streamer`), using `DOCKERHUB_USERNAME`
-/ `DOCKERHUB_TOKEN` secrets. `streamer/DOCKERHUB.md` is the registry description.
+- All three modules: `go build .`, `go run .`, `go vet ./...` from the module dir.
+  All target **Go 1.26**.
+- `docker-compose.yml` (repo root) provisions the **shared MySQL 8** (utf8mb4) for
+  admin/viewer. Quick start:
+  ```bash
+  cp admin/.env.example .env   # fill TMDB_API_KEY and ADMIN_PASSWORD
+  docker compose up -d         # MySQL; admin UI at http://localhost:8081
+  ```
+- `data/` holds the streamer's on-disk torrent storage (gitignored).
+- Each service serves its UI assets via a **cwd-relative path** (`static/` or
+  `templates/`), so it must be launched from its own module directory (the Docker
+  images handle this with `WORKDIR /app`).
