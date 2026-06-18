@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phimtor2 — Quản trị phim</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0e1116; color: #e6edf3; line-height: 1.5;
+    }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 980px; margin: 0 auto; padding: 1.5rem; }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; }
+    input, select, button, textarea {
+      font: inherit; padding: .55rem .7rem; border-radius: 8px;
+      border: 1px solid #303b48; background: #161b22; color: #e6edf3;
+    }
+    input { flex: 1; min-width: 220px; }
+    button { background: #2563eb; border-color: #2563eb; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    button.danger { background: transparent; border-color: #5a2330; color: #ff8b94; }
+    button.danger:hover { background: #2a141a; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+    .card {
+      display: flex; gap: 1rem; padding: .75rem; margin-top: .75rem;
+      border: 1px solid #222b36; border-radius: 10px; background: #11161d; align-items: flex-start;
+    }
+    .card img { width: 72px; height: 108px; object-fit: cover; border-radius: 6px; background: #222b36; flex: none; }
+    .card .body { flex: 1; }
+    .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; vertical-align: middle; }
+    .badge.tv { background: #db61a233; color: #ff9bce; }
+    .title-name { font-weight: 600; }
+    #msg { margin-top: .75rem; min-height: 1.2rem; }
+    #msg.err { color: #ff8b94; }
+    #msg.ok { color: #7ee787; }
+    h2 { font-size: 1rem; margin: 1.75rem 0 .25rem; }
+    a { color: #79c0ff; }
+  </style>
+</head>
+<body>
+  <header><h1>🎬 phimtor2 — Quản trị phim</h1></header>
+  <main>
+    <p class="muted">Dán ID hoặc liên kết themoviedb.org của phim lẻ / phim bộ rồi bấm “Nhập”.
+      Dữ liệu ưu tiên tiếng Việt, thiếu thì tự lấy tiếng Anh.</p>
+
+    <div class="row">
+      <input id="ref" placeholder="VD: https://www.themoviedb.org/movie/27205  hoặc  27205" autofocus>
+      <select id="type" title="Chỉ cần khi dán ID dạng số">
+        <option value="movie">Phim lẻ (movie)</option>
+        <option value="tv">Phim bộ (tv)</option>
+      </select>
+      <button id="import">Nhập</button>
+    </div>
+    <div id="msg"></div>
+
+    <h2>Đã nhập</h2>
+    <div id="list"></div>
+  </main>
+
+  <script>
+    const IMG = "https://image.tmdb.org/t/p/w200";
+    const msg = document.getElementById("msg");
+    const list = document.getElementById("list");
+
+    function setMsg(text, kind) {
+      msg.textContent = text;
+      msg.className = kind || "";
+    }
+
+    async function api(method, path, body) {
+      const opts = { method, headers: {} };
+      if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+      const res = await fetch(path, opts);
+      if (res.status === 204) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      return data;
+    }
+
+    async function loadList() {
+      try {
+        const titles = await api("GET", "/api/titles");
+        if (!titles.length) { list.innerHTML = '<p class="muted">Chưa có gì.</p>'; return; }
+        list.innerHTML = titles.map(t => {
+          const year = t.air_date ? t.air_date.slice(0, 4) : "—";
+          const poster = t.poster_path ? IMG + t.poster_path : "";
+          const badge = t.type === "tv"
+            ? '<span class="badge tv">Phim bộ</span>'
+            : '<span class="badge">Phim lẻ</span>';
+          return `<div class="card">
+            <img src="${poster}" alt="" onerror="this.style.visibility='hidden'">
+            <div class="body">
+              <div><span class="title-name">${escapeHtml(t.title)}</span> ${badge}</div>
+              <div class="muted">${year} · TMDB #${t.tmdb_id} · db #${t.id}</div>
+            </div>
+            <button class="danger" data-id="${t.id}">Xóa</button>
+          </div>`;
+        }).join("");
+        list.querySelectorAll("button.danger").forEach(b =>
+          b.addEventListener("click", () => removeTitle(b.dataset.id)));
+      } catch (e) {
+        list.innerHTML = '<p class="err">' + escapeHtml(e.message) + '</p>';
+      }
+    }
+
+    async function doImport() {
+      const ref = document.getElementById("ref").value.trim();
+      if (!ref) { setMsg("Hãy nhập ID hoặc liên kết.", "err"); return; }
+      const type = document.getElementById("type").value;
+      setMsg("Đang lấy dữ liệu từ TMDB…");
+      try {
+        const t = await api("POST", "/api/import", { ref, type });
+        const extra = t.type === "tv" ? ` (${t.seasons ? t.seasons.length : 0} mùa)` : "";
+        setMsg(`Đã nhập: ${t.title}${extra}`, "ok");
+        document.getElementById("ref").value = "";
+        loadList();
+      } catch (e) {
+        setMsg(e.message, "err");
+      }
+    }
+
+    async function removeTitle(id) {
+      if (!confirm("Xóa mục này khỏi cơ sở dữ liệu?")) return;
+      try { await api("DELETE", "/api/titles/" + id); loadList(); }
+      catch (e) { setMsg(e.message, "err"); }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    document.getElementById("import").addEventListener("click", doImport);
+    document.getElementById("ref").addEventListener("keydown", e => { if (e.key === "Enter") doImport(); });
+    loadList();
+  </script>
+</body>
+</html>
