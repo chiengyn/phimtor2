@@ -1,4 +1,4 @@
-module github.com/chiengyn/phimtor2
+module github.com/chiengyn/phimtor2/streamer
 
 go 1.26.3
 

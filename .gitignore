@@ -26,12 +26,17 @@ go.work.sum
 
 # env file
 .env
+.env.*
+!.env.example
 
 # Torrent data directory
 data/
 
-# Built binary
+# Built binaries
 phimtor2
+phimtor2-admin
+streamer/streamer
+admin/admin
 
 # Editor/IDE
 .idea/

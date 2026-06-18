@@ -10,7 +10,25 @@ streams video files from a torrent to the browser while they download. The
 defining feature is **space-saving storage** — it never keeps the whole file on
 disk.
 
+## Repository layout
+
+The repo holds **two independent Go modules**, each its own service:
+
+- **`streamer/`** — the torrent video streamer described in this file
+  (`module github.com/chiengyn/phimtor2/streamer`). Everything in the
+  Architecture and Docker sections below lives here; file paths like `torrent.go`
+  or `server.go` are relative to `streamer/`.
+- **`admin/`** — a separate TMDB metadata admin service
+  (`module github.com/chiengyn/phimtor2/admin`): an admin pastes a themoviedb.org
+  id/link and it stores movie/TV info (Vietnamese, English fallback) into MySQL.
+  Has its own `admin/CLAUDE`-level details in `admin/`.
+
+The repo-root `docker-compose.yml` provisions the shared **MySQL** used by
+`admin/`. There are currently **no tests** in either module.
+
 ## Commands
+
+Run from `streamer/`:
 
 ```bash
 go build -o phimtor2 .      # build (default CGO; prefix-cache mode only needs CGO_ENABLED=0)
@@ -18,10 +36,8 @@ go run .                    # run with defaults (listens on :8080, data in ./dat
 go vet ./...                # vet
 ```
 
-There are currently **no tests** in the repo.
-
 The server serves `static/index.html` via a **cwd-relative path**
-(`server.go:35`), so it must be launched from the repo root (or wherever
+(`server.go:35`), so it must be launched from `streamer/` (or wherever
 `static/` lives). The Docker image handles this by `WORKDIR /app` with `static/`
 copied alongside the binary.
 
@@ -79,10 +95,10 @@ Flat single `main` package. The pieces that only make sense read together:
 
 ## Docker
 
-`Dockerfile` builds a static `CGO_ENABLED=0`, amd64-only binary and runs it on a
-distroless base, with a statically linked `ffmpeg` copied in (so transcoding
-works while keeping the image small; `capped-sqlite` remains unavailable without
-CGO).
+`streamer/Dockerfile` builds a static `CGO_ENABLED=0`, amd64-only binary and runs
+it on a distroless base, with a statically linked `ffmpeg` copied in (so
+transcoding works while keeping the image small; `capped-sqlite` remains
+unavailable without CGO).
 `.github/workflows/docker.yml` builds and pushes to Docker Hub on pushes
-to `main` and `v*` tags, using `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets.
-`DOCKERHUB.md` is the registry description.
+to `main` and `v*` tags (build context `./streamer`), using `DOCKERHUB_USERNAME`
+/ `DOCKERHUB_TOKEN` secrets. `streamer/DOCKERHUB.md` is the registry description.
