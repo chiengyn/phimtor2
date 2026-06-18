@@ -2,21 +2,21 @@
 {{define "content"}}
 <section class="filters">
 	<input class="search" type="search" name="q" placeholder="Tìm phim..." value="{{.Query}}"
-		hx-get="/titles" hx-target="#grid" hx-trigger="input changed delay:300ms, search"
+		hx-get="/titles" hx-target="#results" hx-trigger="input changed delay:300ms, search"
 		hx-include="[name='genre'],[name='type']">
-	<select name="genre" hx-get="/titles" hx-target="#grid" hx-trigger="change"
+	<select name="genre" hx-get="/titles" hx-target="#results" hx-trigger="change"
 		hx-include="[name='q'],[name='type']">
 		<option value="">Tất cả thể loại</option>
 		{{range .Genres}}
 		<option value="{{.ID}}" {{if eq .ID $.GenreID}}selected{{end}}>{{.Name}}</option>
 		{{end}}
 	</select>
-	<select name="type" hx-get="/titles" hx-target="#grid" hx-trigger="change"
+	<select name="type" hx-get="/titles" hx-target="#results" hx-trigger="change"
 		hx-include="[name='q'],[name='genre']">
 		<option value="">Tất cả</option>
 		<option value="movie" {{if eq .Type "movie"}}selected{{end}}>Phim lẻ</option>
 		<option value="tv" {{if eq .Type "tv"}}selected{{end}}>Phim bộ</option>
 	</select>
 </section>
-<div id="grid" class="grid">{{template "grid" .Titles}}</div>
+<div id="results">{{if .Filtered}}{{template "grid" .Titles}}{{else}}{{template "rows" .Rows}}{{end}}</div>
 {{end}}

@@ -101,6 +101,104 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]TitleSummary, 
 	return out, rows.Err()
 }
 
+// Row is a labelled horizontal strip of titles on the browse home page.
+type Row struct {
+	Key    string // query string that re-filters to this row, e.g. "type=movie"
+	Label  string
+	Titles []TitleSummary
+}
+
+// ListRows groups every title into Netflix-style browse rows: one row per type
+// (movies, then TV) followed by one row per genre, newest titles first within
+// each row. Empty rows are omitted.
+func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
+	// Load every title once, newest first.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tmdb_id, type, title, air_date, poster_path FROM titles ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var order []int64 // title ids in newest-first order
+	byID := map[int64]TitleSummary{}
+	var movies, tv []TitleSummary
+	for rows.Next() {
+		var t TitleSummary
+		var air sql.NullTime
+		var poster sql.NullString
+		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &air, &poster); err != nil {
+			return nil, err
+		}
+		t.AirDate = dateStr(air)
+		t.PosterPath = poster.String
+		byID[t.ID] = t
+		order = append(order, t.ID)
+		switch t.Type {
+		case "movie":
+			movies = append(movies, t)
+		case "tv":
+			tv = append(tv, t)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Load the title→genre edges. ORDER BY g.name makes first-seen genre order
+	// alphabetical; titles are bucketed by walking `order` so each genre row
+	// stays newest-first.
+	grows, err := s.db.QueryContext(ctx, `
+		SELECT tg.title_id, g.id, g.name FROM title_genres tg
+		JOIN genres g ON g.id = tg.genre_id
+		ORDER BY g.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer grows.Close()
+
+	genreName := map[int]string{}
+	titleGenres := map[int64][]int{}
+	var genreOrder []int
+	for grows.Next() {
+		var titleID int64
+		var gid int
+		var gname string
+		if err := grows.Scan(&titleID, &gid, &gname); err != nil {
+			return nil, err
+		}
+		if _, seen := genreName[gid]; !seen {
+			genreName[gid] = gname
+			genreOrder = append(genreOrder, gid)
+		}
+		titleGenres[titleID] = append(titleGenres[titleID], gid)
+	}
+	if err := grows.Err(); err != nil {
+		return nil, err
+	}
+
+	genreTitles := map[int][]TitleSummary{}
+	for _, id := range order {
+		for _, gid := range titleGenres[id] {
+			genreTitles[gid] = append(genreTitles[gid], byID[id])
+		}
+	}
+
+	var out []Row
+	if len(movies) > 0 {
+		out = append(out, Row{Key: "type=movie", Label: "Phim lẻ", Titles: movies})
+	}
+	if len(tv) > 0 {
+		out = append(out, Row{Key: "type=tv", Label: "Phim bộ", Titles: tv})
+	}
+	for _, gid := range genreOrder {
+		if ts := genreTitles[gid]; len(ts) > 0 {
+			out = append(out, Row{Key: fmt.Sprintf("genre=%d", gid), Label: genreName[gid], Titles: ts})
+		}
+	}
+	return out, nil
+}
+
 // ListGenres returns only the genres actually attached to at least one title,
 // for the discovery filter dropdown.
 func (s *Store) ListGenres(ctx context.Context) ([]Genre, error) {

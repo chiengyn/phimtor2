@@ -103,6 +103,33 @@ main { max-width: 1400px; margin: 0 auto; padding: 8px 4% 48px; }
 .card-meta { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
 .empty { color: var(--muted); grid-column: 1 / -1; padding: 40px 0; text-align: center; }
 
+/* --- Browse rows (Netflix-style carousels) --- */
+.row { margin-bottom: 34px; }
+.row-title {
+	font-size: 1.3rem; font-weight: 700; margin: 0 0 12px;
+}
+.row-title a { display: inline-flex; align-items: baseline; gap: 6px; }
+.row-chevron { color: var(--accent); font-weight: 900; opacity: 0; transform: translateX(-6px); transition: opacity 0.2s ease, transform 0.2s ease; }
+.row-title a:hover .row-chevron { opacity: 1; transform: translateX(0); }
+.row-track {
+	display: flex;
+	gap: 10px;
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding: 10px 0;
+	scroll-snap-type: x proximity;
+	scrollbar-width: thin;
+	scrollbar-color: #555 transparent;
+}
+.row-track::-webkit-scrollbar { height: 8px; }
+.row-track::-webkit-scrollbar-thumb { background: #555; border-radius: 999px; }
+.row-track::-webkit-scrollbar-thumb:hover { background: #777; }
+.row-track .card {
+	flex: 0 0 160px;
+	scroll-snap-align: start;
+}
+.row-track .card:hover { transform: scale(1.06); }
+
 /* --- Detail --- */
 .detail { position: relative; }
 .backdrop {

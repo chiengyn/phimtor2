@@ -1,4 +1,4 @@
-{{define "grid"}}{{range .}}
+{{define "card"}}
 <a class="card" href="/titles/{{.ID}}">
 	<div class="poster">
 		{{$p := img "w342" .PosterPath}}
@@ -9,6 +9,6 @@
 		<div class="card-meta">{{with year .AirDate}}{{.}} · {{end}}{{if eq .Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}}</div>
 	</div>
 </a>
-{{else}}
-<p class="empty">Không tìm thấy phim nào.</p>
-{{end}}{{end}}
+{{end}}
+
+{{define "grid"}}<div class="grid">{{range .}}{{template "card" .}}{{else}}<p class="empty">Không tìm thấy phim nào.</p>{{end}}</div>{{end}}

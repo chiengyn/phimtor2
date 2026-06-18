@@ -76,7 +76,7 @@ func (s *Server) parseTemplates() error {
 	}
 
 	var err error
-	if s.home, err = parse("layout.html", "home.html", "grid.html"); err != nil {
+	if s.home, err = parse("layout.html", "home.html", "rows.html", "grid.html"); err != nil {
 		return err
 	}
 	if s.detail, err = parse("layout.html", "detail.html"); err != nil {
@@ -126,21 +126,18 @@ func filterFromQuery(r *http.Request) TitleFilter {
 }
 
 type homeData struct {
-	Titles  []TitleSummary
-	Genres  []Genre
-	Query   string
-	GenreID int
-	Type    string
+	Rows     []Row          // browse view (no active filter)
+	Titles   []TitleSummary // flat results (filter active)
+	Genres   []Genre
+	Query    string
+	GenreID  int
+	Type     string
+	Filtered bool
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	f := filterFromQuery(r)
 
-	titles, err := s.store.ListTitles(r.Context(), f)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	genres, err := s.store.ListGenres(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -148,11 +145,23 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := homeData{
-		Titles:  titles,
-		Genres:  genres,
-		Query:   f.Query,
-		GenreID: f.GenreID,
-		Type:    f.Type,
+		Genres:   genres,
+		Query:    f.Query,
+		GenreID:  f.GenreID,
+		Type:     f.Type,
+		Filtered: f.Query != "" || f.GenreID > 0 || f.Type != "",
+	}
+
+	if data.Filtered {
+		if data.Titles, err = s.store.ListTitles(r.Context(), f); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		if data.Rows, err = s.store.ListRows(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	s.render(w, s.home, "layout", data)
 }
