@@ -1,5 +1,5 @@
 -- TMDB admin schema. utf8mb4 throughout so Vietnamese text round-trips.
--- The bootstrap splits this file on the semicolon character and runs each
+-- The migrator splits each file on the semicolon character and runs every
 -- statement individually, so avoid using a semicolon anywhere except to
 -- terminate a statement (in particular, not inside comments).
 

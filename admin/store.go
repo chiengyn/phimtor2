@@ -3,16 +3,18 @@ package main
 import (
 	"context"
 	"database/sql"
-	_ "embed"
+	"embed"
 	"fmt"
+	"io/fs"
+	"sort"
 	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
-//go:embed schema.sql
-var schemaSQL string
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 type Store struct {
 	db *sql.DB
@@ -43,18 +45,85 @@ func NewStore(dsn string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// Migrate runs schema.sql, executing each ";"-terminated statement in order.
-// "--" line comments are stripped first so a semicolon inside a comment cannot
-// split a statement.
+// Migrate applies every embedded migration in migrations/ that has not yet run,
+// in filename order, recording each one in the schema_migrations table so it is
+// never applied twice. Add new schema changes as additional numbered .sql files
+// (e.g. migrations/0002_add_foo.sql); existing files must never be edited.
+//
+// Within each file, statements are split on ";" and run individually. "--" line
+// comments are stripped first so a semicolon inside a comment cannot split a
+// statement.
 func (s *Store) Migrate(ctx context.Context) error {
-	for _, stmt := range strings.Split(stripLineComments(schemaSQL), ";") {
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    VARCHAR(255) NOT NULL PRIMARY KEY,
+			applied_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+
+	applied, err := s.appliedMigrations(ctx)
+	if err != nil {
+		return err
+	}
+
+	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("read migrations: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if applied[name] {
+			continue
+		}
+		if err := s.applyMigration(ctx, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) appliedMigrations(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("read schema_migrations: %w", err)
+	}
+	defer rows.Close()
+	applied := map[string]bool{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		applied[v] = true
+	}
+	return applied, rows.Err()
+}
+
+func (s *Store) applyMigration(ctx context.Context, name string) error {
+	body, err := migrationsFS.ReadFile("migrations/" + name)
+	if err != nil {
+		return fmt.Errorf("read migration %s: %w", name, err)
+	}
+	for _, stmt := range strings.Split(stripLineComments(string(body)), ";") {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("exec schema statement %q: %w", firstLine(stmt), err)
+			return fmt.Errorf("migration %s: exec %q: %w", name, firstLine(stmt), err)
 		}
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO schema_migrations (version) VALUES (?)`, name); err != nil {
+		return fmt.Errorf("record migration %s: %w", name, err)
 	}
 	return nil
 }
