@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phimtor2 — Quản trị phim</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0e1116; color: #e6edf3; line-height: 1.5;
+    }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 980px; margin: 0 auto; padding: 1.5rem; }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+    input, select, button, textarea {
+      font: inherit; padding: .55rem .7rem; border-radius: 8px;
+      border: 1px solid #303b48; background: #161b22; color: #e6edf3;
+    }
+    input { flex: 1; min-width: 220px; }
+    button { background: #2563eb; border-color: #2563eb; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    button.danger { background: transparent; border-color: #5a2330; color: #ff8b94; }
+    button.danger:hover { background: #2a141a; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+    .card {
+      display: flex; gap: 1rem; padding: .75rem; margin-top: .75rem;
+      border: 1px solid #222b36; border-radius: 10px; background: #11161d; align-items: flex-start;
+    }
+    .card img { width: 72px; height: 108px; object-fit: cover; border-radius: 6px; background: #222b36; flex: none; }
+    .card .body { flex: 1; }
+    .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; vertical-align: middle; }
+    .badge.tv { background: #db61a233; color: #ff9bce; }
+    .title-name { font-weight: 600; }
+    #msg { margin-top: .75rem; min-height: 1.2rem; }
+    #msg.err { color: #ff8b94; }
+    #msg.ok { color: #7ee787; }
+    h2 { font-size: 1rem; margin: 1.75rem 0 .25rem; }
+    a { color: #79c0ff; }
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline; }
+    [x-cloak] { display: none !important; }
+  </style>
+</head>
+<body>
+  <header><h1>🎬 phimtor2 — Quản trị phim</h1></header>
+  <main>
+    <p class="muted">Dán ID hoặc liên kết themoviedb.org của phim lẻ / phim bộ rồi bấm “Nhập”.
+      Dữ liệu ưu tiên tiếng Việt, thiếu thì tự lấy tiếng Anh.</p>
+
+    <form class="row"
+          hx-post="/api/import"
+          hx-target="#msg"
+          hx-swap="outerHTML"
+          x-data="{ ref: '' }"
+          x-on:htmx:after-request="if ($event.detail.successful) ref = ''">
+      <input name="ref" x-model="ref"
+             placeholder="VD: https://www.themoviedb.org/movie/27205  hoặc  27205" autofocus>
+      <select name="type" title="Chỉ cần khi dán ID dạng số" x-show="!ref.includes('/')" x-cloak>
+        <option value="movie">Phim lẻ (movie)</option>
+        <option value="tv">Phim bộ (tv)</option>
+      </select>
+      <button type="submit">Nhập</button>
+      <span class="htmx-indicator muted">Đang lấy dữ liệu từ TMDB…</span>
+    </form>
+
+    <div id="msg"></div>
+
+    <h2>Đã nhập</h2>
+    <div id="list" hx-get="/api/titles" hx-trigger="titlesChanged from:body">
+      {{ template "list" .Titles }}
+    </div>
+  </main>
+</body>
+</html>

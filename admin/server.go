@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"embed"
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,6 +13,29 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
+
+//go:embed templates/*.html
+var templatesFS embed.FS
+
+// tmdbImageBase is the CDN prefix for the poster thumbnails the UI renders.
+const tmdbImageBase = "https://image.tmdb.org/t/p/w200"
+
+var templates = template.Must(template.New("").Funcs(template.FuncMap{
+	// imgURL builds a poster thumbnail URL (empty path -> empty src).
+	"imgURL": func(path string) string {
+		if path == "" {
+			return ""
+		}
+		return tmdbImageBase + path
+	},
+	// year extracts the leading year from a "YYYY-MM-DD" air date.
+	"year": func(airDate string) string {
+		if len(airDate) >= 4 {
+			return airDate[:4]
+		}
+		return "—"
+	},
+}).ParseFS(templatesFS, "templates/*.html"))
 
 type Server struct {
 	store  *Store
@@ -36,9 +61,7 @@ func (s *Server) setupRouter() {
 	r.Use(middleware.Recoverer)
 	r.Use(s.basicAuth) // protects the UI and the API
 
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "static/index.html")
-	})
+	r.Get("/", s.handleIndex)
 
 	r.Route("/api/titles", func(r chi.Router) {
 		r.Get("/", s.handleListTitles)
@@ -65,21 +88,25 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 	})
 }
 
-type importRequest struct {
-	Ref  string `json:"ref"`
-	Type string `json:"type"`
-}
-
-func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
-	var req importRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+// handleIndex renders the full admin page with the current catalog so the list
+// is present on first paint (htmx refreshes it afterwards via the
+// "titlesChanged" event).
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	titles, err := s.store.ListTitles(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	render(w, "index.html", map[string]any{"Titles": titles})
+}
 
-	mediaType, id, err := parseRef(req.Ref, req.Type)
+// handleImport reads the form-encoded request from the htmx form, imports the
+// title and returns the status message fragment. On success it also fires the
+// "titlesChanged" event so the list re-fetches itself.
+func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
+	mediaType, id, err := parseRef(r.FormValue("ref"), r.FormValue("type"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		renderMsg(w, "err", err.Error())
 		return
 	}
 
@@ -88,27 +115,30 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 
 	title, err := s.tmdb.FetchTitle(ctx, mediaType, id)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "tmdb: "+err.Error())
+		renderMsg(w, "err", "tmdb: "+err.Error())
 		return
 	}
 	if err := s.store.UpsertTitle(ctx, title); err != nil {
-		writeError(w, http.StatusInternalServerError, "store: "+err.Error())
+		renderMsg(w, "err", "store: "+err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, title)
+	msg := "Đã nhập: " + title.Title
+	if title.Type == "tv" {
+		msg += " (" + strconv.Itoa(len(title.Seasons)) + " mùa)"
+	}
+	w.Header().Set("HX-Trigger", "titlesChanged")
+	renderMsg(w, "ok", msg)
 }
 
+// handleListTitles renders the titles list fragment for htmx to swap into #list.
 func (s *Server) handleListTitles(w http.ResponseWriter, r *http.Request) {
 	titles, err := s.store.ListTitles(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if titles == nil {
-		titles = []TitleSummary{}
-	}
-	writeJSON(w, http.StatusOK, titles)
+	render(w, "list", titles)
 }
 
 func (s *Server) handleGetTitle(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +174,28 @@ func (s *Server) handleDeleteTitle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// Empty 200 (not 204, which htmx ignores) so the card's outerHTML swap
+	// replaces it with nothing — i.e. removes the row.
+	w.WriteHeader(http.StatusOK)
+}
+
+// render executes a named template into the response as HTML.
+func render(w http.ResponseWriter, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := templates.ExecuteTemplate(w, name, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// renderMsg writes the status-message fragment (id="msg") swapped into the page
+// by the import form, with the given CSS class ("ok"/"err"). It always returns
+// 200 because htmx skips swaps on error status codes — the "err" class, not the
+// HTTP status, conveys a failed import to the UI.
+func renderMsg(w http.ResponseWriter, kind, text string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := templates.ExecuteTemplate(w, "msg", map[string]string{"Kind": kind, "Text": text}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

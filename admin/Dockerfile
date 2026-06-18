@@ -20,9 +20,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 
 COPY --from=build /out/phimtor2-admin /app/phimtor2-admin
-# static/index.html is served via a cwd-relative path, so it must sit next to
-# the binary under the WORKDIR.
-COPY static /app/static
+# The UI templates are embedded in the binary (server.go), so nothing else
+# needs to be copied alongside it.
 
 USER nonroot
 EXPOSE 8081

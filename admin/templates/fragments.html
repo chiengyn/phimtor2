@@ -1,0 +1,27 @@
+{{ define "list" }}
+  {{- if . -}}
+    {{- range . }}{{ template "card" . }}{{ end -}}
+  {{- else -}}
+    <p class="muted">Chưa có gì.</p>
+  {{- end -}}
+{{ end }}
+
+{{ define "card" }}
+<div class="card">
+  <img src="{{ imgURL .PosterPath }}" alt="" onerror="this.style.visibility='hidden'">
+  <div class="body">
+    <div>
+      <span class="title-name">{{ .Title }}</span>
+      {{ if eq .Type "tv" }}<span class="badge tv">Phim bộ</span>{{ else }}<span class="badge">Phim lẻ</span>{{ end }}
+    </div>
+    <div class="muted">{{ year .AirDate }} · TMDB #{{ .TMDBID }} · db #{{ .ID }}</div>
+  </div>
+  <button class="danger"
+          hx-delete="/api/titles/{{ .ID }}"
+          hx-confirm="Xóa mục này khỏi cơ sở dữ liệu?"
+          hx-target="closest .card"
+          hx-swap="outerHTML swap:200ms">Xóa</button>
+</div>
+{{ end }}
+
+{{ define "msg" }}<div id="msg" class="{{ .Kind }}">{{ .Text }}</div>{{ end }}

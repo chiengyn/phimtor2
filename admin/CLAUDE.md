@@ -9,9 +9,10 @@ Guidance for the **TMDB metadata admin** service
 
 The **write side** of the shared catalog. An admin pastes a themoviedb.org id or
 link; the service fetches movie/TV metadata from TMDB (Vietnamese, English
-fallback) and upserts it into MySQL. It serves a tiny single-page admin UI
-(`static/index.html`) behind HTTP Basic auth. The public, read-only
-[`viewer/`](../viewer/CLAUDE.md) renders what this service writes.
+fallback) and upserts it into MySQL. It serves a tiny **htmx + Alpine** admin UI
+(server-rendered `html/template`, embedded in the binary) behind HTTP Basic auth.
+The public, read-only [`viewer/`](../viewer/CLAUDE.md) renders what this service
+writes.
 
 This module **owns the MySQL schema** and is the only writer. It runs the
 embedded migrations on startup; the viewer never migrates.
@@ -24,8 +25,9 @@ go run .                       # run (listens on :8081, needs MySQL + env)
 go vet ./...
 ```
 
-`static/index.html` is served via a **cwd-relative path** (`server.go`), so run
-from `admin/`. Targets Go 1.26.
+The UI templates (`templates/*.html`) are **embedded** in the binary
+(`//go:embed` in `server.go`), so the binary is self-contained and not
+cwd-dependent. Targets Go 1.26.
 
 ## Configuration (`config.go`)
 
@@ -45,8 +47,19 @@ unset).
 Flat single `main` package. Layers, in request order:
 
 - **HTTP** (`server.go`): chi router; `s.basicAuth` (constant-time compare) gates
-  **every** route — both the UI and the API. Endpoints: `POST /api/import`,
-  `GET /api/titles`, `GET /api/titles/{id}`, `DELETE /api/titles/{id}`.
+  **every** route. The UI is **htmx-driven**, so most endpoints return HTML
+  fragments rendered from the embedded `templates/*.html` (`render`/`renderMsg`),
+  not JSON:
+  - `GET /` — full page (`index.html`), list pre-rendered for first paint.
+  - `POST /api/import` — form-encoded (`ref`, `type`); returns the `#msg`
+    fragment and, on success, sets `HX-Trigger: titlesChanged` so the list
+    re-fetches itself. Always 200 (htmx skips swaps on error codes; the `err`
+    CSS class signals failure).
+  - `GET /api/titles` — the titles list fragment (swapped into `#list`).
+  - `DELETE /api/titles/{id}` — empty **200** (not 204, which htmx ignores) so
+    the card's `outerHTML` swap removes the row.
+  - `GET /api/titles/{id}` — the one remaining **JSON** endpoint (full title;
+    currently unused by the UI).
 
 - **Ref parsing** (`ref.go`): `parseRef` turns the admin's input into a
   `(mediaType, id)` pair. A themoviedb.org link carries its own type
