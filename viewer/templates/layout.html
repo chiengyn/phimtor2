@@ -1,0 +1,17 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="vi">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>{{block "head_title" .}}phimtor{{end}}</title>
+	<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+	<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+	<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+	<header class="site-header">
+		<a href="/" class="brand">phimtor</a>
+	</header>
+	<main>{{block "content" .}}{{end}}</main>
+</body>
+</html>{{end}}

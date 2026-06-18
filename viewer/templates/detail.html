@@ -1,0 +1,49 @@
+{{define "head_title"}}{{.Title}} – phimtor{{end}}
+{{define "content"}}
+<article class="detail">
+	{{$bd := img "w1280" .BackdropPath}}
+	{{if $bd}}<div class="backdrop" style="background-image:url('{{$bd}}')"></div>{{end}}
+	<div class="detail-main">
+		<div class="detail-poster">
+			{{$p := img "w500" .PosterPath}}
+			{{if $p}}<img src="{{$p}}" alt="{{.Title}}">{{else}}<div class="poster-empty">{{.Title}}</div>{{end}}
+		</div>
+		<div class="detail-info">
+			<h1>{{.Title}}{{with year .AirDate}} <span class="year">({{.}})</span>{{end}}</h1>
+			{{if and .OriginalTitle (ne .OriginalTitle .Title)}}<p class="original-title">{{.OriginalTitle}}</p>{{end}}
+			<div class="meta-row">
+				<span class="badge">{{if eq .Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}}</span>
+				{{if gt .VoteAverage 0.0}}<span class="rating">★ {{rating .VoteAverage}}</span>{{end}}
+				{{with .Runtime}}<span>{{.}} phút</span>{{end}}
+			</div>
+			{{if .Genres}}<div class="genres">{{range .Genres}}<span class="genre-chip">{{.Name}}</span>{{end}}</div>{{end}}
+			{{if .Overview}}<p class="overview">{{.Overview}}</p>{{end}}
+		</div>
+	</div>
+
+	{{if and (eq .Type "tv") .Seasons}}
+	<section class="seasons">
+		<h2>Các phần</h2>
+		{{range .Seasons}}
+		<div class="season" x-data="{ open: false }">
+			<button class="season-head" type="button" @click="open = !open">
+				<span>{{if .Name}}{{.Name}}{{else}}Phần {{.SeasonNumber}}{{end}}</span>
+				<span class="ep-count">{{len .Episodes}} tập</span>
+			</button>
+			<div class="episodes" x-show="open" x-cloak>
+				{{range .Episodes}}
+				<div class="episode">
+					<span class="ep-num">{{.EpisodeNumber}}</span>
+					<div class="ep-body">
+						<div class="ep-title">{{if .Name}}{{.Name}}{{else}}Tập {{.EpisodeNumber}}{{end}}</div>
+						{{if .Overview}}<div class="ep-overview">{{.Overview}}</div>{{end}}
+					</div>
+				</div>
+				{{end}}
+			</div>
+		</div>
+		{{end}}
+	</section>
+	{{end}}
+</article>
+{{end}}

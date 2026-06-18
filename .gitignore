@@ -35,8 +35,10 @@ data/
 # Built binaries
 phimtor2
 phimtor2-admin
+phimtor2-viewer
 streamer/streamer
 admin/admin
+viewer/viewer
 
 # Editor/IDE
 .idea/
