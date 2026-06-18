@@ -34,7 +34,14 @@ func main() {
 
 	tmdb := NewTMDBClient(cfg.TMDBAPIKey, cfg.TMDBLanguage, cfg.TMDBFallbackLang)
 
-	server := NewServer(store, tmdb, cfg.AdminUser, cfg.AdminPassword)
+	osc := NewOpenSubtitlesClient(
+		cfg.OpenSubtitlesAPIKey,
+		cfg.OpenSubtitlesUserAgent,
+		cfg.OpenSubtitlesUsername,
+		cfg.OpenSubtitlesPassword,
+	)
+
+	server := NewServer(store, tmdb, osc, cfg.StreamerURL, cfg.AdminUser, cfg.AdminPassword)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{

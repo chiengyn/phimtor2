@@ -26,6 +26,20 @@ type Config struct {
 	// HTTP Basic auth. Password is env-only (a secret) and required.
 	AdminUser     string
 	AdminPassword string
+
+	// StreamerURL is the base URL of the streamer service. It is injected into
+	// the watch page so the browser talks to the streamer's torrent/stream API
+	// directly (cross-origin).
+	StreamerURL string
+
+	// OpenSubtitles integration (env-only, since these include secrets). When
+	// OpenSubtitlesAPIKey is empty the subtitle search/download endpoints report
+	// "not configured". Username/Password are optional and only raise the
+	// per-day download quota.
+	OpenSubtitlesAPIKey    string
+	OpenSubtitlesUserAgent string
+	OpenSubtitlesUsername  string
+	OpenSubtitlesPassword  string
 }
 
 func loadConfig() Config {
@@ -45,6 +59,13 @@ func loadConfig() Config {
 
 		AdminUser:     envStr("ADMIN_USER", "admin"),
 		AdminPassword: envStr("ADMIN_PASSWORD", ""),
+
+		StreamerURL: envStr("STREAMER_URL", "http://localhost:8080"),
+
+		OpenSubtitlesAPIKey:    envStr("OPENSUBTITLES_API_KEY", ""),
+		OpenSubtitlesUserAgent: envStr("OPENSUBTITLES_USER_AGENT", "phimtor2 v1.0"),
+		OpenSubtitlesUsername:  envStr("OPENSUBTITLES_USERNAME", ""),
+		OpenSubtitlesPassword:  envStr("OPENSUBTITLES_PASSWORD", ""),
 	}
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
@@ -56,6 +77,7 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.TMDBLanguage, "tmdb-language", cfg.TMDBLanguage, "Primary TMDB language")
 	flag.StringVar(&cfg.TMDBFallbackLang, "tmdb-fallback", cfg.TMDBFallbackLang, "Fallback TMDB language")
 	flag.StringVar(&cfg.AdminUser, "admin-user", cfg.AdminUser, "HTTP Basic auth user")
+	flag.StringVar(&cfg.StreamerURL, "streamer-url", cfg.StreamerURL, "Base URL of the streamer service (used by the watch page)")
 	flag.Parse()
 
 	return cfg

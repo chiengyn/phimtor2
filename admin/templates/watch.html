@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>phimtor2 — Xem phim torrent</title>
+<link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+
+  header { background: #1a1a2e; padding: 1rem 2rem; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 1.5rem; color: #e94560; }
+  header a { color: #79c0ff; font-size: 0.85rem; text-decoration: none; }
+  header a:hover { text-decoration: underline; }
+
+  .layout { display: grid; grid-template-columns: 380px 1fr; gap: 0; height: calc(100vh - 57px); }
+
+  .sidebar { background: #16213e; border-right: 1px solid #333; overflow-y: auto; padding: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; }
+
+  .card { background: #1a1a2e; border: 1px solid #2d2d4e; border-radius: 8px; padding: 1rem; }
+  .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin-bottom: 0.75rem; }
+
+  input[type="text"], input[type="file"] { width: 100%; background: #0f0f1a; border: 1px solid #3d3d5c; border-radius: 6px; color: #e0e0e0; padding: 0.5rem 0.75rem; font-size: 0.9rem; outline: none; }
+  input[type="text"]:focus { border-color: #e94560; }
+  input[type="file"] { padding: 0.4rem; cursor: pointer; }
+
+  .btn { cursor: pointer; border: none; border-radius: 6px; padding: 0.5rem 1rem; font-size: 0.875rem; font-weight: 600; transition: background 0.15s; }
+  .btn-primary { background: #e94560; color: #fff; width: 100%; margin-top: 0.5rem; }
+  .btn-primary:hover { background: #c73652; }
+  .btn-primary:disabled { background: #555; cursor: default; }
+  .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.8rem; }
+  .btn-play { background: #22c55e; color: #fff; }
+  .btn-play:hover { background: #16a34a; }
+  .btn-del { background: transparent; color: #e94560; border: 1px solid #e94560; }
+  .btn-del:hover { background: #e94560; color: #fff; }
+
+  .divider { border: none; border-top: 1px solid #2d2d4e; }
+
+  .torrent-item { border-bottom: 1px solid #2d2d4e; padding: 0.75rem 0; }
+  .torrent-item:last-child { border-bottom: none; }
+  .torrent-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.4rem; }
+  .torrent-name { font-size: 0.875rem; font-weight: 600; color: #e0e0e0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress-bar { height: 4px; background: #2d2d4e; border-radius: 2px; overflow: hidden; margin-bottom: 0.5rem; }
+  .progress-fill { height: 100%; background: #22c55e; border-radius: 2px; transition: width 1s linear; }
+  .file-list { display: flex; flex-direction: column; gap: 0.25rem; }
+  .file-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: #aaa; }
+  .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-size { white-space: nowrap; color: #666; }
+  .badge { font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 3px; text-transform: uppercase; font-weight: 700; }
+  .badge-mkv { background: #4a1d96; color: #c4b5fd; }
+  .badge-mp4 { background: #14532d; color: #86efac; }
+  .loading-text { color: #666; font-style: italic; font-size: 0.875rem; }
+
+  .player-pane { background: #0a0a0f; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; gap: 1rem; }
+  .player-pane .empty-msg { color: #444; font-size: 1rem; }
+  #player-title { font-size: 0.85rem; color: #888; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  video { max-width: 100%; max-height: calc(100vh - 180px); border-radius: 8px; background: #000; box-shadow: 0 0 40px rgba(0,0,0,0.8); }
+  .plyr { width: 100%; max-width: 1100px; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.8); --plyr-color-main: #e94560; }
+  .plyr video { max-height: calc(100vh - 180px); box-shadow: none; }
+
+  .subtitle-bar { display: flex; align-items: center; gap: 0.75rem; width: 100%; max-width: 1100px; }
+  .btn-sub { background: #2d2d4e; color: #e0e0e0; }
+  .btn-sub:hover { background: #3d3d5c; }
+  .subtitle-status { font-size: 0.8rem; color: #888; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn-sub-clear { background: transparent; color: #888; border: 1px solid #3d3d5c; }
+  .btn-sub-clear:hover { color: #e94560; border-color: #e94560; }
+
+  .os-panel { width: 100%; max-width: 1100px; background: #16213e; border: 1px solid #2d2d4e; border-radius: 8px; padding: 0.85rem; display: flex; flex-direction: column; gap: 0.65rem; }
+  .os-search-row { display: flex; gap: 0.5rem; }
+  .os-search-row input[type="text"] { flex: 1; }
+  .os-search-row input.os-lang { flex: 0 0 70px; text-align: center; }
+  .os-results { display: flex; flex-direction: column; gap: 0.25rem; max-height: 220px; overflow-y: auto; }
+  .os-result { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0.5rem; border-radius: 5px; cursor: pointer; font-size: 0.82rem; }
+  .os-result:hover { background: #1f2a4a; }
+  .os-lang-badge { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: #2d2d4e; color: #c4b5fd; padding: 0.1rem 0.35rem; border-radius: 3px; flex: 0 0 auto; }
+  .os-rel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; }
+  .os-dl { color: #666; white-space: nowrap; }
+</style>
+</head>
+<body data-streamer="{{ .StreamerURL }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}">
+<header>
+  <h1>Phimtor — Xem phim</h1>
+  <a href="/">← Quản trị</a>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="card">
+      <h2>Thêm torrent</h2>
+      <input type="text" id="magnet-input" placeholder="Dán liên kết magnet…" />
+      <button class="btn btn-primary" id="add-magnet-btn" onclick="addMagnet()">Thêm magnet</button>
+      <hr class="divider" style="margin: 0.75rem 0">
+      <input type="file" id="torrent-file" accept=".torrent" />
+      <button class="btn btn-primary" id="add-file-btn" onclick="addTorrentFile()">Tải lên .torrent</button>
+    </div>
+
+    <div class="card">
+      <h2>Torrent đang hoạt động</h2>
+      <div id="torrent-list"><span class="loading-text">Chưa có torrent nào.</span></div>
+    </div>
+  </aside>
+
+  <main class="player-pane" id="player-pane">
+    <span class="empty-msg">Chọn một tệp để phát</span>
+  </main>
+</div>
+
+<script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
+<script>
+// The browser talks to the streamer directly for torrents/streaming, and to
+// this admin server (same origin) for OpenSubtitles search/download.
+const STREAMER = (document.body.dataset.streamer || '').replace(/\/$/, '');
+const SUBTITLES_ENABLED = document.body.dataset.subtitlesEnabled === 'true';
+const API = STREAMER + '/api/torrents';
+const OS_SEARCH = '/api/subtitles/search';
+const OS_DL = '/api/subtitles/download';
+let currentSrc = null;
+let currentVideo = null;
+let player = null;
+let subtitleURL = null;
+let osResults = [];
+
+async function addMagnet() {
+  const input = document.getElementById('magnet-input');
+  const btn = document.getElementById('add-magnet-btn');
+  const magnet = input.value.trim();
+  if (!magnet) return;
+  btn.disabled = true;
+  btn.textContent = 'Đang thêm…';
+  try {
+    const res = await fetch(API, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({magnet})
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+    input.value = '';
+    await refreshTorrents();
+  } catch(e) {
+    alert('Lỗi: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Thêm magnet';
+  }
+}
+
+async function addTorrentFile() {
+  const fileInput = document.getElementById('torrent-file');
+  const btn = document.getElementById('add-file-btn');
+  if (!fileInput.files.length) { alert('Chọn tệp .torrent trước.'); return; }
+  btn.disabled = true;
+  btn.textContent = 'Đang tải lên…';
+  const form = new FormData();
+  form.append('torrent', fileInput.files[0]);
+  try {
+    const res = await fetch(API, { method: 'POST', body: form });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+    fileInput.value = '';
+    await refreshTorrents();
+  } catch(e) {
+    alert('Lỗi: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Tải lên .torrent';
+  }
+}
+
+async function removeTorrent(infoHash) {
+  if (!confirm('Gỡ torrent này?')) return;
+  await fetch(`${API}/${infoHash}`, { method: 'DELETE' });
+  if (currentSrc && currentSrc.includes(infoHash)) {
+    resetPlayer();
+  }
+  await refreshTorrents();
+}
+
+function playFile(infoHash, fileIndex, fileName) {
+  const src = `${API}/${infoHash}/files/${fileIndex}/stream`;
+  if (currentSrc === src) return;
+  currentSrc = src;
+  currentVideo = { infoHash, fileIndex, fileName };
+
+  if (player) { player.destroy(); player = null; }
+  clearSubtitle();
+
+  const osButton = SUBTITLES_ENABLED
+    ? `<button class="btn btn-sm btn-sub" onclick="toggleOsPanel()">🔍 OpenSubtitles</button>`
+    : '';
+
+  const pane = document.getElementById('player-pane');
+  pane.innerHTML = `
+    <span id="player-title">${escHtml(fileName)}</span>
+    <video id="player" controls autoplay playsinline>
+      <source src="${src}" />
+      Trình duyệt của bạn không hỗ trợ video HTML5.
+    </video>
+    <div class="subtitle-bar">
+      <label class="btn btn-sm btn-sub" for="subtitle-input">＋ Phụ đề</label>
+      <input type="file" id="subtitle-input" accept=".srt,.vtt" hidden onchange="loadSubtitleFile(this.files[0]); this.value=''" />
+      ${osButton}
+      <span id="subtitle-status" class="subtitle-status"></span>
+    </div>
+    <div class="os-panel" id="os-panel" hidden>
+      <div class="os-search-row">
+        <input type="text" id="os-query" placeholder="Từ khóa tìm kiếm…" onkeydown="if(event.key==='Enter')searchOpenSubtitles()" />
+        <input type="text" class="os-lang" id="os-lang" value="en" title="Mã ngôn ngữ, vd: en,vi" />
+        <button class="btn btn-sm btn-sub" onclick="searchOpenSubtitles()">Tìm</button>
+      </div>
+      <div class="os-results" id="os-results"></div>
+    </div>
+  `;
+
+  player = new Plyr('#player', { captions: { active: true, update: true } });
+}
+
+function resetPlayer() {
+  currentSrc = null;
+  currentVideo = null;
+  osResults = [];
+  if (player) { player.destroy(); player = null; }
+  clearSubtitle();
+  const pane = document.getElementById('player-pane');
+  pane.innerHTML = '<span class="empty-msg">Chọn một tệp để phát</span>';
+}
+
+// --- Subtitles -------------------------------------------------------------
+
+// Convert SubRip (.srt) text to WebVTT, the only format browsers render via
+// <track>. VTT differs only by a header and "." (not ",") in timestamps.
+function srtToVtt(text) {
+  const body = text
+    .replace(/^﻿/, '')                                   // strip BOM
+    .replace(/\r+/g, '')                                      // CRLF -> LF
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');        // 00:00:01,000 -> .000
+  return 'WEBVTT\n\n' + body;
+}
+
+async function loadSubtitleFile(file) {
+  if (!file || !player) return;
+  try {
+    const text = await file.text();
+    const ext = file.name.split('.').pop().toLowerCase();
+    let vtt;
+    if (ext === 'vtt') vtt = text.replace(/^﻿/, '');
+    else if (ext === 'srt') vtt = srtToVtt(text);
+    else throw new Error('định dạng không hỗ trợ (dùng .srt hoặc .vtt)');
+    setSubtitle(vtt, file.name);
+  } catch(e) {
+    alert('Lỗi phụ đề: ' + e.message);
+  }
+}
+
+// Core entry point — also reusable for subtitles fetched remotely (e.g.
+// OpenSubtitles): pass already-converted VTT text plus a display label.
+function setSubtitle(vttText, label) {
+  if (!player) return;
+  clearSubtitle();
+  subtitleURL = URL.createObjectURL(new Blob([vttText], { type: 'text/vtt' }));
+
+  const video = document.getElementById('player');
+  video.querySelectorAll('track').forEach(t => t.remove());
+  const track = document.createElement('track');
+  track.kind = 'captions';
+  track.label = label;
+  track.srclang = 'sub';
+  track.src = subtitleURL;
+  track.default = true;
+  video.appendChild(track);
+
+  // Plyr listens for the textTracks "addtrack" event and rebuilds its caption
+  // list; give it a tick before selecting and enabling the new track.
+  setTimeout(() => {
+    if (!player) return;
+    try { player.currentTrack = 0; player.toggleCaptions(true); } catch(e) {}
+  }, 150);
+
+  const status = document.getElementById('subtitle-status');
+  if (status) {
+    status.innerHTML = `${escHtml(label)} <button class="btn btn-sm btn-sub-clear" onclick="clearSubtitle(true)">✕</button>`;
+  }
+}
+
+function clearSubtitle(fromUI) {
+  if (subtitleURL) { URL.revokeObjectURL(subtitleURL); subtitleURL = null; }
+  if (fromUI && player) {
+    const video = document.getElementById('player');
+    if (video) video.querySelectorAll('track').forEach(t => t.remove());
+    try { player.toggleCaptions(false); } catch(e) {}
+    const status = document.getElementById('subtitle-status');
+    if (status) status.textContent = '';
+  }
+}
+
+// --- OpenSubtitles ---------------------------------------------------------
+
+function toggleOsPanel(force) {
+  const panel = document.getElementById('os-panel');
+  if (!panel) return;
+  const show = force !== undefined ? force : panel.hidden;
+  panel.hidden = !show;
+  if (show) {
+    const q = document.getElementById('os-query');
+    if (q && !q.value && currentVideo) {
+      q.value = currentVideo.fileName.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim();
+    }
+    if (q) q.focus();
+  }
+}
+
+async function searchOpenSubtitles() {
+  if (!currentVideo) return;
+  const results = document.getElementById('os-results');
+  const query = document.getElementById('os-query').value.trim();
+  const lang = document.getElementById('os-lang').value.trim() || 'en';
+  results.innerHTML = '<span class="loading-text">Đang tìm…</span>';
+  try {
+    const params = new URLSearchParams({ languages: lang, file: currentVideo.fileName });
+    if (query) params.set('query', query);
+    const res = await fetch(`${OS_SEARCH}?${params}`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    osResults = await res.json();
+    if (!osResults.length) { results.innerHTML = '<span class="loading-text">Không tìm thấy phụ đề.</span>'; return; }
+    results.innerHTML = osResults.map((s, i) => `
+      <div class="os-result" onclick="applyOsResult(${i})">
+        <span class="os-lang-badge">${escHtml(s.language || '?')}</span>
+        <span class="os-rel" title="${escHtml(s.release || '')}">${escHtml(s.release || '(không tên)')}</span>
+        <span class="os-dl">⬇ ${s.downloadCount || 0}</span>
+      </div>`).join('');
+  } catch(e) {
+    results.innerHTML = `<span class="loading-text">Lỗi: ${escHtml(e.message)}</span>`;
+  }
+}
+
+async function applyOsResult(i) {
+  const s = osResults[i];
+  if (!s) return;
+  const results = document.getElementById('os-results');
+  const prev = results.innerHTML;
+  results.innerHTML = '<span class="loading-text">Đang tải phụ đề…</span>';
+  try {
+    const res = await fetch(`${OS_DL}?file_id=${s.fileId}`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    const vtt = await res.text();
+    setSubtitle(vtt, s.release || s.language || 'OpenSubtitles');
+    toggleOsPanel(false);
+    results.innerHTML = prev;
+  } catch(e) {
+    results.innerHTML = prev;
+    alert('Tải phụ đề thất bại: ' + e.message);
+  }
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B','KB','MB','GB','TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function getExtBadge(path) {
+  const ext = path.split('.').pop().toLowerCase();
+  const cls = ['mp4','m4v'].includes(ext) ? 'badge-mp4' : 'badge-mkv';
+  return `<span class="badge ${cls}">${escHtml(ext)}</span>`;
+}
+
+function renderTorrents(torrents) {
+  const container = document.getElementById('torrent-list');
+  if (!torrents || torrents.length === 0) {
+    container.innerHTML = '<span class="loading-text">Chưa có torrent nào.</span>';
+    return;
+  }
+
+  container.innerHTML = torrents.map(t => {
+    const pct = t.totalBytes ? Math.round(t.bytesCompleted / t.totalBytes * 100) : 0;
+    const files = (t.files || []).map((f, i) => {
+      const playBtn = f.isVideo
+        ? `<button class="btn btn-sm btn-play" onclick="playFile('${escHtml(t.infoHash)}', ${f.index}, '${escHtml(f.path).replace(/'/g,"\\'")}')">▶</button>`
+        : `<button class="btn btn-sm" style="background:#333;color:#666;cursor:default" disabled>▶</button>`;
+      return `<div class="file-row">
+        ${playBtn}
+        <span class="file-name" title="${escHtml(f.path)}">${escHtml(f.path.split('/').pop())}</span>
+        ${getExtBadge(f.path)}
+        <span class="file-size">${formatBytes(f.length)}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="torrent-item">
+      <div class="torrent-header">
+        <span class="torrent-name" title="${escHtml(t.name)}">${escHtml(t.name)}</span>
+        <button class="btn btn-sm btn-del" onclick="removeTorrent('${escHtml(t.infoHash)}')">✕</button>
+      </div>
+      ${t.totalBytes ? `
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+        <div style="font-size:0.75rem;color:#666;margin-bottom:0.4rem">${pct}% · ${formatBytes(t.bytesCompleted)} / ${formatBytes(t.totalBytes)}</div>
+      ` : '<div style="font-size:0.75rem;color:#666;margin-bottom:0.4rem">Đang lấy thông tin…</div>'}
+      <div class="file-list">${files}</div>
+    </div>`;
+  }).join('');
+}
+
+async function refreshTorrents() {
+  try {
+    const res = await fetch(API);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderTorrents(data);
+  } catch(e) {
+    // silently ignore polling errors
+  }
+}
+
+// Poll every 3 seconds
+refreshTorrents();
+setInterval(refreshTorrents, 3000);
+</script>
+</body>
+</html>

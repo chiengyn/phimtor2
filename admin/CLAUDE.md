@@ -14,6 +14,15 @@ fallback) and upserts it into MySQL. It serves a tiny **htmx + Alpine** admin UI
 The public, read-only [`viewer/`](../viewer/CLAUDE.md) renders what this service
 writes.
 
+This module also hosts the **torrent watch page** (`GET /watch`,
+`templates/watch.html`). The page itself is a plain JS SPA that talks to the
+[`streamer/`](../streamer/CLAUDE.md) service **directly from the browser**
+(cross-origin) for torrent add/list/remove/stream — its base URL is injected via
+`STREAMER_URL`. Subtitles are served by **this** service: `opensubtitles.go` is a
+server-side proxy (so the API key never reaches the browser) that searches by
+text query + season/episode parsed from the file name. There is no moviehash
+matching here — the admin holds no torrent data; that lives in the streamer.
+
 This module **owns the MySQL schema** and is the only writer. It runs the
 embedded migrations on startup; the viewer never migrates.
 
@@ -41,6 +50,12 @@ unset).
   `DB_USER`/`DB_PASSWORD`/`DB_NAME`. The DSN is built with
   `parseTime=true&charset=utf8mb4` so dates scan into `time.Time` and Vietnamese
   text round-trips.
+- Watch page: `STREAMER_URL` (`http://localhost:8080`) — must be reachable from
+  the **browser**, not just the admin server, since the page calls it directly.
+- OpenSubtitles (env-only, like the other secrets; no flags): `OPENSUBTITLES_API_KEY`
+  (required to enable subtitle search/download), `OPENSUBTITLES_USER_AGENT`, and
+  optional `OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD` (a login token
+  raises the per-day download quota).
 
 ## Architecture
 
@@ -60,6 +75,12 @@ Flat single `main` package. Layers, in request order:
     the card's `outerHTML` swap removes the row.
   - `GET /api/titles/{id}` — the one remaining **JSON** endpoint (full title;
     currently unused by the UI).
+  - `GET /watch` — the torrent watch page (`watch.html`), with `STREAMER_URL`
+    and a `SubtitlesEnabled` flag injected via `<body data-*>` (the page is plain
+    JS, not htmx).
+  - `GET /api/subtitles/search` (`?file=&query=&languages=`) and
+    `GET /api/subtitles/download` (`?file_id=`) — the OpenSubtitles proxy
+    (`opensubtitles.go`); search returns JSON, download returns WebVTT.
 
 - **Ref parsing** (`ref.go`): `parseRef` turns the admin's input into a
   `(mediaType, id)` pair. A themoviedb.org link carries its own type

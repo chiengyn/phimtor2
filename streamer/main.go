@@ -30,14 +30,7 @@ func main() {
 	}
 	defer manager.Close()
 
-	osc := NewOpenSubtitlesClient(
-		cfg.OpenSubtitlesAPIKey,
-		cfg.OpenSubtitlesUserAgent,
-		cfg.OpenSubtitlesUsername,
-		cfg.OpenSubtitlesPassword,
-	)
-
-	server := NewServer(manager, osc)
+	server := NewServer(manager)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{

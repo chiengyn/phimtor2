@@ -21,7 +21,9 @@ const osBaseURL = "https://api.opensubtitles.com/api/v1"
 // OpenSubtitlesClient is a thin proxy over the OpenSubtitles REST API. The
 // browser never talks to OpenSubtitles directly: the Api-Key would leak and
 // the API does not allow authenticated cross-origin calls, so all requests are
-// funneled through the Go server.
+// funneled through the admin server. Unlike the streamer (which had the torrent
+// file on hand), the admin matches by text query + season/episode only — there
+// is no moviehash, since the admin holds no torrent data.
 type OpenSubtitlesClient struct {
 	apiKey    string
 	userAgent string
@@ -51,7 +53,6 @@ type Subtitle struct {
 	Language      string `json:"language"`
 	Release       string `json:"release"`
 	DownloadCount int    `json:"downloadCount"`
-	FromHash      bool   `json:"fromHash"` // matched by moviehash (best match)
 }
 
 type SearchParams struct {
@@ -59,7 +60,6 @@ type SearchParams struct {
 	Languages string
 	Season    int
 	Episode   int
-	MovieHash string
 }
 
 func (c *OpenSubtitlesClient) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
@@ -76,8 +76,8 @@ func (c *OpenSubtitlesClient) newRequest(ctx context.Context, method, path strin
 	return req, nil
 }
 
-// Search returns subtitle candidates. moviehash (when supplied) yields the most
-// accurate matches; query/season/episode are the text fallback.
+// Search returns subtitle candidates matched by text query (and optional
+// season/episode for TV).
 func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]Subtitle, error) {
 	q := url.Values{}
 	if p.Query != "" {
@@ -91,9 +91,6 @@ func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]Sub
 	}
 	if p.Episode > 0 {
 		q.Set("episode_number", strconv.Itoa(p.Episode))
-	}
-	if p.MovieHash != "" {
-		q.Set("moviehash", p.MovieHash)
 	}
 
 	req, err := c.newRequest(ctx, http.MethodGet, "/subtitles?"+q.Encode(), nil)
@@ -112,11 +109,10 @@ func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]Sub
 	var out struct {
 		Data []struct {
 			Attributes struct {
-				Language       string `json:"language"`
-				DownloadCount  int    `json:"download_count"`
-				Release        string `json:"release"`
-				MovieHashMatch bool   `json:"moviehash_match"`
-				Files          []struct {
+				Language      string `json:"language"`
+				DownloadCount int    `json:"download_count"`
+				Release       string `json:"release"`
+				Files         []struct {
 					FileID int `json:"file_id"`
 				} `json:"files"`
 			} `json:"attributes"`
@@ -137,7 +133,6 @@ func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]Sub
 			Language:      a.Language,
 			Release:       a.Release,
 			DownloadCount: a.DownloadCount,
-			FromHash:      a.MovieHashMatch,
 		})
 	}
 	return subs, nil
@@ -248,7 +243,7 @@ func osErr(resp *http.Response) string {
 
 var srtTimestampRe = regexp.MustCompile(`(\d{2}:\d{2}:\d{2}),(\d{3})`)
 
-// srtToVTT mirrors the browser-side conversion (see static/index.html) as a
+// srtToVTT mirrors the browser-side conversion (see templates/watch.html) as a
 // fallback for when the API hands back SubRip instead of WebVTT.
 func srtToVTT(s string) string {
 	s = strings.TrimPrefix(s, "\ufeff")

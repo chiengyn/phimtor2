@@ -10,9 +10,15 @@ viewer) share a single MySQL database; the streamer stands alone.
 
 | Module | Purpose | Default port | Storage | Detail |
 |--------|---------|--------------|---------|--------|
-| **`admin/`** | TMDB metadata importer + admin UI (writes the catalog) | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
+| **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
 | **`viewer/`** | Public read-only browse/discovery + watch UI | `8082` | MySQL (read-only) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
-| **`streamer/`** | Torrent video streamer (space-saving storage) | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
+| **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage) | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
+
+The production front-end is the admin's watch page (`/watch`); the browser calls
+the streamer's API directly (cross-origin, so the streamer's `STREAMER_URL` must
+be browser-reachable). Subtitle search (OpenSubtitles) is proxied by the admin,
+not the streamer. The streamer keeps a **minimal built-in test UI** at its own
+`/` (no subtitles) for sanity-checking torrents/streaming in isolation.
 
 When working inside a module, read **that module's `CLAUDE.md`** — file paths in
 each are relative to the module directory. There are currently **no tests** in

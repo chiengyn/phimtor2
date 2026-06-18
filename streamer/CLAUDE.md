@@ -8,10 +8,22 @@ root [`../CLAUDE.md`](../CLAUDE.md).
 ## What this is
 
 A self-hosted torrent video streamer. A Go HTTP server (chi router) wraps
-`anacrolix/torrent`, exposes a small REST API plus a single-page web UI, and
-streams video files from a torrent to the browser while they download. The
-defining feature is **space-saving storage** — it never keeps the whole file on
-disk. This service is standalone: it does **not** touch the shared MySQL catalog.
+`anacrolix/torrent` and exposes a small **REST API** that streams video files
+from a torrent to the browser while they download. The defining feature is
+**space-saving storage** — it never keeps the whole file on disk. This service
+is **backend-first**: the production watch page lives in
+[`admin/`](../admin/CLAUDE.md), which calls these endpoints cross-origin (hence
+the permissive CORS middleware). It does **not** touch the shared MySQL catalog.
+
+It still ships a **minimal built-in test UI** at `GET /`
+(`static/index.html`, served cwd-relative) so you can sanity-check torrent
+add/list/remove/stream without the admin running. The test UI has **no
+subtitle support** — that's an admin-only feature.
+
+The API: `GET /api/torrents` (list),
+`POST /api/torrents` (magnet JSON or `.torrent` multipart),
+`DELETE /api/torrents/{infoHash}`, and
+`GET /api/torrents/{infoHash}/files/{fileIndex}/stream`.
 
 ## Commands
 
@@ -21,17 +33,14 @@ go run .                    # run with defaults (listens on :8080, data in ./dat
 go vet ./...                # vet
 ```
 
-The server serves `static/index.html` via a **cwd-relative path**
-(`server.go`), so it must be launched from `streamer/` (or wherever `static/`
-lives). The Docker image handles this by `WORKDIR /app` with `static/` copied
-alongside the binary.
+The test UI (`static/index.html`) is served via a **cwd-relative path**, so the
+server must be launched from `streamer/` (or wherever `static/` lives) for `GET /`
+to work; the API itself doesn't depend on it. It also needs `ffmpeg` on PATH for
+transcoding and a writable `DATA_DIR`. The Docker image handles the cwd by
+`WORKDIR /app` with `static/` copied alongside the binary.
 
 Configuration is via env vars or matching CLI flags (see `config.go`):
 `PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`.
-The OpenSubtitles integration is **env-only** (no flags, since these are
-secrets): `OPENSUBTITLES_API_KEY` (required to enable the feature),
-`OPENSUBTITLES_USER_AGENT`, and optional `OPENSUBTITLES_USERNAME` /
-`OPENSUBTITLES_PASSWORD` (a login token raises the per-day download quota).
 
 ## Architecture
 
@@ -68,22 +77,19 @@ Flat single `main` package. The pieces that only make sense read together:
   **`ffmpeg` subprocess** (codec copy + AAC, fragmented MP4) — so transcoding
   requires `ffmpeg` on PATH at runtime (the Docker image bundles it).
 
-- **Subtitles** are loaded client-side as WebVTT `<track>`s on the Plyr player
-  (`static/index.html`): the user picks a local `.srt`/`.vtt` (SRT is converted
-  to VTT in the browser), or searches **OpenSubtitles**. The OpenSubtitles path
-  is proxied through the Go server (`opensubtitles.go`) so the API key never
-  reaches the browser — `GET /api/torrents/{infoHash}/files/{i}/subtitles`
-  searches (text query + season/episode parsed from the file name, plus a
-  best-effort `TorrentManager.MovieHash`), and `GET /api/subtitles/download`
-  returns VTT. Moviehash is best-effort and usually unavailable: it needs the
-  file's last 64 KiB, which a partially-downloaded streaming torrent rarely has.
+**Subtitles** are *not* handled here anymore. The watch UI and the
+OpenSubtitles proxy moved to [`admin/`](../admin/CLAUDE.md); the admin matches
+subtitles by text query + season/episode (it has no torrent data, so no
+moviehash). If you reintroduce moviehash matching it belongs here, where the
+torrent reader lives.
 
 ## Docker
 
 `Dockerfile` builds a static `CGO_ENABLED=0`, amd64-only binary and runs it on a
 distroless base, with a statically linked `ffmpeg` copied in (so transcoding
 works while keeping the image small; `capped-sqlite` remains unavailable without
-CGO). `.github/workflows/docker.yml` (repo root) builds and pushes to Docker Hub
+CGO). The minimal test UI (`static/`) is copied in alongside the binary.
+`.github/workflows/docker.yml` (repo root) builds and pushes to Docker Hub
 on pushes to `main` and `v*` tags (build context `./streamer`), using
 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets. `DOCKERHUB.md` is the registry
 description.

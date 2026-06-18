@@ -1,12 +1,9 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
-	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -15,12 +12,11 @@ import (
 
 type Server struct {
 	manager *TorrentManager
-	os      *OpenSubtitlesClient
 	router  chi.Router
 }
 
-func NewServer(manager *TorrentManager, os *OpenSubtitlesClient) *Server {
-	s := &Server{manager: manager, os: os}
+func NewServer(manager *TorrentManager) *Server {
+	s := &Server{manager: manager}
 	s.setupRouter()
 	return s
 }
@@ -35,6 +31,10 @@ func (s *Server) setupRouter() {
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
 
+	// The production watch UI lives in the admin service, which calls these
+	// endpoints from the browser (hence CORS). This minimal built-in page is a
+	// backend test harness only (torrents + streaming, no subtitles), served
+	// from a cwd-relative path.
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "static/index.html")
 	})
@@ -44,11 +44,6 @@ func (s *Server) setupRouter() {
 		r.Post("/", s.handleAddTorrent)
 		r.Delete("/{infoHash}", s.handleRemoveTorrent)
 		r.Get("/{infoHash}/files/{fileIndex}/stream", s.handleStream)
-		r.Get("/{infoHash}/files/{fileIndex}/subtitles", s.handleSearchSubtitles)
-	})
-
-	r.Route("/api/subtitles", func(r chi.Router) {
-		r.Get("/download", s.handleDownloadSubtitle)
 	})
 
 	s.router = r
@@ -173,75 +168,4 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", detectContentType(fileInfo.Path))
 	http.ServeContent(w, r, fileInfo.Path, time.Time{}, reader)
-}
-
-// handleSearchSubtitles searches OpenSubtitles for a playing file. It derives a
-// text query (and season/episode) from the file name, optionally overridden by
-// ?query=, and adds a best-effort moviehash for more accurate matches.
-func (s *Server) handleSearchSubtitles(w http.ResponseWriter, r *http.Request) {
-	if !s.os.Enabled() {
-		writeError(w, http.StatusServiceUnavailable, "OpenSubtitles not configured (set OPENSUBTITLES_API_KEY)")
-		return
-	}
-
-	infoHash := chi.URLParam(r, "infoHash")
-	fileIndex, err := strconv.Atoi(chi.URLParam(r, "fileIndex"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid file index")
-		return
-	}
-
-	fi, err := s.manager.GetFileInfo(infoHash, fileIndex)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
-
-	title, season, episode := parseSubtitleQuery(path.Base(fi.Path))
-	if q := strings.TrimSpace(r.URL.Query().Get("query")); q != "" {
-		title = q
-	}
-	langs := r.URL.Query().Get("languages")
-	if langs == "" {
-		langs = "en"
-	}
-
-	params := SearchParams{Query: title, Languages: langs, Season: season, Episode: episode}
-
-	hashCtx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
-	defer cancel()
-	if h, err := s.manager.MovieHash(hashCtx, infoHash, fileIndex); err == nil {
-		params.MovieHash = h
-	}
-
-	subs, err := s.os.Search(r.Context(), params)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, subs)
-}
-
-// handleDownloadSubtitle resolves an OpenSubtitles file_id to WebVTT text that
-// the player loads as a caption track.
-func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) {
-	if !s.os.Enabled() {
-		writeError(w, http.StatusServiceUnavailable, "OpenSubtitles not configured (set OPENSUBTITLES_API_KEY)")
-		return
-	}
-
-	fileID, err := strconv.Atoi(r.URL.Query().Get("file_id"))
-	if err != nil || fileID <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid file_id")
-		return
-	}
-
-	vtt, err := s.os.Download(r.Context(), fileID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	w.Write([]byte(vtt))
 }

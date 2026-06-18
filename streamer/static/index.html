@@ -3,16 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Phimtor</title>
-<link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+<title>Phimtor streamer</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
 
   header { background: #1a1a2e; padding: 1rem 2rem; border-bottom: 1px solid #333; }
   header h1 { font-size: 1.5rem; color: #e94560; }
+  header .sub { font-size: 0.8rem; color: #888; }
 
-  .layout { display: grid; grid-template-columns: 380px 1fr; gap: 0; height: calc(100vh - 57px); }
+  .layout { display: grid; grid-template-columns: 380px 1fr; gap: 0; height: calc(100vh - 70px); }
 
   .sidebar { background: #16213e; border-right: 1px solid #333; overflow-y: auto; padding: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; }
 
@@ -54,32 +54,12 @@
   .player-pane .empty-msg { color: #444; font-size: 1rem; }
   #player-title { font-size: 0.85rem; color: #888; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   video { max-width: 100%; max-height: calc(100vh - 180px); border-radius: 8px; background: #000; box-shadow: 0 0 40px rgba(0,0,0,0.8); }
-  .plyr { width: 100%; max-width: 1100px; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.8); --plyr-color-main: #e94560; }
-  .plyr video { max-height: calc(100vh - 180px); box-shadow: none; }
-
-  .subtitle-bar { display: flex; align-items: center; gap: 0.75rem; width: 100%; max-width: 1100px; }
-  .btn-sub { background: #2d2d4e; color: #e0e0e0; }
-  .btn-sub:hover { background: #3d3d5c; }
-  .subtitle-status { font-size: 0.8rem; color: #888; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .btn-sub-clear { background: transparent; color: #888; border: 1px solid #3d3d5c; }
-  .btn-sub-clear:hover { color: #e94560; border-color: #e94560; }
-
-  .os-panel { width: 100%; max-width: 1100px; background: #16213e; border: 1px solid #2d2d4e; border-radius: 8px; padding: 0.85rem; display: flex; flex-direction: column; gap: 0.65rem; }
-  .os-search-row { display: flex; gap: 0.5rem; }
-  .os-search-row input[type="text"] { flex: 1; }
-  .os-search-row input.os-lang { flex: 0 0 70px; text-align: center; }
-  .os-results { display: flex; flex-direction: column; gap: 0.25rem; max-height: 220px; overflow-y: auto; }
-  .os-result { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0.5rem; border-radius: 5px; cursor: pointer; font-size: 0.82rem; }
-  .os-result:hover { background: #1f2a4a; }
-  .os-lang-badge { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: #2d2d4e; color: #c4b5fd; padding: 0.1rem 0.35rem; border-radius: 3px; flex: 0 0 auto; }
-  .os-rel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; }
-  .os-hash { font-size: 0.65rem; font-weight: 700; background: #14532d; color: #86efac; padding: 0.1rem 0.35rem; border-radius: 3px; }
-  .os-dl { color: #666; white-space: nowrap; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Phimtor</h1>
+  <h1>Phimtor streamer</h1>
+  <span class="sub">Backend test UI — torrents &amp; streaming only (no subtitles).</span>
 </header>
 <div class="layout">
   <aside class="sidebar">
@@ -103,15 +83,9 @@
   </main>
 </div>
 
-<script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 <script>
 const API = '/api/torrents';
-const OS_API = '/api/subtitles';
 let currentSrc = null;
-let currentVideo = null;
-let player = null;
-let subtitleURL = null;
-let osResults = [];
 
 async function addMagnet() {
   const input = document.getElementById('magnet-input');
@@ -171,10 +145,6 @@ function playFile(infoHash, fileIndex, fileName) {
   const src = `${API}/${infoHash}/files/${fileIndex}/stream`;
   if (currentSrc === src) return;
   currentSrc = src;
-  currentVideo = { infoHash, fileIndex, fileName };
-
-  if (player) { player.destroy(); player = null; }
-  clearSubtitle();
 
   const pane = document.getElementById('player-pane');
   pane.innerHTML = `
@@ -183,162 +153,13 @@ function playFile(infoHash, fileIndex, fileName) {
       <source src="${src}" />
       Your browser does not support HTML5 video.
     </video>
-    <div class="subtitle-bar">
-      <label class="btn btn-sm btn-sub" for="subtitle-input">＋ Subtitles</label>
-      <input type="file" id="subtitle-input" accept=".srt,.vtt" hidden onchange="loadSubtitleFile(this.files[0]); this.value=''" />
-      <button class="btn btn-sm btn-sub" onclick="toggleOsPanel()">🔍 OpenSubtitles</button>
-      <span id="subtitle-status" class="subtitle-status"></span>
-    </div>
-    <div class="os-panel" id="os-panel" hidden>
-      <div class="os-search-row">
-        <input type="text" id="os-query" placeholder="Search query…" onkeydown="if(event.key==='Enter')searchOpenSubtitles()" />
-        <input type="text" class="os-lang" id="os-lang" value="en" title="Language code(s), e.g. en,vi" />
-        <button class="btn btn-sm btn-sub" onclick="searchOpenSubtitles()">Search</button>
-      </div>
-      <div class="os-results" id="os-results"></div>
-    </div>
   `;
-
-  player = new Plyr('#player', { captions: { active: true, update: true } });
 }
 
 function resetPlayer() {
   currentSrc = null;
-  currentVideo = null;
-  osResults = [];
-  if (player) { player.destroy(); player = null; }
-  clearSubtitle();
   const pane = document.getElementById('player-pane');
   pane.innerHTML = '<span class="empty-msg">Select a file to play</span>';
-}
-
-// --- Subtitles -------------------------------------------------------------
-
-// Convert SubRip (.srt) text to WebVTT, the only format browsers render via
-// <track>. VTT differs only by a header and "." (not ",") in timestamps.
-function srtToVtt(text) {
-  const body = text
-    .replace(/^﻿/, '')                                   // strip BOM
-    .replace(/\r+/g, '')                                      // CRLF -> LF
-    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');        // 00:00:01,000 -> .000
-  return 'WEBVTT\n\n' + body;
-}
-
-async function loadSubtitleFile(file) {
-  if (!file || !player) return;
-  try {
-    const text = await file.text();
-    const ext = file.name.split('.').pop().toLowerCase();
-    let vtt;
-    if (ext === 'vtt') vtt = text.replace(/^﻿/, '');
-    else if (ext === 'srt') vtt = srtToVtt(text);
-    else throw new Error('unsupported format (use .srt or .vtt)');
-    setSubtitle(vtt, file.name);
-  } catch(e) {
-    alert('Subtitle error: ' + e.message);
-  }
-}
-
-// Core entry point — also reusable for subtitles fetched remotely (e.g.
-// OpenSubtitles): pass already-converted VTT text plus a display label.
-function setSubtitle(vttText, label) {
-  if (!player) return;
-  clearSubtitle();
-  subtitleURL = URL.createObjectURL(new Blob([vttText], { type: 'text/vtt' }));
-
-  const video = document.getElementById('player');
-  video.querySelectorAll('track').forEach(t => t.remove());
-  const track = document.createElement('track');
-  track.kind = 'captions';
-  track.label = label;
-  track.srclang = 'sub';
-  track.src = subtitleURL;
-  track.default = true;
-  video.appendChild(track);
-
-  // Plyr listens for the textTracks "addtrack" event and rebuilds its caption
-  // list; give it a tick before selecting and enabling the new track.
-  setTimeout(() => {
-    if (!player) return;
-    try { player.currentTrack = 0; player.toggleCaptions(true); } catch(e) {}
-  }, 150);
-
-  const status = document.getElementById('subtitle-status');
-  if (status) {
-    status.innerHTML = `${escHtml(label)} <button class="btn btn-sm btn-sub-clear" onclick="clearSubtitle(true)">✕</button>`;
-  }
-}
-
-function clearSubtitle(fromUI) {
-  if (subtitleURL) { URL.revokeObjectURL(subtitleURL); subtitleURL = null; }
-  if (fromUI && player) {
-    const video = document.getElementById('player');
-    if (video) video.querySelectorAll('track').forEach(t => t.remove());
-    try { player.toggleCaptions(false); } catch(e) {}
-    const status = document.getElementById('subtitle-status');
-    if (status) status.textContent = '';
-  }
-}
-
-// --- OpenSubtitles ---------------------------------------------------------
-
-function toggleOsPanel(force) {
-  const panel = document.getElementById('os-panel');
-  if (!panel) return;
-  const show = force !== undefined ? force : panel.hidden;
-  panel.hidden = !show;
-  if (show) {
-    const q = document.getElementById('os-query');
-    if (q && !q.value && currentVideo) {
-      q.value = currentVideo.fileName.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim();
-    }
-    if (q) q.focus();
-  }
-}
-
-async function searchOpenSubtitles() {
-  if (!currentVideo) return;
-  const results = document.getElementById('os-results');
-  const query = document.getElementById('os-query').value.trim();
-  const lang = document.getElementById('os-lang').value.trim() || 'en';
-  results.innerHTML = '<span class="loading-text">Searching…</span>';
-  try {
-    const params = new URLSearchParams({ languages: lang });
-    if (query) params.set('query', query);
-    const url = `${API}/${currentVideo.infoHash}/files/${currentVideo.fileIndex}/subtitles?${params}`;
-    const res = await fetch(url);
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
-    osResults = await res.json();
-    if (!osResults.length) { results.innerHTML = '<span class="loading-text">No subtitles found.</span>'; return; }
-    results.innerHTML = osResults.map((s, i) => `
-      <div class="os-result" onclick="applyOsResult(${i})">
-        <span class="os-lang-badge">${escHtml(s.language || '?')}</span>
-        <span class="os-rel" title="${escHtml(s.release || '')}">${escHtml(s.release || '(untitled)')}</span>
-        ${s.fromHash ? '<span class="os-hash">hash match</span>' : ''}
-        <span class="os-dl">⬇ ${s.downloadCount || 0}</span>
-      </div>`).join('');
-  } catch(e) {
-    results.innerHTML = `<span class="loading-text">Error: ${escHtml(e.message)}</span>`;
-  }
-}
-
-async function applyOsResult(i) {
-  const s = osResults[i];
-  if (!s) return;
-  const results = document.getElementById('os-results');
-  const prev = results.innerHTML;
-  results.innerHTML = '<span class="loading-text">Downloading subtitle…</span>';
-  try {
-    const res = await fetch(`${OS_API}/download?file_id=${s.fileId}`);
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
-    const vtt = await res.text();
-    setSubtitle(vtt, s.release || s.language || 'OpenSubtitles');
-    toggleOsPanel(false);
-    results.innerHTML = prev;
-  } catch(e) {
-    results.innerHTML = prev;
-    alert('Subtitle download failed: ' + e.message);
-  }
 }
 
 function formatBytes(bytes) {

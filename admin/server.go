@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,15 +40,17 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 }).ParseFS(templatesFS, "templates/*.html"))
 
 type Server struct {
-	store  *Store
-	tmdb   *TMDBClient
-	user   string
-	pass   string
-	router chi.Router
+	store       *Store
+	tmdb        *TMDBClient
+	os          *OpenSubtitlesClient
+	streamerURL string
+	user        string
+	pass        string
+	router      chi.Router
 }
 
-func NewServer(store *Store, tmdb *TMDBClient, user, pass string) *Server {
-	s := &Server{store: store, tmdb: tmdb, user: user, pass: pass}
+func NewServer(store *Store, tmdb *TMDBClient, osc *OpenSubtitlesClient, streamerURL, user, pass string) *Server {
+	s := &Server{store: store, tmdb: tmdb, os: osc, streamerURL: streamerURL, user: user, pass: pass}
 	s.setupRouter()
 	return s
 }
@@ -62,6 +66,7 @@ func (s *Server) setupRouter() {
 	r.Use(s.basicAuth) // protects the UI and the API
 
 	r.Get("/", s.handleIndex)
+	r.Get("/watch", s.handleWatch)
 
 	r.Route("/api/titles", func(r chi.Router) {
 		r.Get("/", s.handleListTitles)
@@ -69,6 +74,11 @@ func (s *Server) setupRouter() {
 		r.Delete("/{id}", s.handleDeleteTitle)
 	})
 	r.Post("/api/import", s.handleImport)
+
+	r.Route("/api/subtitles", func(r chi.Router) {
+		r.Get("/search", s.handleSearchSubtitles)
+		r.Get("/download", s.handleDownloadSubtitle)
+	})
 
 	s.router = r
 }
@@ -129,6 +139,71 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("HX-Trigger", "titlesChanged")
 	renderMsg(w, "ok", msg)
+}
+
+// handleWatch renders the torrent watch page. The page talks to the streamer
+// (StreamerURL) directly from the browser for torrents/streaming, and back to
+// this admin server for OpenSubtitles search/download.
+func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
+	render(w, "watch.html", map[string]any{
+		"StreamerURL":      s.streamerURL,
+		"SubtitlesEnabled": s.os.Enabled(),
+	})
+}
+
+// handleSearchSubtitles searches OpenSubtitles for a playing file. It derives a
+// text query (and season/episode) from the file name passed by the watch page,
+// optionally overridden by ?query=. There is no moviehash here — the admin holds
+// no torrent data.
+func (s *Server) handleSearchSubtitles(w http.ResponseWriter, r *http.Request) {
+	if !s.os.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "OpenSubtitles not configured (set OPENSUBTITLES_API_KEY)")
+		return
+	}
+
+	title, season, episode := parseSubtitleQuery(path.Base(r.URL.Query().Get("file")))
+	if q := strings.TrimSpace(r.URL.Query().Get("query")); q != "" {
+		title = q
+	}
+	if strings.TrimSpace(title) == "" {
+		writeError(w, http.StatusBadRequest, "provide a file or query to search")
+		return
+	}
+	langs := r.URL.Query().Get("languages")
+	if langs == "" {
+		langs = "en"
+	}
+
+	subs, err := s.os.Search(r.Context(), SearchParams{Query: title, Languages: langs, Season: season, Episode: episode})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, subs)
+}
+
+// handleDownloadSubtitle resolves an OpenSubtitles file_id to WebVTT text that
+// the player loads as a caption track.
+func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) {
+	if !s.os.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "OpenSubtitles not configured (set OPENSUBTITLES_API_KEY)")
+		return
+	}
+
+	fileID, err := strconv.Atoi(r.URL.Query().Get("file_id"))
+	if err != nil || fileID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid file_id")
+		return
+	}
+
+	vtt, err := s.os.Download(r.Context(), fileID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	_, _ = w.Write([]byte(vtt))
 }
 
 // handleListTitles renders the titles list fragment for htmx to swap into #list.

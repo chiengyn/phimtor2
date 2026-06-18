@@ -1,15 +1,17 @@
-# phimtor2
+# phimtor2 streamer
 
-A lightweight, self-hosted torrent video streamer. Add a magnet link or
+A lightweight, self-hosted torrent video **streaming API**. Add a magnet link or
 `.torrent` file and stream the video straight to your browser while it
 downloads — with pluggable, space-saving storage so you don't have to
-keep the whole file on disk.
+keep the whole file on disk. This is a backend service (REST API only); the
+companion phimtor2 admin app provides the watch UI.
 
 ## Features
 
 - Stream torrents on the fly over HTTP with seek support (HTTP range requests)
 - Add content via magnet link or `.torrent` upload
-- Simple built-in web UI
+- REST API, CORS-enabled so a separate web front-end can drive it, plus a
+  minimal built-in test UI at `/` for checking torrents/streaming
 - Space-saving **prefix-cache** storage: pins the start of each file and keeps
   a bounded LRU cache for the rest
 - On-the-fly transcoding (bundled `ffmpeg`) for non-browser-native containers
@@ -25,7 +27,9 @@ docker run -d \
   <your-dockerhub-username>/phimtor2:latest
 ```
 
-Then open http://localhost:8080.
+The API and a minimal test UI are then at http://localhost:8080. For the full
+watch experience (subtitles, etc.), point the phimtor2 admin app's
+`STREAMER_URL` at it.
 
 ## Configuration
 
@@ -43,7 +47,7 @@ Configure via environment variables (or CLI flags):
 ## Volumes & ports
 
 - **`/data`** — persistent torrent cache. Mount a named volume or host path.
-- **`8080`** — HTTP server (web UI + API).
+- **`8080`** — HTTP server (REST API + minimal test UI).
 
 ## Notes & limitations
 

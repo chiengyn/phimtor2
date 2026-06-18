@@ -13,15 +13,6 @@ type Config struct {
 	StorageMode string
 	PrefixMB    int
 	CacheMB     int
-
-	// OpenSubtitles integration (env-only, since these include secrets).
-	// When OpenSubtitlesAPIKey is empty the subtitle search/download endpoints
-	// report "not configured". Username/Password are optional and only raise
-	// the per-day download quota.
-	OpenSubtitlesAPIKey    string
-	OpenSubtitlesUserAgent string
-	OpenSubtitlesUsername  string
-	OpenSubtitlesPassword  string
 }
 
 func loadConfig() Config {
@@ -32,11 +23,6 @@ func loadConfig() Config {
 		StorageMode: envStr("STORAGE_MODE", StorageModePrefixCache),
 		PrefixMB:    envInt("PREFIX_MB", 32),
 		CacheMB:     envInt("CACHE_MB", 2048),
-
-		OpenSubtitlesAPIKey:    envStr("OPENSUBTITLES_API_KEY", ""),
-		OpenSubtitlesUserAgent: envStr("OPENSUBTITLES_USER_AGENT", "phimtor2 v1.0"),
-		OpenSubtitlesUsername:  envStr("OPENSUBTITLES_USERNAME", ""),
-		OpenSubtitlesPassword:  envStr("OPENSUBTITLES_PASSWORD", ""),
 	}
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
