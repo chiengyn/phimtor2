@@ -251,6 +251,37 @@ func (s *Store) loadSeasons(ctx context.Context, titleID int64) ([]Season, error
 	return seasons, erows.Err()
 }
 
+// EpisodeContext identifies an episode and its parent title, for the watch page.
+type EpisodeContext struct {
+	TitleID       int64
+	TitleName     string
+	SeasonNumber  int
+	EpisodeNumber int
+	EpisodeName   string
+}
+
+// GetEpisodeContext resolves a single episode id to its parent title and
+// season/episode numbers. Returns (nil, nil) when no such episode exists.
+func (s *Store) GetEpisodeContext(ctx context.Context, episodeID int64) (*EpisodeContext, error) {
+	var ec EpisodeContext
+	var name sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT t.id, t.title, s.season_number, e.episode_number, e.name
+		FROM episodes e
+		JOIN seasons s ON s.id = e.season_id
+		JOIN titles t ON t.id = s.title_id
+		WHERE e.id = ?`, episodeID).Scan(
+		&ec.TitleID, &ec.TitleName, &ec.SeasonNumber, &ec.EpisodeNumber, &name)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ec.EpisodeName = name.String
+	return &ec, nil
+}
+
 func dateStr(t sql.NullTime) string {
 	if !t.Valid {
 		return ""

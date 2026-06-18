@@ -1,0 +1,14 @@
+{{define "head_title"}}{{.Heading}} – Xem – phimtor{{end}}
+{{define "content"}}
+<section class="watch">
+	<a href="{{.BackHref}}" class="back-link">← Quay lại</a>
+	<div class="player">
+		<video controls autoplay playsinline src="{{.VideoURL}}"></video>
+	</div>
+	<div class="watch-meta">
+		<h1>{{.Heading}}</h1>
+		{{if .Sub}}<p class="watch-sub">{{.Sub}}</p>{{end}}
+		<p class="watch-note">Đây là video minh hoạ — trình phát thật sẽ được tích hợp sau.</p>
+	</div>
+</section>
+{{end}}

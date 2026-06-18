@@ -119,6 +119,23 @@ main { max-width: 1200px; margin: 0 auto; padding: 20px; }
 .genre-chip { background: var(--surface); border: 1px solid #2c2f3a; padding: 4px 12px; border-radius: 999px; font-size: 0.82rem; }
 .overview { margin-top: 16px; max-width: 70ch; }
 
+/* --- Watch buttons --- */
+.watch-btn {
+	display: inline-flex; align-items: center; gap: 8px;
+	margin-top: 18px;
+	background: var(--accent); color: #1a1500;
+	font-weight: 700; padding: 11px 22px; border-radius: var(--radius);
+	transition: filter 0.12s ease;
+}
+.watch-btn:hover { filter: brightness(1.08); }
+.watch-btn-sm {
+	flex: 0 0 auto; align-self: center; margin-left: auto;
+	background: var(--surface-2); color: var(--accent);
+	font-weight: 600; font-size: 0.85rem; padding: 6px 14px; border-radius: 999px;
+	white-space: nowrap; transition: background 0.12s ease;
+}
+.watch-btn-sm:hover { background: var(--accent); color: #1a1500; }
+
 /* --- Seasons (TV) --- */
 .seasons { position: relative; z-index: 1; margin-top: 40px; }
 .seasons h2 { font-size: 1.3rem; margin-bottom: 14px; }
@@ -135,6 +152,18 @@ main { max-width: 1200px; margin: 0 auto; padding: 20px; }
 .ep-num { color: var(--accent); font-weight: 700; min-width: 24px; }
 .ep-title { font-weight: 600; }
 .ep-overview { color: var(--muted); font-size: 0.9rem; margin-top: 2px; }
+
+/* --- Watch page --- */
+.watch .back-link { color: var(--muted); }
+.watch .back-link:hover { color: var(--accent); }
+.player {
+	margin: 14px 0 20px;
+	background: #000; border-radius: var(--radius); overflow: hidden;
+}
+.player video { width: 100%; max-height: 75vh; display: block; }
+.watch-meta h1 { margin: 0 0 4px; font-size: 1.5rem; }
+.watch-sub { color: var(--text); margin: 0 0 10px; }
+.watch-note { color: var(--muted); font-size: 0.88rem; }
 
 /* --- 404 --- */
 .notfound { text-align: center; padding: 80px 20px; }

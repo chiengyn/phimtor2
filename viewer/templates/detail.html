@@ -17,6 +17,7 @@
 				{{with .Runtime}}<span>{{.}} phút</span>{{end}}
 			</div>
 			{{if .Genres}}<div class="genres">{{range .Genres}}<span class="genre-chip">{{.Name}}</span>{{end}}</div>{{end}}
+			{{if ne .Type "tv"}}<a class="watch-btn" href="/watch/movie/{{.ID}}">▶ Xem phim</a>{{end}}
 			{{if .Overview}}<p class="overview">{{.Overview}}</p>{{end}}
 		</div>
 	</div>
@@ -38,6 +39,7 @@
 						<div class="ep-title">{{if .Name}}{{.Name}}{{else}}Tập {{.EpisodeNumber}}{{end}}</div>
 						{{if .Overview}}<div class="ep-overview">{{.Overview}}</div>{{end}}
 					</div>
+					<a class="watch-btn-sm" href="/watch/episode/{{.ID}}">▶ Xem</a>
 				</div>
 				{{end}}
 			</div>

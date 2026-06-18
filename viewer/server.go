@@ -12,11 +12,16 @@ import (
 
 const tmdbImageBase = "https://image.tmdb.org/t/p/"
 
+// mockVideoURL is a placeholder stream used by the watch page until real
+// playback is wired up.
+const mockVideoURL = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+
 type Server struct {
 	store    *Store
 	router   chi.Router
 	home     *template.Template
 	detail   *template.Template
+	watch    *template.Template
 	notFound *template.Template
 	grid     *template.Template
 }
@@ -46,16 +51,19 @@ var funcMap = template.FuncMap{
 		return tmdbImageBase + size + path
 	},
 	// year extracts the 4-digit year from a "YYYY-MM-DD" date string.
-	"year": func(date string) string {
-		if len(date) >= 4 {
-			return date[:4]
-		}
-		return ""
-	},
+	"year": yearOf,
 	// rating formats a vote average to one decimal place.
 	"rating": func(v float64) string {
 		return fmt.Sprintf("%.1f", v)
 	},
+}
+
+// yearOf extracts the 4-digit year from a "YYYY-MM-DD" date string.
+func yearOf(date string) string {
+	if len(date) >= 4 {
+		return date[:4]
+	}
+	return ""
 }
 
 func (s *Server) parseTemplates() error {
@@ -72,6 +80,9 @@ func (s *Server) parseTemplates() error {
 		return err
 	}
 	if s.detail, err = parse("layout.html", "detail.html"); err != nil {
+		return err
+	}
+	if s.watch, err = parse("layout.html", "watch.html"); err != nil {
 		return err
 	}
 	if s.notFound, err = parse("layout.html", "404.html"); err != nil {
@@ -91,6 +102,8 @@ func (s *Server) setupRouter() {
 	r.Get("/", s.handleHome)
 	r.Get("/titles", s.handleTitlesFragment)
 	r.Get("/titles/{id}", s.handleDetail)
+	r.Get("/watch/movie/{id}", s.handleWatchMovie)
+	r.Get("/watch/episode/{id}", s.handleWatchEpisode)
 
 	fs := http.FileServer(http.Dir("static"))
 	r.Handle("/static/*", http.StripPrefix("/static/", fs))
@@ -171,6 +184,66 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, s.detail, "layout", title)
+}
+
+// watchData drives the (mocked) watch page.
+type watchData struct {
+	Heading  string
+	Sub      string
+	VideoURL string
+	BackHref string
+}
+
+func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		s.renderNotFound(w)
+		return
+	}
+	title, err := s.store.GetTitle(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if title == nil {
+		s.renderNotFound(w)
+		return
+	}
+	data := watchData{
+		Heading:  title.Title,
+		Sub:      yearOf(title.AirDate),
+		VideoURL: mockVideoURL,
+		BackHref: fmt.Sprintf("/titles/%d", title.ID),
+	}
+	s.render(w, s.watch, "layout", data)
+}
+
+func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		s.renderNotFound(w)
+		return
+	}
+	ec, err := s.store.GetEpisodeContext(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ec == nil {
+		s.renderNotFound(w)
+		return
+	}
+	sub := fmt.Sprintf("Phần %d · Tập %d", ec.SeasonNumber, ec.EpisodeNumber)
+	if ec.EpisodeName != "" {
+		sub += ": " + ec.EpisodeName
+	}
+	data := watchData{
+		Heading:  ec.TitleName,
+		Sub:      sub,
+		VideoURL: mockVideoURL,
+		BackHref: fmt.Sprintf("/titles/%d", ec.TitleID),
+	}
+	s.render(w, s.watch, "layout", data)
 }
 
 func (s *Server) renderNotFound(w http.ResponseWriter) {
