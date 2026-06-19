@@ -92,14 +92,15 @@ func (s *Server) setupRouter() {
 	r.Route("/api/titles", func(r chi.Router) {
 		r.Get("/", s.handleListTitles)
 		r.Get("/{id}", s.handleGetTitle)
-		r.Get("/{id}/torrents", s.handleListTitleTorrents)
+		r.Get("/{id}/videos", s.handleListTitleVideos)
 		r.Delete("/{id}", s.handleDeleteTitle)
 	})
 	r.Post("/api/import", s.handleImport)
 
-	r.Route("/api/torrents", func(r chi.Router) {
-		r.Post("/", s.handleSaveTorrent)
-		r.Delete("/{id}", s.handleDeleteTorrent)
+	r.Route("/api/videos", func(r chi.Router) {
+		r.Post("/", s.handleSaveVideo)
+		r.Post("/batch", s.handleSaveVideoBatch)
+		r.Delete("/{id}", s.handleDeleteVideo)
 	})
 
 	r.Route("/api/subtitles", func(r chi.Router) {
@@ -291,19 +292,30 @@ func (s *Server) handleTitleDetail(w http.ResponseWriter, r *http.Request) {
 	render(w, "detail.html", map[string]any{"Title": title, "StreamerURL": s.streamerURL})
 }
 
-// handleListTitleTorrents renders the torrent-region fragment that the detail
-// page re-fetches when the "torrentsChanged" event fires.
-func (s *Server) handleListTitleTorrents(w http.ResponseWriter, r *http.Request) {
+// handleListTitleVideos renders the video-region fragment that the detail page
+// re-fetches when the "torrentsChanged" event fires.
+func (s *Server) handleListTitleVideos(w http.ResponseWriter, r *http.Request) {
 	title := s.lookupTitle(w, r)
 	if title == nil {
 		return
 	}
-	render(w, "torrent-region", title)
+	render(w, "video-region", title)
 }
 
-// handleAddTorrentPage renders the standalone add-torrent page. An optional
-// ?episode_id= scopes the new torrent to a single TV episode; otherwise it is
-// attached to the movie title.
+// packEpisode is one selectable episode passed to the season-pack add page so the
+// browser can map each video file to an episode.
+type packEpisode struct {
+	ID     int64  `json:"id"`
+	Number int    `json:"number"`
+	Label  string `json:"label"`
+}
+
+// handleAddTorrentPage renders the standalone add-torrent page. It runs in one of
+// three modes depending on the query string:
+//   - ?season_id= : season-pack mode — map many files in one .torrent to the
+//     episodes of that season.
+//   - ?episode_id= : scope a single video to one TV episode.
+//   - neither     : attach a single video to the movie title.
 func (s *Server) handleAddTorrentPage(w http.ResponseWriter, r *http.Request) {
 	title := s.lookupTitle(w, r)
 	if title == nil {
@@ -311,8 +323,33 @@ func (s *Server) handleAddTorrentPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	episodeID := r.URL.Query().Get("episode_id")
+	seasonID := r.URL.Query().Get("season_id")
 	contextLabel := title.Title
-	if episodeID != "" {
+	packEpisodes := []packEpisode{}
+
+	switch {
+	case seasonID != "":
+		if sid, err := strconv.ParseInt(seasonID, 10, 64); err == nil {
+			for i := range title.Seasons {
+				se := title.Seasons[i]
+				if se.ID != sid {
+					continue
+				}
+				if se.Name != "" {
+					contextLabel = fmt.Sprintf("%s — %s", title.Title, se.Name)
+				} else {
+					contextLabel = fmt.Sprintf("%s — Mùa %d", title.Title, se.SeasonNumber)
+				}
+				for _, ep := range se.Episodes {
+					packEpisodes = append(packEpisodes, packEpisode{
+						ID:     ep.ID,
+						Number: ep.EpisodeNumber,
+						Label:  fmt.Sprintf("S%02dE%02d · %s", se.SeasonNumber, ep.EpisodeNumber, ep.Name),
+					})
+				}
+			}
+		}
+	case episodeID != "":
 		if eid, err := strconv.ParseInt(episodeID, 10, 64); err == nil {
 			for i := range title.Seasons {
 				for j := range title.Seasons[i].Episodes {
@@ -325,22 +362,29 @@ func (s *Server) handleAddTorrentPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	episodesJSON, _ := json.Marshal(packEpisodes)
+
 	render(w, "add_torrent.html", map[string]any{
 		"Title":        title,
 		"EpisodeID":    episodeID,
+		"SeasonID":     seasonID,
 		"ContextLabel": contextLabel,
 		"StreamerURL":  s.streamerURL,
+		// Plain string embedded in a data- attribute (NOT inside a <script>):
+		// html/template JSON-string-encodes values in script context, which would
+		// turn this array into a quoted string and break JSON.parse on the client.
+		"EpisodesJSON": string(episodesJSON),
 	})
 }
 
-// handleSaveTorrent persists a torrent the admin previewed against the streamer.
+// handleSaveVideo persists one video the admin previewed against the streamer.
 // It accepts either JSON (magnet input) or multipart/form-data carrying the
-// original .torrent file plus the metadata fields. The magnet is always stored;
-// for file uploads with no magnet it is synthesized from the infohash so the
-// torrent stays re-addable later.
-func (s *Server) handleSaveTorrent(w http.ResponseWriter, r *http.Request) {
+// original .torrent file plus the metadata fields. The magnet is always stored
+// on the torrent source; for file uploads with no magnet it is synthesized from
+// the infohash so the torrent stays re-addable later.
+func (s *Server) handleSaveVideo(w http.ResponseWriter, r *http.Request) {
 	var (
-		t         Torrent
+		v         Video
 		fileBytes []byte
 	)
 
@@ -360,7 +404,7 @@ func (s *Server) handleSaveTorrent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		t = Torrent{
+		v = Video{
 			Magnet: body.Magnet, InfoHash: body.InfoHash, FileIndex: body.FileIndex,
 			FilePath: body.FilePath, FileSize: body.FileSize, Name: body.Name,
 			Resolution: body.Resolution, TitleID: body.TitleID, EpisodeID: body.EpisodeID,
@@ -370,15 +414,15 @@ func (s *Server) handleSaveTorrent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid form: "+err.Error())
 			return
 		}
-		t.Magnet = r.FormValue("magnet")
-		t.InfoHash = r.FormValue("info_hash")
-		t.FileIndex, _ = strconv.Atoi(r.FormValue("file_index"))
-		t.FilePath = r.FormValue("file_path")
-		t.FileSize, _ = strconv.ParseInt(r.FormValue("file_size"), 10, 64)
-		t.Name = r.FormValue("name")
-		t.Resolution = r.FormValue("resolution")
-		t.TitleID = parseOptInt64(r.FormValue("title_id"))
-		t.EpisodeID = parseOptInt64(r.FormValue("episode_id"))
+		v.Magnet = r.FormValue("magnet")
+		v.InfoHash = r.FormValue("info_hash")
+		v.FileIndex, _ = strconv.Atoi(r.FormValue("file_index"))
+		v.FilePath = r.FormValue("file_path")
+		v.FileSize, _ = strconv.ParseInt(r.FormValue("file_size"), 10, 64)
+		v.Name = r.FormValue("name")
+		v.Resolution = r.FormValue("resolution")
+		v.TitleID = parseOptInt64(r.FormValue("title_id"))
+		v.EpisodeID = parseOptInt64(r.FormValue("episode_id"))
 		if file, _, ferr := r.FormFile("torrent"); ferr == nil {
 			defer file.Close()
 			b, err := io.ReadAll(file)
@@ -390,43 +434,144 @@ func (s *Server) handleSaveTorrent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	t.Name = strings.TrimSpace(t.Name)
-	t.InfoHash = strings.ToLower(strings.TrimSpace(t.InfoHash))
+	v.Name = strings.TrimSpace(v.Name)
+	v.InfoHash = strings.ToLower(strings.TrimSpace(v.InfoHash))
 	switch {
-	case t.Name == "":
+	case v.Name == "":
 		writeError(w, http.StatusBadRequest, "name required")
 		return
-	case !validResolution[t.Resolution]:
+	case !validResolution[v.Resolution]:
 		writeError(w, http.StatusBadRequest, "invalid resolution")
 		return
-	case t.InfoHash == "":
+	case v.InfoHash == "":
 		writeError(w, http.StatusBadRequest, "info_hash required")
 		return
-	case (t.TitleID == nil) == (t.EpisodeID == nil):
+	case (v.TitleID == nil) == (v.EpisodeID == nil):
 		writeError(w, http.StatusBadRequest, "provide exactly one of title_id or episode_id")
 		return
 	}
-	if strings.TrimSpace(t.Magnet) == "" {
-		t.Magnet = fmt.Sprintf("magnet:?xt=urn:btih:%s&dn=%s", t.InfoHash, url.QueryEscape(t.Name))
+	if strings.TrimSpace(v.Magnet) == "" {
+		v.Magnet = fmt.Sprintf("magnet:?xt=urn:btih:%s&dn=%s", v.InfoHash, url.QueryEscape(v.Name))
 	}
 
-	if err := s.store.AddTorrent(r.Context(), &t, fileBytes); err != nil {
+	if err := s.store.AddVideo(r.Context(), &v, fileBytes); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.Header().Set("HX-Trigger", "torrentsChanged")
-	writeJSON(w, http.StatusCreated, map[string]int64{"id": t.ID})
+	writeJSON(w, http.StatusCreated, map[string]int64{"id": v.ID})
 }
 
-// handleDeleteTorrent removes a torrent row. Like handleDeleteTitle it returns
-// an empty 200 (not 204) so the htmx outerHTML swap removes the row.
-func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
+// handleSaveVideoBatch persists a whole season pack: one .torrent (one info_hash)
+// whose files map to several episodes. It accepts JSON (magnet) or multipart (the
+// .torrent uploaded once) carrying the shared info_hash/magnet/resolution plus an
+// items array, one entry per episode->file mapping.
+func (s *Server) handleSaveVideoBatch(w http.ResponseWriter, r *http.Request) {
+	type item struct {
+		EpisodeID *int64 `json:"episode_id"`
+		FileIndex int    `json:"file_index"`
+		FilePath  string `json:"file_path"`
+		FileSize  int64  `json:"file_size"`
+		Name      string `json:"name"`
+	}
+	var (
+		infoHash, magnet, resolution string
+		items                        []item
+		fileBytes                    []byte
+	)
+
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			InfoHash   string `json:"info_hash"`
+			Magnet     string `json:"magnet"`
+			Resolution string `json:"resolution"`
+			Items      []item `json:"items"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		infoHash, magnet, resolution, items = body.InfoHash, body.Magnet, body.Resolution, body.Items
+	} else {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid form: "+err.Error())
+			return
+		}
+		infoHash = r.FormValue("info_hash")
+		magnet = r.FormValue("magnet")
+		resolution = r.FormValue("resolution")
+		if err := json.Unmarshal([]byte(r.FormValue("items")), &items); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid items: "+err.Error())
+			return
+		}
+		if file, _, ferr := r.FormFile("torrent"); ferr == nil {
+			defer file.Close()
+			b, err := io.ReadAll(file)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "read .torrent: "+err.Error())
+				return
+			}
+			fileBytes = b
+		}
+	}
+
+	infoHash = strings.ToLower(strings.TrimSpace(infoHash))
+	switch {
+	case !validResolution[resolution]:
+		writeError(w, http.StatusBadRequest, "invalid resolution")
+		return
+	case infoHash == "":
+		writeError(w, http.StatusBadRequest, "info_hash required")
+		return
+	case len(items) == 0:
+		writeError(w, http.StatusBadRequest, "no episodes mapped")
+		return
+	}
+
+	seenIndex := map[int]bool{}
+	videos := make([]*Video, 0, len(items))
+	for _, it := range items {
+		if it.EpisodeID == nil {
+			writeError(w, http.StatusBadRequest, "each item must reference an episode")
+			return
+		}
+		if seenIndex[it.FileIndex] {
+			writeError(w, http.StatusBadRequest, "duplicate file_index in pack")
+			return
+		}
+		seenIndex[it.FileIndex] = true
+		name := strings.TrimSpace(it.Name)
+		if name == "" {
+			name = strings.TrimSuffix(path.Base(it.FilePath), path.Ext(it.FilePath))
+		}
+		videos = append(videos, &Video{
+			EpisodeID: it.EpisodeID, Name: name, Resolution: resolution,
+			FileIndex: it.FileIndex, FilePath: it.FilePath, FileSize: it.FileSize,
+		})
+	}
+
+	if strings.TrimSpace(magnet) == "" {
+		magnet = fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
+	}
+
+	if err := s.store.AddVideoBatch(r.Context(), infoHash, magnet, fileBytes, videos); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("HX-Trigger", "torrentsChanged")
+	writeJSON(w, http.StatusCreated, map[string]int{"count": len(videos)})
+}
+
+// handleDeleteVideo removes a video row (reaping its torrent source if it was the
+// last user). Like handleDeleteTitle it returns an empty 200 (not 204) so the
+// htmx outerHTML swap removes the row.
+func (s *Server) handleDeleteVideo(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	ok, err := s.store.DeleteTorrent(r.Context(), id)
+	ok, err := s.store.DeleteVideo(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -23,7 +23,7 @@ type Title struct {
 	Status           string    `json:"status"`
 	Genres           []Genre   `json:"genres,omitempty"`
 	Seasons          []Season  `json:"seasons,omitempty"`
-	Torrents         []Torrent `json:"torrents,omitempty"` // movie sources (TV uses Episode.Torrents)
+	Videos           []Video   `json:"videos,omitempty"` // movie sources (TV uses Episode.Videos)
 	CreatedAt        time.Time `json:"created_at,omitempty"`
 	UpdatedAt        time.Time `json:"updated_at,omitempty"`
 }
@@ -51,16 +51,19 @@ type Episode struct {
 	AirDate       string    `json:"air_date"`
 	Runtime       *int      `json:"runtime"`
 	StillPath     string    `json:"still_path"`
-	Torrents      []Torrent `json:"torrents,omitempty"`
+	Videos        []Video   `json:"videos,omitempty"`
 }
 
-// Torrent is one playable source for a movie or a single TV episode, at a given
-// resolution. Exactly one of TitleID / EpisodeID is set. The raw .torrent file
-// bytes are deliberately not a field here — they are never sent to the browser;
-// they are written from a []byte argument in Store.AddTorrent and only read back
-// by the (future) streamer re-add path.
-type Torrent struct {
+// Video is one playable file for a movie or a single TV episode, at a given
+// resolution. Exactly one of TitleID / EpisodeID is set. A video points at a
+// torrent_sources row (SourceID) plus the FileIndex of its file inside that
+// torrent; many videos can share one source (a season pack maps each episode to
+// a different file in the same .torrent). InfoHash / Magnet are loaded from the
+// source via JOIN. The raw .torrent bytes live on the source, never on the
+// video, and are never sent to the browser.
+type Video struct {
 	ID         int64     `json:"id"`
+	SourceID   int64     `json:"source_id,omitempty"`
 	TitleID    *int64    `json:"title_id,omitempty"`
 	EpisodeID  *int64    `json:"episode_id,omitempty"`
 	Name       string    `json:"name"`

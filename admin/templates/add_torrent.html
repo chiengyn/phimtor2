@@ -49,7 +49,7 @@
     .hidden { display: none; }
   </style>
 </head>
-<body data-streamer="{{ .StreamerURL }}" data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}">
+<body data-streamer="{{ .StreamerURL }}" data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}" data-season-id="{{ .SeasonID }}" data-episodes="{{ .EpisodesJSON }}">
   <header>
     <h1>➕ Thêm torrent</h1>
     <a href="/titles/{{ .Title.ID }}">← Quay lại</a>
@@ -96,6 +96,20 @@
       </label>
       <button id="save-btn" onclick="save()">Lưu torrent</button>
     </div>
+
+    <div class="card hidden" id="pack-save-card">
+      <h2>3 · Lưu cả gói</h2>
+      <p class="muted">Mỗi tệp video đã được gán cho một tập (sửa lại nếu cần ở danh sách trên). Các tệp để “— Bỏ qua —” sẽ không được lưu.</p>
+      <label class="field">
+        <span>Độ phân giải (áp dụng cho cả mùa)</span>
+        <select id="pack-resolution-input">
+          <option value="2160p">2160p (4K)</option>
+          <option value="1080p" selected>1080p</option>
+          <option value="720p">720p</option>
+        </select>
+      </label>
+      <button id="pack-save-btn" onclick="savePack()">Lưu cả gói</button>
+    </div>
   </main>
 
 <script>
@@ -103,6 +117,14 @@ const STREAMER = (document.body.dataset.streamer || '').replace(/\/$/, '');
 const API = STREAMER + '/api/torrents';
 const TITLE_ID = document.body.dataset.titleId || '';
 const EPISODE_ID = document.body.dataset.episodeId || '';
+const SEASON_ID = document.body.dataset.seasonId || '';
+const PACK_MODE = !!SEASON_ID;   // season pack: map many files -> many episodes
+let EPISODES = [];               // [{id, number, label}] for this season
+if (PACK_MODE) {
+  try { EPISODES = JSON.parse(document.body.dataset.episodes || '[]'); }
+  catch (e) { EPISODES = []; }
+  if (!Array.isArray(EPISODES)) EPISODES = [];
+}
 
 // The torrent the admin is previewing. We retain the original input (magnet
 // string or File object) so that on Save we can re-send it to the admin server
@@ -173,6 +195,7 @@ function resetSteps() {
   document.getElementById('name-input').value = '';
   document.getElementById('files-card').classList.add('hidden');
   document.getElementById('save-card').classList.add('hidden');
+  document.getElementById('pack-save-card').classList.add('hidden');
 }
 
 async function addToStreamer(doFetch) {
@@ -235,19 +258,23 @@ function stopStats() {
 // The streamer fetches metadata asynchronously: name stays "Loading..." and
 // files is empty until it arrives, so poll the list until files appear.
 async function pollMetadata() {
+  let ready = null;
   try {
     const res = await fetch(API);
     if (res.ok) {
       const list = await res.json();
       const t = (list || []).find(x => x.infoHash === infoHash);
-      if (t && t.files && t.files.length) {
-        files = t.files;
-        renderFiles();
-        setStatus('Sẵn sàng. Chọn tệp video để lưu.');
-        return;
-      }
+      if (t && t.files && t.files.length) ready = t.files;
     }
-  } catch (e) { /* keep polling */ }
+  } catch (e) { /* network error — keep polling */ }
+  // Render outside the try so a rendering bug surfaces instead of silently
+  // turning into an endless poll.
+  if (ready) {
+    files = ready;
+    renderFiles();
+    setStatus(PACK_MODE ? 'Gán các tệp cho từng tập rồi lưu cả gói.' : 'Sẵn sàng. Chọn tệp video để lưu.');
+    return;
+  }
   setTimeout(pollMetadata, 1500);
 }
 
@@ -257,17 +284,47 @@ function renderFiles() {
   const container = document.getElementById('file-list');
   container.innerHTML = files.map(f => {
     const ext = (f.path.split('.').pop() || '').toLowerCase();
-    const play = f.isVideo
-      ? `<button class="btn-sm btn-play" onclick="previewPlay(${f.index})">▶ Xem</button>
-         <button class="btn-sm" onclick="chooseFile(${f.index})">Chọn để lưu</button>`
-      : `<button class="btn-sm" disabled>▶ Xem</button>`;
+    let action;
+    if (PACK_MODE) {
+      // Map each video file to an episode (auto-matched by SxxExx, editable).
+      action = f.isVideo
+        ? `<button class="btn-sm btn-play" onclick="previewPlay(${f.index})">▶ Xem</button>
+           ${episodeSelectHtml(f)}`
+        : `<button class="btn-sm" disabled>▶ Xem</button>`;
+    } else {
+      action = f.isVideo
+        ? `<button class="btn-sm btn-play" onclick="previewPlay(${f.index})">▶ Xem</button>
+           <button class="btn-sm" onclick="chooseFile(${f.index})">Chọn để lưu</button>`
+        : `<button class="btn-sm" disabled>▶ Xem</button>`;
+    }
     return `<div class="file-row">
       <span class="file-name" title="${escHtml(f.path)}">${escHtml(basename(f.path))}</span>
       <span class="badge">${escHtml(ext)}</span>
       <span class="file-size">${formatBytes(f.length)}</span>
-      ${play}
+      ${action}
     </div>`;
   }).join('');
+  if (PACK_MODE) document.getElementById('pack-save-card').classList.remove('hidden');
+}
+
+// episodeSelectHtml builds the per-file episode dropdown for season-pack mode,
+// pre-selecting the episode whose number matches the SxxExx tag in the file name.
+function episodeSelectHtml(f) {
+  const guessed = guessEpisodeId(f.path);
+  const opts = ['<option value="">— Bỏ qua —</option>'].concat(
+    EPISODES.map(e => `<option value="${e.id}"${String(e.id) === guessed ? ' selected' : ''}>${escHtml(e.label)}</option>`)
+  ).join('');
+  return `<select class="ep-select btn-sm" data-index="${f.index}">${opts}</select>`;
+}
+
+// guessEpisodeId mirrors the server's episodeRe (admin/opensubtitles.go) to pull
+// the episode number out of a file name and map it to this season's episode.
+function guessEpisodeId(p) {
+  const m = /\bS(\d{1,2})E(\d{1,2})\b/i.exec(basename(p));
+  if (!m) return '';
+  const num = parseInt(m[2], 10);
+  const ep = EPISODES.find(e => e.number === num);
+  return ep ? String(ep.id) : '';
 }
 
 function previewPlay(index) {
@@ -311,9 +368,9 @@ async function save() {
       const form = new FormData();
       form.append('torrent', input.file);
       Object.entries(meta).forEach(([k, v]) => form.append(k, v));
-      res = await fetch('/api/torrents', { method: 'POST', body: form });
+      res = await fetch('/api/videos', { method: 'POST', body: form });
     } else {
-      res = await fetch('/api/torrents', {
+      res = await fetch('/api/videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...meta, magnet: input.magnet }),
@@ -324,6 +381,53 @@ async function save() {
   } catch (e) {
     setStatus('Lưu thất bại: ' + e.message, true);
     btn.disabled = false; btn.textContent = 'Lưu torrent';
+  }
+}
+
+// savePack collects every file->episode mapping and saves the whole season pack
+// in one request: one torrent source shared by all the episode videos.
+async function savePack() {
+  const resolution = document.getElementById('pack-resolution-input').value;
+  const items = [];
+  document.querySelectorAll('.ep-select').forEach(sel => {
+    if (!sel.value) return;                       // "— Bỏ qua —"
+    const f = files.find(x => x.index === Number(sel.dataset.index));
+    if (!f) return;
+    items.push({
+      episode_id: Number(sel.value),
+      file_index: f.index,
+      file_path: f.path,
+      file_size: f.length,
+      name: stripExt(f.path),
+    });
+  });
+  if (!items.length) { setStatus('Gán ít nhất một tệp cho một tập.', true); return; }
+
+  const btn = document.getElementById('pack-save-btn');
+  btn.disabled = true; btn.textContent = 'Đang lưu…';
+
+  try {
+    let res;
+    if (input.kind === 'file') {
+      // Upload the .torrent once; the admin shares it across every episode video.
+      const form = new FormData();
+      form.append('torrent', input.file);
+      form.append('info_hash', infoHash);
+      form.append('resolution', resolution);
+      form.append('items', JSON.stringify(items));
+      res = await fetch('/api/videos/batch', { method: 'POST', body: form });
+    } else {
+      res = await fetch('/api/videos/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ info_hash: infoHash, magnet: input.magnet, resolution, items }),
+      });
+    }
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    window.location = '/titles/' + TITLE_ID;
+  } catch (e) {
+    setStatus('Lưu thất bại: ' + e.message, true);
+    btn.disabled = false; btn.textContent = 'Lưu cả gói';
   }
 }
 </script>

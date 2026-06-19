@@ -297,18 +297,18 @@ func (s *Store) GetTitle(ctx context.Context, id int64) (*Title, error) {
 		if t.Seasons, err = s.loadSeasons(ctx, id); err != nil {
 			return nil, err
 		}
-		byEpisode, err := s.loadTorrentsForEpisodes(ctx, id)
+		byEpisode, err := s.loadVideosForEpisodes(ctx, id)
 		if err != nil {
 			return nil, err
 		}
 		for i := range t.Seasons {
 			for j := range t.Seasons[i].Episodes {
 				ep := &t.Seasons[i].Episodes[j]
-				ep.Torrents = byEpisode[ep.ID]
+				ep.Videos = byEpisode[ep.ID]
 			}
 		}
 	} else {
-		if t.Torrents, err = s.loadTorrentsForTitle(ctx, id); err != nil {
+		if t.Videos, err = s.loadVideosForTitle(ctx, id); err != nil {
 			return nil, err
 		}
 	}
@@ -410,49 +410,131 @@ func (s *Store) DeleteTitle(ctx context.Context, id int64) (bool, error) {
 	return n > 0, err
 }
 
-// --- torrents ---
+// --- videos & torrent sources ---
 
-// AddTorrent inserts one torrent source. Exactly one of t.TitleID / t.EpisodeID
-// must be non-nil (mirrors chk_torrent_owner). torrentFile holds the raw
-// .torrent bytes for file uploads, or nil for magnet input. On return t.ID holds
-// the new id.
-func (s *Store) AddTorrent(ctx context.Context, t *Torrent, torrentFile []byte) error {
-	if (t.TitleID == nil) == (t.EpisodeID == nil) {
-		return fmt.Errorf("torrent must reference exactly one of title or episode")
-	}
+// execQuerier is the subset of *sql.DB / *sql.Tx that upsertTorrentSource needs,
+// so it can run either standalone or inside a transaction.
+type execQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+// upsertTorrentSource inserts the torrent source for an info_hash, or returns the
+// existing one (refreshing the magnet, and backfilling the .torrent bytes if this
+// call supplies them and the stored ones are NULL). Returns the source id.
+func upsertTorrentSource(ctx context.Context, q execQuerier, infoHash, magnet string, torrentFile []byte) (int64, error) {
 	var file interface{}
 	if len(torrentFile) > 0 {
 		file = torrentFile
 	}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO torrents
-			(title_id, episode_id, name, resolution, info_hash, magnet, torrent_file,
-			 file_index, file_path, file_size)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		nullInt64(t.TitleID), nullInt64(t.EpisodeID), t.Name, t.Resolution, t.InfoHash,
-		t.Magnet, file, t.FileIndex, t.FilePath, t.FileSize)
+	res, err := q.ExecContext(ctx, `
+		INSERT INTO torrent_sources (info_hash, magnet, torrent_file)
+		VALUES (?,?,?)
+		ON DUPLICATE KEY UPDATE
+			id = LAST_INSERT_ID(id),
+			magnet = VALUES(magnet),
+			torrent_file = COALESCE(VALUES(torrent_file), torrent_file)`,
+		infoHash, magnet, file)
 	if err != nil {
-		return fmt.Errorf("insert torrent: %w", err)
+		return 0, fmt.Errorf("upsert torrent source: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// insertVideo writes one videos row, sharing the given source. Exactly one of
+// v.TitleID / v.EpisodeID must be non-nil (mirrors chk_video_owner). On return
+// v.ID and v.SourceID are set.
+func insertVideo(ctx context.Context, q execQuerier, v *Video, sourceID int64) error {
+	if (v.TitleID == nil) == (v.EpisodeID == nil) {
+		return fmt.Errorf("video must reference exactly one of title or episode")
+	}
+	res, err := q.ExecContext(ctx, `
+		INSERT INTO videos
+			(source_id, title_id, episode_id, name, resolution, file_index, file_path, file_size)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		sourceID, nullInt64(v.TitleID), nullInt64(v.EpisodeID), v.Name, v.Resolution,
+		v.FileIndex, v.FilePath, v.FileSize)
+	if err != nil {
+		return fmt.Errorf("insert video: %w", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
 		return err
 	}
-	t.ID = id
+	v.ID = id
+	v.SourceID = sourceID
 	return nil
 }
 
-// GetTorrent loads one torrent by id (without the raw .torrent bytes). Returns
-// (nil, nil) when no such torrent exists.
-func (s *Store) GetTorrent(ctx context.Context, id int64) (*Torrent, error) {
-	var t Torrent
+// AddVideo upserts the torrent source for v.InfoHash and inserts one video that
+// references it. torrentFile holds the raw .torrent bytes for file uploads, or
+// nil for magnet input. On return v.ID and v.SourceID hold the new ids.
+func (s *Store) AddVideo(ctx context.Context, v *Video, torrentFile []byte) error {
+	if (v.TitleID == nil) == (v.EpisodeID == nil) {
+		return fmt.Errorf("video must reference exactly one of title or episode")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	sourceID, err := upsertTorrentSource(ctx, tx, v.InfoHash, v.Magnet, torrentFile)
+	if err != nil {
+		return err
+	}
+	if err := insertVideo(ctx, tx, v, sourceID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// AddVideoBatch upserts one torrent source and inserts one video per item, all
+// sharing that source — this is how a season pack (one .torrent, many episode
+// files) is stored without duplicating the magnet or the .torrent bytes. Each
+// item must reference an episode. On return each item's ID and SourceID are set.
+func (s *Store) AddVideoBatch(ctx context.Context, infoHash, magnet string, torrentFile []byte, items []*Video) error {
+	if len(items) == 0 {
+		return fmt.Errorf("no videos to add")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	sourceID, err := upsertTorrentSource(ctx, tx, infoHash, magnet, torrentFile)
+	if err != nil {
+		return err
+	}
+	for _, v := range items {
+		if v.EpisodeID == nil {
+			return fmt.Errorf("each video in a pack must reference an episode")
+		}
+		v.InfoHash, v.Magnet = infoHash, magnet
+		if err := insertVideo(ctx, tx, v, sourceID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetVideo loads one video by id, with its source's info_hash and magnet (but not
+// the raw .torrent bytes). Returns (nil, nil) when no such video exists.
+func (s *Store) GetVideo(ctx context.Context, id int64) (*Video, error) {
+	var v Video
 	var titleID, episodeID sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, title_id, episode_id, name, resolution, info_hash, magnet,
-		       file_index, file_path, file_size, created_at
-		FROM torrents WHERE id = ?`, id).Scan(
-		&t.ID, &titleID, &episodeID, &t.Name, &t.Resolution, &t.InfoHash, &t.Magnet,
-		&t.FileIndex, &t.FilePath, &t.FileSize, &t.CreatedAt)
+		SELECT v.id, v.source_id, v.title_id, v.episode_id, v.name, v.resolution,
+		       src.info_hash, src.magnet, v.file_index, v.file_path, v.file_size, v.created_at
+		FROM videos v
+		JOIN torrent_sources src ON src.id = v.source_id
+		WHERE v.id = ?`, id).Scan(
+		&v.ID, &v.SourceID, &titleID, &episodeID, &v.Name, &v.Resolution,
+		&v.InfoHash, &v.Magnet, &v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -460,75 +542,102 @@ func (s *Store) GetTorrent(ctx context.Context, id int64) (*Torrent, error) {
 		return nil, err
 	}
 	if titleID.Valid {
-		t.TitleID = &titleID.Int64
+		v.TitleID = &titleID.Int64
 	}
 	if episodeID.Valid {
-		t.EpisodeID = &episodeID.Int64
+		v.EpisodeID = &episodeID.Int64
 	}
-	return &t, nil
+	return &v, nil
 }
 
-// DeleteTorrent removes a torrent; returns false when no row matched.
-func (s *Store) DeleteTorrent(ctx context.Context, id int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM torrents WHERE id = ?`, id)
+// DeleteVideo removes a video, then reaps its torrent source if no other video
+// still references it. Returns false when no video row matched.
+func (s *Store) DeleteVideo(ctx context.Context, id int64) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n > 0, err
+	defer tx.Rollback()
+
+	var sourceID int64
+	err = tx.QueryRowContext(ctx, `SELECT source_id FROM videos WHERE id = ?`, id).Scan(&sourceID)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM videos WHERE id = ?`, id); err != nil {
+		return false, err
+	}
+	// Reap the source only when this was its last video.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM torrent_sources
+		WHERE id = ? AND NOT EXISTS (SELECT 1 FROM videos WHERE source_id = ?)`,
+		sourceID, sourceID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-// loadTorrentsForTitle returns the movie torrents attached directly to a title.
-func (s *Store) loadTorrentsForTitle(ctx context.Context, titleID int64) ([]Torrent, error) {
+// loadVideosForTitle returns the movie videos attached directly to a title.
+func (s *Store) loadVideosForTitle(ctx context.Context, titleID int64) ([]Video, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title_id, name, resolution, info_hash, magnet, file_index, file_path, file_size, created_at
-		FROM torrents WHERE title_id = ? ORDER BY resolution, created_at`, titleID)
+		SELECT v.id, v.source_id, v.title_id, v.name, v.resolution, src.info_hash, src.magnet,
+		       v.file_index, v.file_path, v.file_size, v.created_at
+		FROM videos v
+		JOIN torrent_sources src ON src.id = v.source_id
+		WHERE v.title_id = ? ORDER BY v.resolution, v.created_at`, titleID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Torrent
+	var out []Video
 	for rows.Next() {
-		var t Torrent
+		var v Video
 		var tid sql.NullInt64
-		if err := rows.Scan(&t.ID, &tid, &t.Name, &t.Resolution, &t.InfoHash, &t.Magnet,
-			&t.FileIndex, &t.FilePath, &t.FileSize, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.SourceID, &tid, &v.Name, &v.Resolution, &v.InfoHash, &v.Magnet,
+			&v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		if tid.Valid {
-			t.TitleID = &tid.Int64
+			v.TitleID = &tid.Int64
 		}
-		out = append(out, t)
+		out = append(out, v)
 	}
 	return out, rows.Err()
 }
 
-// loadTorrentsForEpisodes returns, in one query, every episode torrent under a
-// title keyed by episode_id (joining through seasons like loadSeasons does), so
+// loadVideosForEpisodes returns, in one query, every episode video under a title
+// keyed by episode_id (joining through seasons like loadSeasons does), so
 // GetTitle can attach them without an N+1.
-func (s *Store) loadTorrentsForEpisodes(ctx context.Context, titleID int64) (map[int64][]Torrent, error) {
+func (s *Store) loadVideosForEpisodes(ctx context.Context, titleID int64) (map[int64][]Video, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.id, t.episode_id, t.name, t.resolution, t.info_hash, t.magnet,
-		       t.file_index, t.file_path, t.file_size, t.created_at
-		FROM torrents t
-		JOIN episodes e ON e.id = t.episode_id
+		SELECT v.id, v.source_id, v.episode_id, v.name, v.resolution, src.info_hash, src.magnet,
+		       v.file_index, v.file_path, v.file_size, v.created_at
+		FROM videos v
+		JOIN torrent_sources src ON src.id = v.source_id
+		JOIN episodes e ON e.id = v.episode_id
 		JOIN seasons s ON s.id = e.season_id
-		WHERE s.title_id = ? ORDER BY t.episode_id, t.resolution, t.created_at`, titleID)
+		WHERE s.title_id = ? ORDER BY v.episode_id, v.resolution, v.created_at`, titleID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	byEpisode := map[int64][]Torrent{}
+	byEpisode := map[int64][]Video{}
 	for rows.Next() {
-		var t Torrent
+		var v Video
 		var eid sql.NullInt64
-		if err := rows.Scan(&t.ID, &eid, &t.Name, &t.Resolution, &t.InfoHash, &t.Magnet,
-			&t.FileIndex, &t.FilePath, &t.FileSize, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.SourceID, &eid, &v.Name, &v.Resolution, &v.InfoHash, &v.Magnet,
+			&v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		if eid.Valid {
-			t.EpisodeID = &eid.Int64
-			byEpisode[eid.Int64] = append(byEpisode[eid.Int64], t)
+			v.EpisodeID = &eid.Int64
+			byEpisode[eid.Int64] = append(byEpisode[eid.Int64], v)
 		}
 	}
 	return byEpisode, rows.Err()

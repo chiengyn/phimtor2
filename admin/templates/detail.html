@@ -34,6 +34,7 @@
     .episode-title { font-weight: 600; }
     .btn-add { font-size: .8rem; padding: .35rem .7rem; border-radius: 8px; background: #2563eb; color: #fff; }
     .btn-add:hover { background: #1d4ed8; text-decoration: none; }
+    .season-actions { margin-top: .6rem; }
     .torrent-row { display: flex; gap: .75rem; align-items: center; padding: .5rem 0; border-top: 1px solid #1c2530; }
     .torrent-row:first-of-type { border-top: none; }
     .torrent-meta { flex: 1; min-width: 0; }
@@ -59,7 +60,7 @@
       </div>
     </div>
 
-    {{ template "torrent-region" .Title }}
+    {{ template "video-region" .Title }}
   </main>
 </body>
 </html>
