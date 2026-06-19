@@ -154,11 +154,30 @@ async function previewFile() {
   await addToStreamer(() => fetch(API, { method: 'POST', body: form }));
 }
 
-async function addToStreamer(doFetch) {
-  setStatus('Đang thêm vào streamer…');
+// resetSteps tears down everything below the source form so previewing a new
+// torrent starts clean — in particular it stops the previous video instead of
+// leaving it playing.
+function resetSteps() {
+  stopStats();
+  files = [];
+  chosen = null;
+
+  const video = document.getElementById('player');
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  video.classList.add('hidden');
+
+  document.getElementById('file-list').innerHTML = '';
+  document.getElementById('chosen-file').textContent = '—';
+  document.getElementById('name-input').value = '';
   document.getElementById('files-card').classList.add('hidden');
   document.getElementById('save-card').classList.add('hidden');
-  stopStats();
+}
+
+async function addToStreamer(doFetch) {
+  setStatus('Đang thêm vào streamer…');
+  resetSteps();
   try {
     const res = await doFetch();
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }

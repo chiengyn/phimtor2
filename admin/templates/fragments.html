@@ -35,15 +35,20 @@
   {{ if eq .Type "tv" }}
     {{ range .Seasons }}
       {{ $season := . }}
-      {{ range .Episodes }}
-        <div class="episode-block">
-          <div class="episode-head">
-            <span class="episode-title">S{{ printf "%02d" $season.SeasonNumber }}E{{ printf "%02d" .EpisodeNumber }} · {{ .Name }}</span>
-            <a class="btn-add" href="/titles/{{ $.ID }}/torrents/new?episode_id={{ .ID }}">+ Thêm torrent</a>
+      <details class="season-block">
+        <summary class="season-title">{{ if .Name }}{{ .Name }}{{ else }}Mùa {{ .SeasonNumber }}{{ end }} <span class="muted">({{ len .Episodes }} tập)</span></summary>
+        {{ range .Episodes }}
+          <div class="episode-block">
+            <div class="episode-head">
+              <span class="episode-title">S{{ printf "%02d" $season.SeasonNumber }}E{{ printf "%02d" .EpisodeNumber }} · {{ .Name }}</span>
+              <a class="btn-add" href="/titles/{{ $.ID }}/torrents/new?episode_id={{ .ID }}">+ Thêm torrent</a>
+            </div>
+            {{ template "torrent-list" .Torrents }}
           </div>
-          {{ template "torrent-list" .Torrents }}
-        </div>
-      {{ end }}
+        {{ else }}
+          <p class="muted">Chưa có tập nào.</p>
+        {{ end }}
+      </details>
     {{ end }}
   {{ else }}
     <div class="episode-block">

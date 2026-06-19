@@ -24,6 +24,11 @@
     .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; vertical-align: middle; }
     .badge.tv { background: #db61a233; color: #ff9bce; }
     .badge.res { background: #14532d; color: #86efac; font-weight: 700; flex: none; }
+    .season-block { margin-top: 1.5rem; }
+    .season-title { font-size: 1.05rem; font-weight: 600; margin: 0; padding-bottom: .35rem; border-bottom: 1px solid #222b36; cursor: pointer; list-style: none; user-select: none; }
+    .season-title::-webkit-details-marker { display: none; }
+    .season-title::before { content: "▸"; display: inline-block; margin-right: .5rem; color: #8b98a5; transition: transform .15s; }
+    details[open] > .season-title::before { transform: rotate(90deg); }
     .episode-block { border: 1px solid #222b36; border-radius: 10px; background: #11161d; padding: .85rem 1rem; margin-top: .85rem; }
     .episode-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .5rem; }
     .episode-title { font-weight: 600; }
