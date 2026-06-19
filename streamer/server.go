@@ -43,6 +43,7 @@ func (s *Server) setupRouter() {
 		r.Get("/", s.handleListTorrents)
 		r.Post("/", s.handleAddTorrent)
 		r.Delete("/{infoHash}", s.handleRemoveTorrent)
+		r.Get("/{infoHash}/stats", s.handleTorrentStats)
 		r.Get("/{infoHash}/files/{fileIndex}/stream", s.handleStream)
 	})
 
@@ -74,6 +75,16 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func (s *Server) handleListTorrents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.manager.ListTorrents())
+}
+
+func (s *Server) handleTorrentStats(w http.ResponseWriter, r *http.Request) {
+	infoHash := chi.URLParam(r, "infoHash")
+	stats, ok := s.manager.GetStats(infoHash)
+	if !ok {
+		writeError(w, http.StatusNotFound, "torrent not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {

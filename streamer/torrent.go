@@ -14,14 +14,24 @@ import (
 )
 
 type TorrentInfo struct {
+	InfoHash       string     `json:"infoHash"`
+	Name           string     `json:"name"`
+	TotalBytes     int64      `json:"totalBytes"`
+	BytesCompleted int64      `json:"bytesCompleted"`
+	Files          []FileInfo `json:"files"`
+}
+
+// TorrentStats is the live, fast-changing metrics for one torrent, served by
+// the dedicated stats endpoint (separate from the relatively static
+// list/structure returned by TorrentInfo).
+type TorrentStats struct {
 	InfoHash       string `json:"infoHash"`
-	Name           string `json:"name"`
 	TotalBytes     int64  `json:"totalBytes"`
 	BytesCompleted int64  `json:"bytesCompleted"`
 	Seeding        bool   `json:"seeding"`
 
 	// Instantaneous transfer rates in bytes/second, sampled between successive
-	// list calls (see rateSample).
+	// stats calls (see rateSample).
 	DownloadSpeed int64 `json:"downloadSpeed"`
 	UploadSpeed   int64 `json:"uploadSpeed"`
 
@@ -34,8 +44,6 @@ type TorrentInfo struct {
 
 	PiecesComplete int `json:"piecesComplete"`
 	PiecesTotal    int `json:"piecesTotal"`
-
-	Files []FileInfo `json:"files"`
 }
 
 type FileInfo struct {
@@ -174,7 +182,6 @@ func (m *TorrentManager) ListTorrents() []TorrentInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	now := time.Now()
 	result := make([]TorrentInfo, 0, len(m.torrents))
 	for hash, t := range m.torrents {
 		info := TorrentInfo{
@@ -182,28 +189,10 @@ func (m *TorrentManager) ListTorrents() []TorrentInfo {
 			Name:     "Loading...",
 		}
 
-		stats := t.Stats()
-		g := stats.TorrentGauges
-		info.TotalPeers = g.TotalPeers
-		info.PendingPeers = g.PendingPeers
-		info.ActivePeers = g.ActivePeers
-		info.ConnectedSeeders = g.ConnectedSeeders
-		info.HalfOpenPeers = g.HalfOpenPeers
-		info.PiecesComplete = g.PiecesComplete
-		info.Seeding = t.Seeding()
-
-		info.DownloadSpeed, info.UploadSpeed = m.sampleRates(
-			hash,
-			stats.BytesReadData.Int64(),
-			stats.BytesWrittenData.Int64(),
-			now,
-		)
-
 		if t.Info() != nil {
 			info.Name = t.Name()
 			info.TotalBytes = t.Length()
 			info.BytesCompleted = t.BytesCompleted()
-			info.PiecesTotal = t.NumPieces()
 
 			files := t.Files()
 			info.Files = make([]FileInfo, len(files))
@@ -221,6 +210,45 @@ func (m *TorrentManager) ListTorrents() []TorrentInfo {
 		result = append(result, info)
 	}
 	return result
+}
+
+// GetStats returns the live transfer/peer metrics for a single torrent. It is
+// intentionally separate from ListTorrents so the UI can poll the fast-changing
+// numbers for the torrents it cares about without re-fetching the (mostly
+// static) file structure.
+func (m *TorrentManager) GetStats(infoHash string) (TorrentStats, bool) {
+	t, ok := m.GetTorrent(infoHash)
+	if !ok {
+		return TorrentStats{}, false
+	}
+
+	stats := t.Stats()
+	g := stats.TorrentGauges
+	st := TorrentStats{
+		InfoHash:         infoHash,
+		Seeding:          t.Seeding(),
+		TotalPeers:       g.TotalPeers,
+		PendingPeers:     g.PendingPeers,
+		ActivePeers:      g.ActivePeers,
+		ConnectedSeeders: g.ConnectedSeeders,
+		HalfOpenPeers:    g.HalfOpenPeers,
+		PiecesComplete:   g.PiecesComplete,
+	}
+
+	st.DownloadSpeed, st.UploadSpeed = m.sampleRates(
+		infoHash,
+		stats.BytesReadData.Int64(),
+		stats.BytesWrittenData.Int64(),
+		time.Now(),
+	)
+
+	if t.Info() != nil {
+		st.TotalBytes = t.Length()
+		st.BytesCompleted = t.BytesCompleted()
+		st.PiecesTotal = t.NumPieces()
+	}
+
+	return st, true
 }
 
 // sampleRates derives instantaneous download/upload speeds (bytes/sec) from the

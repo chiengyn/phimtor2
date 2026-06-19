@@ -179,16 +179,34 @@ function formatSpeed(bytesPerSec) {
   return formatBytes(bytesPerSec || 0) + '/s';
 }
 
-function renderStats(t) {
-  return `<div class="torrent-stats">
-    <span class="stat dl" title="Download speed">↓ <b>${formatSpeed(t.downloadSpeed)}</b></span>
-    <span class="stat ul" title="Upload speed">↑ <b>${formatSpeed(t.uploadSpeed)}</b></span>
-    <span class="stat seed" title="Connected seeders">🌱 <b>${t.connectedSeeders || 0}</b></span>
-    <span class="stat" title="Active / total peers">👥 <b>${t.activePeers || 0}</b> / ${t.totalPeers || 0}</span>
-    <span class="stat" title="Pending peers">⏳ ${t.pendingPeers || 0}</span>
-    <span class="stat" title="Half-open connections">◐ ${t.halfOpenPeers || 0}</span>
-    ${t.piecesTotal ? `<span class="stat" title="Pieces complete">🧩 ${t.piecesComplete || 0}/${t.piecesTotal}</span>` : ''}
-  </div>`;
+// Live per-torrent stats, fetched from the dedicated stats endpoint (separate
+// from the torrent list) and cached by infoHash so list re-renders don't blank
+// the chips between polls.
+const statsCache = {};
+
+function statsChips(s) {
+  if (!s) return '<span class="stat" style="color:#555">…</span>';
+  return `
+    <span class="stat dl" title="Download speed">↓ <b>${formatSpeed(s.downloadSpeed)}</b></span>
+    <span class="stat ul" title="Upload speed">↑ <b>${formatSpeed(s.uploadSpeed)}</b></span>
+    <span class="stat seed" title="Connected seeders">🌱 <b>${s.connectedSeeders || 0}</b></span>
+    <span class="stat" title="Active / total peers">👥 <b>${s.activePeers || 0}</b> / ${s.totalPeers || 0}</span>
+    <span class="stat" title="Pending peers">⏳ ${s.pendingPeers || 0}</span>
+    <span class="stat" title="Half-open connections">◐ ${s.halfOpenPeers || 0}</span>
+    ${s.piecesTotal ? `<span class="stat" title="Pieces complete">🧩 ${s.piecesComplete || 0}/${s.piecesTotal}</span>` : ''}`;
+}
+
+async function refreshStats(infoHashes) {
+  await Promise.all(infoHashes.map(async hash => {
+    try {
+      const res = await fetch(`${API}/${hash}/stats`);
+      if (!res.ok) return;
+      const s = await res.json();
+      statsCache[hash] = s;
+      const el = document.getElementById('stats-' + hash);
+      if (el) el.innerHTML = statsChips(s);
+    } catch(e) { /* ignore polling errors */ }
+  }));
 }
 
 function escHtml(s) {
@@ -231,7 +249,7 @@ function renderTorrents(torrents) {
         <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
         <div style="font-size:0.75rem;color:#666;margin-bottom:0.4rem">${pct}% · ${formatBytes(t.bytesCompleted)} / ${formatBytes(t.totalBytes)}</div>
       ` : '<div style="font-size:0.75rem;color:#666;margin-bottom:0.4rem">Fetching metadata…</div>'}
-      ${renderStats(t)}
+      <div class="torrent-stats" id="stats-${escHtml(t.infoHash)}">${statsChips(statsCache[t.infoHash])}</div>
       <div class="file-list">${files}</div>
     </div>`;
   }).join('');
@@ -243,6 +261,7 @@ async function refreshTorrents() {
     if (!res.ok) return;
     const data = await res.json();
     renderTorrents(data);
+    refreshStats((data || []).map(t => t.infoHash));
   } catch(e) {
     // silently ignore polling errors
   }

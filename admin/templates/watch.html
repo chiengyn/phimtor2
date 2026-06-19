@@ -367,16 +367,34 @@ function formatSpeed(bytesPerSec) {
   return formatBytes(bytesPerSec || 0) + '/s';
 }
 
-function renderStats(t) {
-  return `<div class="torrent-stats">
-    <span class="stat dl" title="Tốc độ tải xuống">↓ <b>${formatSpeed(t.downloadSpeed)}</b></span>
-    <span class="stat ul" title="Tốc độ tải lên">↑ <b>${formatSpeed(t.uploadSpeed)}</b></span>
-    <span class="stat seed" title="Seeder đang kết nối">🌱 <b>${t.connectedSeeders || 0}</b></span>
-    <span class="stat" title="Peer hoạt động / tổng">👥 <b>${t.activePeers || 0}</b> / ${t.totalPeers || 0}</span>
-    <span class="stat" title="Peer đang chờ">⏳ ${t.pendingPeers || 0}</span>
-    <span class="stat" title="Kết nối nửa mở">◐ ${t.halfOpenPeers || 0}</span>
-    ${t.piecesTotal ? `<span class="stat" title="Mảnh đã hoàn thành">🧩 ${t.piecesComplete || 0}/${t.piecesTotal}</span>` : ''}
-  </div>`;
+// Số liệu trực tiếp của từng torrent, lấy từ endpoint stats riêng (tách khỏi
+// danh sách torrent) và lưu cache theo infoHash để khi danh sách render lại
+// không bị mất chip giữa các lần poll.
+const statsCache = {};
+
+function statsChips(s) {
+  if (!s) return '<span class="stat" style="color:#555">…</span>';
+  return `
+    <span class="stat dl" title="Tốc độ tải xuống">↓ <b>${formatSpeed(s.downloadSpeed)}</b></span>
+    <span class="stat ul" title="Tốc độ tải lên">↑ <b>${formatSpeed(s.uploadSpeed)}</b></span>
+    <span class="stat seed" title="Seeder đang kết nối">🌱 <b>${s.connectedSeeders || 0}</b></span>
+    <span class="stat" title="Peer hoạt động / tổng">👥 <b>${s.activePeers || 0}</b> / ${s.totalPeers || 0}</span>
+    <span class="stat" title="Peer đang chờ">⏳ ${s.pendingPeers || 0}</span>
+    <span class="stat" title="Kết nối nửa mở">◐ ${s.halfOpenPeers || 0}</span>
+    ${s.piecesTotal ? `<span class="stat" title="Mảnh đã hoàn thành">🧩 ${s.piecesComplete || 0}/${s.piecesTotal}</span>` : ''}`;
+}
+
+async function refreshStats(infoHashes) {
+  await Promise.all(infoHashes.map(async hash => {
+    try {
+      const res = await fetch(`${API}/${hash}/stats`);
+      if (!res.ok) return;
+      const s = await res.json();
+      statsCache[hash] = s;
+      const el = document.getElementById('stats-' + hash);
+      if (el) el.innerHTML = statsChips(s);
+    } catch(e) { /* bỏ qua lỗi poll */ }
+  }));
 }
 
 function escHtml(s) {
@@ -419,7 +437,7 @@ function renderTorrents(torrents) {
         <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
         <div style="font-size:0.75rem;color:#666;margin-bottom:0.4rem">${pct}% · ${formatBytes(t.bytesCompleted)} / ${formatBytes(t.totalBytes)}</div>
       ` : '<div style="font-size:0.75rem;color:#666;margin-bottom:0.4rem">Đang lấy thông tin…</div>'}
-      ${renderStats(t)}
+      <div class="torrent-stats" id="stats-${escHtml(t.infoHash)}">${statsChips(statsCache[t.infoHash])}</div>
       <div class="file-list">${files}</div>
     </div>`;
   }).join('');
@@ -431,6 +449,7 @@ async function refreshTorrents() {
     if (!res.ok) return;
     const data = await res.json();
     renderTorrents(data);
+    refreshStats((data || []).map(t => t.infoHash));
   } catch(e) {
     // silently ignore polling errors
   }
