@@ -297,6 +297,20 @@ func (s *Store) GetTitle(ctx context.Context, id int64) (*Title, error) {
 		if t.Seasons, err = s.loadSeasons(ctx, id); err != nil {
 			return nil, err
 		}
+		byEpisode, err := s.loadTorrentsForEpisodes(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		for i := range t.Seasons {
+			for j := range t.Seasons[i].Episodes {
+				ep := &t.Seasons[i].Episodes[j]
+				ep.Torrents = byEpisode[ep.ID]
+			}
+		}
+	} else {
+		if t.Torrents, err = s.loadTorrentsForTitle(ctx, id); err != nil {
+			return nil, err
+		}
 	}
 	return &t, nil
 }
@@ -396,6 +410,130 @@ func (s *Store) DeleteTitle(ctx context.Context, id int64) (bool, error) {
 	return n > 0, err
 }
 
+// --- torrents ---
+
+// AddTorrent inserts one torrent source. Exactly one of t.TitleID / t.EpisodeID
+// must be non-nil (mirrors chk_torrent_owner). torrentFile holds the raw
+// .torrent bytes for file uploads, or nil for magnet input. On return t.ID holds
+// the new id.
+func (s *Store) AddTorrent(ctx context.Context, t *Torrent, torrentFile []byte) error {
+	if (t.TitleID == nil) == (t.EpisodeID == nil) {
+		return fmt.Errorf("torrent must reference exactly one of title or episode")
+	}
+	var file interface{}
+	if len(torrentFile) > 0 {
+		file = torrentFile
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO torrents
+			(title_id, episode_id, name, resolution, info_hash, magnet, torrent_file,
+			 file_index, file_path, file_size)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		nullInt64(t.TitleID), nullInt64(t.EpisodeID), t.Name, t.Resolution, t.InfoHash,
+		t.Magnet, file, t.FileIndex, t.FilePath, t.FileSize)
+	if err != nil {
+		return fmt.Errorf("insert torrent: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	t.ID = id
+	return nil
+}
+
+// GetTorrent loads one torrent by id (without the raw .torrent bytes). Returns
+// (nil, nil) when no such torrent exists.
+func (s *Store) GetTorrent(ctx context.Context, id int64) (*Torrent, error) {
+	var t Torrent
+	var titleID, episodeID sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, title_id, episode_id, name, resolution, info_hash, magnet,
+		       file_index, file_path, file_size, created_at
+		FROM torrents WHERE id = ?`, id).Scan(
+		&t.ID, &titleID, &episodeID, &t.Name, &t.Resolution, &t.InfoHash, &t.Magnet,
+		&t.FileIndex, &t.FilePath, &t.FileSize, &t.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if titleID.Valid {
+		t.TitleID = &titleID.Int64
+	}
+	if episodeID.Valid {
+		t.EpisodeID = &episodeID.Int64
+	}
+	return &t, nil
+}
+
+// DeleteTorrent removes a torrent; returns false when no row matched.
+func (s *Store) DeleteTorrent(ctx context.Context, id int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM torrents WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// loadTorrentsForTitle returns the movie torrents attached directly to a title.
+func (s *Store) loadTorrentsForTitle(ctx context.Context, titleID int64) ([]Torrent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, title_id, name, resolution, info_hash, magnet, file_index, file_path, file_size, created_at
+		FROM torrents WHERE title_id = ? ORDER BY resolution, created_at`, titleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Torrent
+	for rows.Next() {
+		var t Torrent
+		var tid sql.NullInt64
+		if err := rows.Scan(&t.ID, &tid, &t.Name, &t.Resolution, &t.InfoHash, &t.Magnet,
+			&t.FileIndex, &t.FilePath, &t.FileSize, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		if tid.Valid {
+			t.TitleID = &tid.Int64
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// loadTorrentsForEpisodes returns, in one query, every episode torrent under a
+// title keyed by episode_id (joining through seasons like loadSeasons does), so
+// GetTitle can attach them without an N+1.
+func (s *Store) loadTorrentsForEpisodes(ctx context.Context, titleID int64) (map[int64][]Torrent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id, t.episode_id, t.name, t.resolution, t.info_hash, t.magnet,
+		       t.file_index, t.file_path, t.file_size, t.created_at
+		FROM torrents t
+		JOIN episodes e ON e.id = t.episode_id
+		JOIN seasons s ON s.id = e.season_id
+		WHERE s.title_id = ? ORDER BY t.episode_id, t.resolution, t.created_at`, titleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byEpisode := map[int64][]Torrent{}
+	for rows.Next() {
+		var t Torrent
+		var eid sql.NullInt64
+		if err := rows.Scan(&t.ID, &eid, &t.Name, &t.Resolution, &t.InfoHash, &t.Magnet,
+			&t.FileIndex, &t.FilePath, &t.FileSize, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		if eid.Valid {
+			t.EpisodeID = &eid.Int64
+			byEpisode[eid.Int64] = append(byEpisode[eid.Int64], t)
+		}
+	}
+	return byEpisode, rows.Err()
+}
+
 // --- small helpers for NULL-able columns ---
 
 func nullStr(s string) interface{} {
@@ -403,6 +541,13 @@ func nullStr(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+func nullInt64(p *int64) interface{} {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 func dateArg(s string) interface{} {

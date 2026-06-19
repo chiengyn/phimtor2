@@ -11,7 +11,7 @@
   <img src="{{ imgURL .PosterPath }}" alt="" onerror="this.style.visibility='hidden'">
   <div class="body">
     <div>
-      <span class="title-name">{{ .Title }}</span>
+      <a class="title-name" href="/titles/{{ .ID }}">{{ .Title }}</a>
       {{ if eq .Type "tv" }}<span class="badge tv">Phim bộ</span>{{ else }}<span class="badge">Phim lẻ</span>{{ end }}
     </div>
     <div class="muted">{{ year .AirDate }} · TMDB #{{ .TMDBID }} · db #{{ .ID }}</div>
@@ -25,3 +25,57 @@
 {{ end }}
 
 {{ define "msg" }}<div id="msg" class="{{ .Kind }}">{{ .Text }}</div>{{ end }}
+
+{{/* torrent-region: the htmx-refreshed list of torrents for a *Title. */}}
+{{ define "torrent-region" }}
+<div id="torrent-region"
+     hx-get="/api/titles/{{ .ID }}/torrents"
+     hx-trigger="torrentsChanged from:body"
+     hx-swap="outerHTML">
+  {{ if eq .Type "tv" }}
+    {{ range .Seasons }}
+      {{ $season := . }}
+      {{ range .Episodes }}
+        <div class="episode-block">
+          <div class="episode-head">
+            <span class="episode-title">S{{ printf "%02d" $season.SeasonNumber }}E{{ printf "%02d" .EpisodeNumber }} · {{ .Name }}</span>
+            <a class="btn-add" href="/titles/{{ $.ID }}/torrents/new?episode_id={{ .ID }}">+ Thêm torrent</a>
+          </div>
+          {{ template "torrent-list" .Torrents }}
+        </div>
+      {{ end }}
+    {{ end }}
+  {{ else }}
+    <div class="episode-block">
+      <div class="episode-head">
+        <span class="episode-title">Nguồn torrent</span>
+        <a class="btn-add" href="/titles/{{ .ID }}/torrents/new">+ Thêm torrent</a>
+      </div>
+      {{ template "torrent-list" .Torrents }}
+    </div>
+  {{ end }}
+</div>
+{{ end }}
+
+{{ define "torrent-list" }}
+  {{- if . -}}
+    {{- range . }}{{ template "torrent-row" . }}{{ end -}}
+  {{- else -}}
+    <p class="muted">Chưa có torrent nào.</p>
+  {{- end -}}
+{{ end }}
+
+{{ define "torrent-row" }}
+<div class="torrent-row">
+  <span class="badge res">{{ .Resolution }}</span>
+  <div class="torrent-meta">
+    <div class="torrent-name">{{ .Name }}</div>
+    <div class="muted">{{ .FilePath }} · {{ filesize .FileSize }}</div>
+  </div>
+  <button class="danger"
+          hx-delete="/api/torrents/{{ .ID }}"
+          hx-confirm="Xóa torrent này?"
+          hx-target="closest .torrent-row"
+          hx-swap="outerHTML swap:200ms">Xóa</button>
+</div>
+{{ end }}

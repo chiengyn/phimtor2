@@ -5,8 +5,11 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
+	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -36,6 +39,22 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 			return airDate[:4]
 		}
 		return "—"
+	},
+	// filesize renders a byte count as a human-readable size.
+	"filesize": func(n int64) string {
+		if n <= 0 {
+			return "—"
+		}
+		const unit = 1024
+		if n < unit {
+			return fmt.Sprintf("%d B", n)
+		}
+		div, exp := int64(unit), 0
+		for x := n / unit; x >= unit; x /= unit {
+			div *= unit
+			exp++
+		}
+		return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 	},
 }).ParseFS(templatesFS, "templates/*.html"))
 
@@ -67,13 +86,21 @@ func (s *Server) setupRouter() {
 
 	r.Get("/", s.handleIndex)
 	r.Get("/watch", s.handleWatch)
+	r.Get("/titles/{id}", s.handleTitleDetail)
+	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
 
 	r.Route("/api/titles", func(r chi.Router) {
 		r.Get("/", s.handleListTitles)
 		r.Get("/{id}", s.handleGetTitle)
+		r.Get("/{id}/torrents", s.handleListTitleTorrents)
 		r.Delete("/{id}", s.handleDeleteTitle)
 	})
 	r.Post("/api/import", s.handleImport)
+
+	r.Route("/api/torrents", func(r chi.Router) {
+		r.Post("/", s.handleSaveTorrent)
+		r.Delete("/{id}", s.handleDeleteTorrent)
+	})
 
 	r.Route("/api/subtitles", func(r chi.Router) {
 		r.Get("/search", s.handleSearchSubtitles)
@@ -252,6 +279,199 @@ func (s *Server) handleDeleteTitle(w http.ResponseWriter, r *http.Request) {
 	// Empty 200 (not 204, which htmx ignores) so the card's outerHTML swap
 	// replaces it with nothing — i.e. removes the row.
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleTitleDetail renders the per-title detail page, which lists the torrents
+// attached to the movie (or to each episode for TV) and links to the add flow.
+func (s *Server) handleTitleDetail(w http.ResponseWriter, r *http.Request) {
+	title := s.lookupTitle(w, r)
+	if title == nil {
+		return
+	}
+	render(w, "detail.html", map[string]any{"Title": title, "StreamerURL": s.streamerURL})
+}
+
+// handleListTitleTorrents renders the torrent-region fragment that the detail
+// page re-fetches when the "torrentsChanged" event fires.
+func (s *Server) handleListTitleTorrents(w http.ResponseWriter, r *http.Request) {
+	title := s.lookupTitle(w, r)
+	if title == nil {
+		return
+	}
+	render(w, "torrent-region", title)
+}
+
+// handleAddTorrentPage renders the standalone add-torrent page. An optional
+// ?episode_id= scopes the new torrent to a single TV episode; otherwise it is
+// attached to the movie title.
+func (s *Server) handleAddTorrentPage(w http.ResponseWriter, r *http.Request) {
+	title := s.lookupTitle(w, r)
+	if title == nil {
+		return
+	}
+
+	episodeID := r.URL.Query().Get("episode_id")
+	contextLabel := title.Title
+	if episodeID != "" {
+		if eid, err := strconv.ParseInt(episodeID, 10, 64); err == nil {
+			for i := range title.Seasons {
+				for j := range title.Seasons[i].Episodes {
+					if ep := title.Seasons[i].Episodes[j]; ep.ID == eid {
+						contextLabel = fmt.Sprintf("%s — S%02dE%02d %s",
+							title.Title, title.Seasons[i].SeasonNumber, ep.EpisodeNumber, ep.Name)
+					}
+				}
+			}
+		}
+	}
+
+	render(w, "add_torrent.html", map[string]any{
+		"Title":        title,
+		"EpisodeID":    episodeID,
+		"ContextLabel": contextLabel,
+		"StreamerURL":  s.streamerURL,
+	})
+}
+
+// handleSaveTorrent persists a torrent the admin previewed against the streamer.
+// It accepts either JSON (magnet input) or multipart/form-data carrying the
+// original .torrent file plus the metadata fields. The magnet is always stored;
+// for file uploads with no magnet it is synthesized from the infohash so the
+// torrent stays re-addable later.
+func (s *Server) handleSaveTorrent(w http.ResponseWriter, r *http.Request) {
+	var (
+		t         Torrent
+		fileBytes []byte
+	)
+
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			Magnet     string `json:"magnet"`
+			InfoHash   string `json:"info_hash"`
+			FileIndex  int    `json:"file_index"`
+			FilePath   string `json:"file_path"`
+			FileSize   int64  `json:"file_size"`
+			Name       string `json:"name"`
+			Resolution string `json:"resolution"`
+			TitleID    *int64 `json:"title_id"`
+			EpisodeID  *int64 `json:"episode_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		t = Torrent{
+			Magnet: body.Magnet, InfoHash: body.InfoHash, FileIndex: body.FileIndex,
+			FilePath: body.FilePath, FileSize: body.FileSize, Name: body.Name,
+			Resolution: body.Resolution, TitleID: body.TitleID, EpisodeID: body.EpisodeID,
+		}
+	} else {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid form: "+err.Error())
+			return
+		}
+		t.Magnet = r.FormValue("magnet")
+		t.InfoHash = r.FormValue("info_hash")
+		t.FileIndex, _ = strconv.Atoi(r.FormValue("file_index"))
+		t.FilePath = r.FormValue("file_path")
+		t.FileSize, _ = strconv.ParseInt(r.FormValue("file_size"), 10, 64)
+		t.Name = r.FormValue("name")
+		t.Resolution = r.FormValue("resolution")
+		t.TitleID = parseOptInt64(r.FormValue("title_id"))
+		t.EpisodeID = parseOptInt64(r.FormValue("episode_id"))
+		if file, _, ferr := r.FormFile("torrent"); ferr == nil {
+			defer file.Close()
+			b, err := io.ReadAll(file)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "read .torrent: "+err.Error())
+				return
+			}
+			fileBytes = b
+		}
+	}
+
+	t.Name = strings.TrimSpace(t.Name)
+	t.InfoHash = strings.ToLower(strings.TrimSpace(t.InfoHash))
+	switch {
+	case t.Name == "":
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	case !validResolution[t.Resolution]:
+		writeError(w, http.StatusBadRequest, "invalid resolution")
+		return
+	case t.InfoHash == "":
+		writeError(w, http.StatusBadRequest, "info_hash required")
+		return
+	case (t.TitleID == nil) == (t.EpisodeID == nil):
+		writeError(w, http.StatusBadRequest, "provide exactly one of title_id or episode_id")
+		return
+	}
+	if strings.TrimSpace(t.Magnet) == "" {
+		t.Magnet = fmt.Sprintf("magnet:?xt=urn:btih:%s&dn=%s", t.InfoHash, url.QueryEscape(t.Name))
+	}
+
+	if err := s.store.AddTorrent(r.Context(), &t, fileBytes); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("HX-Trigger", "torrentsChanged")
+	writeJSON(w, http.StatusCreated, map[string]int64{"id": t.ID})
+}
+
+// handleDeleteTorrent removes a torrent row. Like handleDeleteTitle it returns
+// an empty 200 (not 204) so the htmx outerHTML swap removes the row.
+func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	ok, err := s.store.DeleteTorrent(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	w.Header().Set("HX-Trigger", "torrentsChanged")
+	w.WriteHeader(http.StatusOK)
+}
+
+// lookupTitle parses the {id} URL param and loads the full title, writing the
+// appropriate error response and returning nil on bad id / not found / error.
+func (s *Server) lookupTitle(w http.ResponseWriter, r *http.Request) *Title {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return nil
+	}
+	title, err := s.store.GetTitle(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil
+	}
+	if title == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return nil
+	}
+	return title
+}
+
+// validResolution is the fixed set accepted by the torrents.resolution ENUM.
+var validResolution = map[string]bool{"2160p": true, "1080p": true, "720p": true}
+
+// parseOptInt64 returns a *int64 for a non-empty numeric form value, else nil.
+func parseOptInt64(s string) *int64 {
+	if s = strings.TrimSpace(s); s == "" {
+		return nil
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &v
 }
 
 // render executes a named template into the response as HTML.

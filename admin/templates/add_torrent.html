@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thêm torrent — {{ .Title.Title }}</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0e1116; color: #e6edf3; line-height: 1.5; }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1.1rem; }
+    main { max-width: 880px; margin: 0 auto; padding: 1.5rem; }
+    a { color: #79c0ff; text-decoration: none; } a:hover { text-decoration: underline; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+    .card { border: 1px solid #222b36; border-radius: 10px; background: #11161d; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+    .card h2 { font-size: .9rem; text-transform: uppercase; letter-spacing: .05em; color: #8b98a5; margin: 0 0 .75rem; }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+    input, select, button { font: inherit; padding: .55rem .7rem; border-radius: 8px; border: 1px solid #303b48; background: #161b22; color: #e6edf3; }
+    input[type=text] { flex: 1; min-width: 220px; }
+    label.field { display: block; margin-bottom: .75rem; }
+    label.field span { display: block; font-size: .8rem; color: #8b98a5; margin-bottom: .25rem; }
+    label.field input, label.field select { width: 100%; }
+    button { background: #2563eb; border-color: #2563eb; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #555; border-color: #555; cursor: default; }
+    .divider { border: none; border-top: 1px solid #222b36; margin: .85rem 0; }
+    .file-row { display: flex; gap: .6rem; align-items: center; padding: .45rem 0; border-top: 1px solid #1c2530; }
+    .file-row:first-child { border-top: none; }
+    .file-name { flex: 1; min-width: 0; word-break: break-word; }
+    .file-size { color: #8b98a5; font-size: .8rem; white-space: nowrap; }
+    .btn-sm { padding: .3rem .6rem; font-size: .8rem; }
+    .btn-play { background: #16a34a; border-color: #16a34a; }
+    .btn-play:hover { background: #15803d; }
+    .badge { font-size: .65rem; padding: .1rem .4rem; border-radius: 4px; background: #30363d; color: #adbac7; text-transform: uppercase; font-weight: 700; }
+    .torrent-stats { display: flex; flex-wrap: wrap; gap: .3rem .8rem; font-size: .78rem; color: #8b98a5; margin: .25rem 0 .75rem; }
+    .torrent-stats:empty { display: none; }
+    .torrent-stats .stat { white-space: nowrap; }
+    .torrent-stats .stat b { color: #cbd5e1; font-weight: 600; }
+    .torrent-stats .stat.dl b { color: #86efac; }
+    .torrent-stats .stat.ul b { color: #79c0ff; }
+    .torrent-stats .stat.seed b { color: #86efac; }
+    .progress-bar { height: 4px; background: #222b36; border-radius: 2px; overflow: hidden; margin: .25rem 0 .75rem; }
+    .progress-bar:empty { display: none; }
+    .progress-fill { height: 100%; background: #22c55e; border-radius: 2px; transition: width 1s linear; }
+    video { width: 100%; max-height: 60vh; border-radius: 8px; background: #000; margin-top: .75rem; }
+    #status { color: #8b98a5; font-size: .9rem; }
+    #status.err { color: #ff8b94; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body data-streamer="{{ .StreamerURL }}" data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}">
+  <header>
+    <h1>➕ Thêm torrent</h1>
+    <a href="/titles/{{ .Title.ID }}">← Quay lại</a>
+  </header>
+  <main>
+    <p class="muted">Mục: <strong>{{ .ContextLabel }}</strong></p>
+
+    <div class="card">
+      <h2>1 · Nguồn torrent</h2>
+      <div class="row">
+        <input type="text" id="magnet-input" placeholder="Dán liên kết magnet…">
+        <button id="preview-magnet" onclick="previewMagnet()">Xem thử magnet</button>
+      </div>
+      <hr class="divider">
+      <div class="row">
+        <input type="file" id="torrent-file" accept=".torrent">
+        <button id="preview-file" onclick="previewFile()">Xem thử .torrent</button>
+      </div>
+      <div style="margin-top:.75rem"><span id="status"></span></div>
+    </div>
+
+    <div class="card hidden" id="files-card">
+      <h2>2 · Tệp trong torrent</h2>
+      <div class="progress-bar" id="progress-bar"></div>
+      <div class="torrent-stats" id="torrent-stats"></div>
+      <div id="file-list"></div>
+      <video id="player" controls playsinline class="hidden"></video>
+    </div>
+
+    <div class="card hidden" id="save-card">
+      <h2>3 · Lưu vào thư viện</h2>
+      <p class="muted">Tệp đã chọn: <strong id="chosen-file">—</strong></p>
+      <label class="field">
+        <span>Tên hiển thị</span>
+        <input type="text" id="name-input" placeholder="VD: Tên phim 1080p">
+      </label>
+      <label class="field">
+        <span>Độ phân giải</span>
+        <select id="resolution-input">
+          <option value="2160p">2160p (4K)</option>
+          <option value="1080p" selected>1080p</option>
+          <option value="720p">720p</option>
+        </select>
+      </label>
+      <button id="save-btn" onclick="save()">Lưu torrent</button>
+    </div>
+  </main>
+
+<script>
+const STREAMER = (document.body.dataset.streamer || '').replace(/\/$/, '');
+const API = STREAMER + '/api/torrents';
+const TITLE_ID = document.body.dataset.titleId || '';
+const EPISODE_ID = document.body.dataset.episodeId || '';
+
+// The torrent the admin is previewing. We retain the original input (magnet
+// string or File object) so that on Save we can re-send it to the admin server
+// — the streamer keeps nothing, so the admin DB must store a re-addable handle.
+let input = null;        // { kind: 'magnet', magnet } | { kind: 'file', file }
+let infoHash = null;
+let files = [];          // streamer file infos: {index, path, length, isVideo}
+let chosen = null;       // selected file info
+let statsTimer = null;   // interval polling the streamer /stats endpoint
+
+function setStatus(text, isErr) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = isErr ? 'err' : '';
+}
+
+function basename(p) { return (p || '').split('/').pop(); }
+function stripExt(p) { return basename(p).replace(/\.[^.]+$/, ''); }
+
+function formatBytes(b) {
+  if (!b) return '—';
+  const u = ['B','KB','MB','GB','TB'];
+  const i = Math.floor(Math.log(b) / Math.log(1024));
+  return (b / Math.pow(1024, i)).toFixed(1) + ' ' + u[i];
+}
+
+function escHtml(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function previewMagnet() {
+  const magnet = document.getElementById('magnet-input').value.trim();
+  if (!magnet) { setStatus('Dán liên kết magnet trước.', true); return; }
+  input = { kind: 'magnet', magnet };
+  await addToStreamer(() => fetch(API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ magnet }),
+  }));
+}
+
+async function previewFile() {
+  const fileInput = document.getElementById('torrent-file');
+  if (!fileInput.files.length) { setStatus('Chọn tệp .torrent trước.', true); return; }
+  const file = fileInput.files[0];
+  input = { kind: 'file', file };
+  const form = new FormData();
+  form.append('torrent', file);
+  await addToStreamer(() => fetch(API, { method: 'POST', body: form }));
+}
+
+async function addToStreamer(doFetch) {
+  setStatus('Đang thêm vào streamer…');
+  document.getElementById('files-card').classList.add('hidden');
+  document.getElementById('save-card').classList.add('hidden');
+  stopStats();
+  try {
+    const res = await doFetch();
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    const data = await res.json();
+    infoHash = data.infoHash;
+    setStatus('Đang lấy metadata torrent…');
+    startStats();
+    pollMetadata();
+  } catch (e) {
+    setStatus('Lỗi: ' + e.message, true);
+  }
+}
+
+// --- live torrent stats (download speed, peers, progress) ------------------
+
+function statsChips(s) {
+  if (!s) return '<span class="stat">…</span>';
+  return `
+    <span class="stat dl" title="Tốc độ tải xuống">↓ <b>${formatBytes(s.downloadSpeed)}/s</b></span>
+    <span class="stat ul" title="Tốc độ tải lên">↑ <b>${formatBytes(s.uploadSpeed)}/s</b></span>
+    <span class="stat seed" title="Seeder đang kết nối">🌱 <b>${s.connectedSeeders || 0}</b></span>
+    <span class="stat" title="Peer hoạt động / tổng">👥 <b>${s.activePeers || 0}</b> / ${s.totalPeers || 0}</span>
+    <span class="stat" title="Peer đang chờ">⏳ ${s.pendingPeers || 0}</span>
+    ${s.piecesTotal ? `<span class="stat" title="Mảnh đã hoàn thành">🧩 ${s.piecesComplete || 0}/${s.piecesTotal}</span>` : ''}`;
+}
+
+async function refreshStats() {
+  if (!infoHash) return;
+  try {
+    const res = await fetch(`${API}/${infoHash}/stats`);
+    if (!res.ok) return;
+    const s = await res.json();
+    document.getElementById('torrent-stats').innerHTML = statsChips(s);
+    const bar = document.getElementById('progress-bar');
+    if (s.totalBytes) {
+      const pct = Math.round(s.bytesCompleted / s.totalBytes * 100);
+      bar.innerHTML = `<div class="progress-fill" style="width:${pct}%"></div>`;
+    } else {
+      bar.innerHTML = '';
+    }
+  } catch (e) { /* ignore poll errors */ }
+}
+
+function startStats() {
+  refreshStats();
+  statsTimer = setInterval(refreshStats, 2000);
+}
+
+function stopStats() {
+  if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  document.getElementById('torrent-stats').innerHTML = '';
+  document.getElementById('progress-bar').innerHTML = '';
+}
+
+// The streamer fetches metadata asynchronously: name stays "Loading..." and
+// files is empty until it arrives, so poll the list until files appear.
+async function pollMetadata() {
+  try {
+    const res = await fetch(API);
+    if (res.ok) {
+      const list = await res.json();
+      const t = (list || []).find(x => x.infoHash === infoHash);
+      if (t && t.files && t.files.length) {
+        files = t.files;
+        renderFiles();
+        setStatus('Sẵn sàng. Chọn tệp video để lưu.');
+        return;
+      }
+    }
+  } catch (e) { /* keep polling */ }
+  setTimeout(pollMetadata, 1500);
+}
+
+function renderFiles() {
+  const card = document.getElementById('files-card');
+  card.classList.remove('hidden');
+  const container = document.getElementById('file-list');
+  container.innerHTML = files.map(f => {
+    const ext = (f.path.split('.').pop() || '').toLowerCase();
+    const play = f.isVideo
+      ? `<button class="btn-sm btn-play" onclick="previewPlay(${f.index})">▶ Xem</button>
+         <button class="btn-sm" onclick="chooseFile(${f.index})">Chọn để lưu</button>`
+      : `<button class="btn-sm" disabled>▶ Xem</button>`;
+    return `<div class="file-row">
+      <span class="file-name" title="${escHtml(f.path)}">${escHtml(basename(f.path))}</span>
+      <span class="badge">${escHtml(ext)}</span>
+      <span class="file-size">${formatBytes(f.length)}</span>
+      ${play}
+    </div>`;
+  }).join('');
+}
+
+function previewPlay(index) {
+  const video = document.getElementById('player');
+  video.classList.remove('hidden');
+  video.src = `${API}/${infoHash}/files/${index}/stream`;
+  video.play().catch(() => {});
+}
+
+function chooseFile(index) {
+  chosen = files.find(f => f.index === index);
+  if (!chosen) return;
+  document.getElementById('chosen-file').textContent = basename(chosen.path);
+  document.getElementById('name-input').value = stripExt(chosen.path);
+  document.getElementById('save-card').classList.remove('hidden');
+  document.getElementById('save-card').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function save() {
+  if (!chosen) { setStatus('Chọn một tệp video trước.', true); return; }
+  const name = document.getElementById('name-input').value.trim();
+  const resolution = document.getElementById('resolution-input').value;
+  if (!name) { setStatus('Nhập tên hiển thị.', true); return; }
+
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true; btn.textContent = 'Đang lưu…';
+
+  const meta = {
+    info_hash: infoHash,
+    file_index: chosen.index,
+    file_path: chosen.path,
+    file_size: chosen.length,
+    name, resolution,
+  };
+  if (EPISODE_ID) meta.episode_id = Number(EPISODE_ID); else meta.title_id = Number(TITLE_ID);
+
+  try {
+    let res;
+    if (input.kind === 'file') {
+      // Re-send the original .torrent file so the admin can persist its bytes.
+      const form = new FormData();
+      form.append('torrent', input.file);
+      Object.entries(meta).forEach(([k, v]) => form.append(k, v));
+      res = await fetch('/api/torrents', { method: 'POST', body: form });
+    } else {
+      res = await fetch('/api/torrents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...meta, magnet: input.magnet }),
+      });
+    }
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    window.location = '/titles/' + TITLE_ID;
+  } catch (e) {
+    setStatus('Lưu thất bại: ' + e.message, true);
+    btn.disabled = false; btn.textContent = 'Lưu torrent';
+  }
+}
+</script>
+</body>
+</html>
