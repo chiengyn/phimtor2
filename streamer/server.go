@@ -42,6 +42,7 @@ func (s *Server) setupRouter() {
 	r.Route("/api/torrents", func(r chi.Router) {
 		r.Get("/", s.handleListTorrents)
 		r.Post("/", s.handleAddTorrent)
+		r.Get("/{infoHash}", s.handleGetTorrent)
 		r.Delete("/{infoHash}", s.handleRemoveTorrent)
 		r.Get("/{infoHash}/stats", s.handleTorrentStats)
 		r.Get("/{infoHash}/files/{fileIndex}/stream", s.handleStream)
@@ -75,6 +76,19 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func (s *Server) handleListTorrents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.manager.ListTorrents())
+}
+
+// handleGetTorrent returns the file structure for a single torrent by infoHash.
+// Callers that already hold the infoHash use this instead of GET /api/torrents,
+// which would return (and force them to scan) every tracked torrent.
+func (s *Server) handleGetTorrent(w http.ResponseWriter, r *http.Request) {
+	infoHash := chi.URLParam(r, "infoHash")
+	info, ok := s.manager.GetTorrentInfo(infoHash)
+	if !ok {
+		writeError(w, http.StatusNotFound, "torrent not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *Server) handleTorrentStats(w http.ResponseWriter, r *http.Request) {

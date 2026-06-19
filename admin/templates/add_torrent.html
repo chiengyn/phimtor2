@@ -256,14 +256,15 @@ function stopStats() {
 }
 
 // The streamer fetches metadata asynchronously: name stays "Loading..." and
-// files is empty until it arrives, so poll the list until files appear.
+// files is empty until it arrives. We already hold this torrent's infoHash, so
+// poll its own endpoint until the file list appears (no need to fetch the whole
+// torrent list and scan it).
 async function pollMetadata() {
   let ready = null;
   try {
-    const res = await fetch(API);
+    const res = await fetch(`${API}/${infoHash}`);
     if (res.ok) {
-      const list = await res.json();
-      const t = (list || []).find(x => x.infoHash === infoHash);
+      const t = await res.json();
       if (t && t.files && t.files.length) ready = t.files;
     }
   } catch (e) { /* network error — keep polling */ }
