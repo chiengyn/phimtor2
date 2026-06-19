@@ -41,6 +41,12 @@
   .torrent-name { font-size: 0.875rem; font-weight: 600; color: #e0e0e0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .progress-bar { height: 4px; background: #2d2d4e; border-radius: 2px; overflow: hidden; margin-bottom: 0.5rem; }
   .progress-fill { height: 100%; background: #22c55e; border-radius: 2px; transition: width 1s linear; }
+  .torrent-stats { display: flex; flex-wrap: wrap; gap: 0.25rem 0.6rem; font-size: 0.72rem; color: #777; margin-bottom: 0.5rem; }
+  .torrent-stats .stat { white-space: nowrap; }
+  .torrent-stats .stat b { color: #cbd5e1; font-weight: 600; }
+  .torrent-stats .stat.dl b { color: #22c55e; }
+  .torrent-stats .stat.ul b { color: #79c0ff; }
+  .torrent-stats .stat.seed b { color: #86efac; }
   .file-list { display: flex; flex-direction: column; gap: 0.25rem; }
   .file-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: #aaa; }
   .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -169,6 +175,22 @@ function formatBytes(bytes) {
   return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
 }
 
+function formatSpeed(bytesPerSec) {
+  return formatBytes(bytesPerSec || 0) + '/s';
+}
+
+function renderStats(t) {
+  return `<div class="torrent-stats">
+    <span class="stat dl" title="Download speed">↓ <b>${formatSpeed(t.downloadSpeed)}</b></span>
+    <span class="stat ul" title="Upload speed">↑ <b>${formatSpeed(t.uploadSpeed)}</b></span>
+    <span class="stat seed" title="Connected seeders">🌱 <b>${t.connectedSeeders || 0}</b></span>
+    <span class="stat" title="Active / total peers">👥 <b>${t.activePeers || 0}</b> / ${t.totalPeers || 0}</span>
+    <span class="stat" title="Pending peers">⏳ ${t.pendingPeers || 0}</span>
+    <span class="stat" title="Half-open connections">◐ ${t.halfOpenPeers || 0}</span>
+    ${t.piecesTotal ? `<span class="stat" title="Pieces complete">🧩 ${t.piecesComplete || 0}/${t.piecesTotal}</span>` : ''}
+  </div>`;
+}
+
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -209,6 +231,7 @@ function renderTorrents(torrents) {
         <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
         <div style="font-size:0.75rem;color:#666;margin-bottom:0.4rem">${pct}% · ${formatBytes(t.bytesCompleted)} / ${formatBytes(t.totalBytes)}</div>
       ` : '<div style="font-size:0.75rem;color:#666;margin-bottom:0.4rem">Fetching metadata…</div>'}
+      ${renderStats(t)}
       <div class="file-list">${files}</div>
     </div>`;
   }).join('');
