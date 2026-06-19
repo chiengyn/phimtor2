@@ -184,32 +184,55 @@ func (m *TorrentManager) ListTorrents() []TorrentInfo {
 
 	result := make([]TorrentInfo, 0, len(m.torrents))
 	for hash, t := range m.torrents {
-		info := TorrentInfo{
-			InfoHash: hash,
-			Name:     "Loading...",
-		}
-
-		if t.Info() != nil {
-			info.Name = t.Name()
-			info.TotalBytes = t.Length()
-			info.BytesCompleted = t.BytesCompleted()
-
-			files := t.Files()
-			info.Files = make([]FileInfo, len(files))
-			for i, f := range files {
-				info.Files[i] = FileInfo{
-					Index:          i,
-					Path:           f.Path(),
-					Length:         f.Length(),
-					BytesCompleted: f.BytesCompleted(),
-					IsVideo:        isVideoFile(f.Path()),
-				}
-			}
-		}
-
-		result = append(result, info)
+		result = append(result, buildTorrentInfo(hash, t))
 	}
 	return result
+}
+
+// GetTorrentInfo returns the file structure for a single torrent. It is the
+// single-torrent counterpart to ListTorrents: callers that already know the
+// infoHash (e.g. the admin add-torrent page polling for metadata) use this
+// instead of fetching and scanning the whole list. The bool is false when no
+// such torrent is tracked.
+func (m *TorrentManager) GetTorrentInfo(infoHash string) (TorrentInfo, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	t, ok := m.torrents[infoHash]
+	if !ok {
+		return TorrentInfo{}, false
+	}
+	return buildTorrentInfo(infoHash, t), true
+}
+
+// buildTorrentInfo snapshots one torrent's structure. Before metadata arrives
+// (t.Info() == nil) the name is "Loading..." and Files is empty, so a poller can
+// tell "not ready yet" from "ready with files".
+func buildTorrentInfo(hash string, t *torrent.Torrent) TorrentInfo {
+	info := TorrentInfo{
+		InfoHash: hash,
+		Name:     "Loading...",
+	}
+
+	if t.Info() != nil {
+		info.Name = t.Name()
+		info.TotalBytes = t.Length()
+		info.BytesCompleted = t.BytesCompleted()
+
+		files := t.Files()
+		info.Files = make([]FileInfo, len(files))
+		for i, f := range files {
+			info.Files[i] = FileInfo{
+				Index:          i,
+				Path:           f.Path(),
+				Length:         f.Length(),
+				BytesCompleted: f.BytesCompleted(),
+				IsVideo:        isVideoFile(f.Path()),
+			}
+		}
+	}
+
+	return info
 }
 
 // GetStats returns the live transfer/peer metrics for a single torrent. It is
