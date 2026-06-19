@@ -26,10 +26,10 @@
 
 {{ define "msg" }}<div id="msg" class="{{ .Kind }}">{{ .Text }}</div>{{ end }}
 
-{{/* torrent-region: the htmx-refreshed list of torrents for a *Title. */}}
-{{ define "torrent-region" }}
-<div id="torrent-region"
-     hx-get="/api/titles/{{ .ID }}/torrents"
+{{/* video-region: the htmx-refreshed list of videos for a *Title. */}}
+{{ define "video-region" }}
+<div id="video-region"
+     hx-get="/api/titles/{{ .ID }}/videos"
      hx-trigger="torrentsChanged from:body"
      hx-swap="outerHTML">
   {{ if eq .Type "tv" }}
@@ -37,13 +37,16 @@
       {{ $season := . }}
       <details class="season-block">
         <summary class="season-title">{{ if .Name }}{{ .Name }}{{ else }}Mùa {{ .SeasonNumber }}{{ end }} <span class="muted">({{ len .Episodes }} tập)</span></summary>
+        <div class="season-actions">
+          <a class="btn-add" href="/titles/{{ $.ID }}/torrents/new?season_id={{ .ID }}">+ Thêm torrent (cả mùa)</a>
+        </div>
         {{ range .Episodes }}
           <div class="episode-block">
             <div class="episode-head">
               <span class="episode-title">S{{ printf "%02d" $season.SeasonNumber }}E{{ printf "%02d" .EpisodeNumber }} · {{ .Name }}</span>
               <a class="btn-add" href="/titles/{{ $.ID }}/torrents/new?episode_id={{ .ID }}">+ Thêm torrent</a>
             </div>
-            {{ template "torrent-list" .Torrents }}
+            {{ template "video-list" .Videos }}
           </div>
         {{ else }}
           <p class="muted">Chưa có tập nào.</p>
@@ -56,21 +59,21 @@
         <span class="episode-title">Nguồn torrent</span>
         <a class="btn-add" href="/titles/{{ .ID }}/torrents/new">+ Thêm torrent</a>
       </div>
-      {{ template "torrent-list" .Torrents }}
+      {{ template "video-list" .Videos }}
     </div>
   {{ end }}
 </div>
 {{ end }}
 
-{{ define "torrent-list" }}
+{{ define "video-list" }}
   {{- if . -}}
-    {{- range . }}{{ template "torrent-row" . }}{{ end -}}
+    {{- range . }}{{ template "video-row" . }}{{ end -}}
   {{- else -}}
-    <p class="muted">Chưa có torrent nào.</p>
+    <p class="muted">Chưa có video nào.</p>
   {{- end -}}
 {{ end }}
 
-{{ define "torrent-row" }}
+{{ define "video-row" }}
 <div class="torrent-row">
   <span class="badge res">{{ .Resolution }}</span>
   <div class="torrent-meta">
@@ -78,8 +81,8 @@
     <div class="muted">{{ .FilePath }} · {{ filesize .FileSize }}</div>
   </div>
   <button class="danger"
-          hx-delete="/api/torrents/{{ .ID }}"
-          hx-confirm="Xóa torrent này?"
+          hx-delete="/api/videos/{{ .ID }}"
+          hx-confirm="Xóa video này?"
           hx-target="closest .torrent-row"
           hx-swap="outerHTML swap:200ms">Xóa</button>
 </div>
