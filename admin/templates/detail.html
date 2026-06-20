@@ -68,7 +68,7 @@
     #sub-modal-status.err { color: #ff8b94; }
   </style>
 </head>
-<body class="{{ if .SubtitlesEnabled }}subs-enabled{{ end }}" data-title-name="{{ .Title.Title }}">
+<body class="{{ if .SubtitlesEnabled }}subs-enabled{{ end }}" data-title-name="{{ if .Title.OriginalTitle }}{{ .Title.OriginalTitle }}{{ else }}{{ .Title.Title }}{{ end }}">
   <header>
     <h1>🎬 phimtor2</h1>
     <a href="/">← Danh sách</a>
