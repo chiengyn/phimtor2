@@ -1,0 +1,6 @@
+# MySQL config for the Kamal "mysql" accessory — mounted at
+# /etc/mysql/conf.d/phimtor.cnf. Matches the utf8mb4 settings the compose stack
+# uses so Vietnamese text round-trips.
+[mysqld]
+character-set-server = utf8mb4
+collation-server     = utf8mb4_unicode_ci

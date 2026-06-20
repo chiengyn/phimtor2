@@ -1,0 +1,101 @@
+# Kamal deploy — ADMIN service (the catalog writer + torrent watch page).
+#
+# This is the "primary" config of the three. It also owns the shared MySQL
+# accessory because admin is the only writer and runs the schema migrations on
+# startup; the viewer just reads the same database.
+#
+#   kamal setup            # first deploy of admin + boots MySQL accessory
+#   kamal deploy           # subsequent admin deploys
+#
+# Deploy the other two services with their own config files:
+#   kamal deploy -c config/deploy.viewer.yml
+#   kamal deploy -c config/deploy.streamer.yml
+#
+# Replace every <PLACEHOLDER> below (server IP, domains) before deploying.
+
+service: phimtor2-admin
+image: chiengyn/phimtor2-admin
+
+servers:
+  web:
+    # Read from the environment (this repo is public — no infra committed).
+    # Provide SERVER_IP via .env locally or a repo Variable in CI. See DEPLOY.md.
+    - <%= ENV["SERVER_IP"] %>
+
+# Public HTTPS via kamal-proxy with automatic Let's Encrypt certificates.
+proxy:
+  ssl: true
+  host: <%= ENV["ADMIN_HOST"] %>    # e.g. admin.yourdomain.com
+  app_port: 8081
+  healthcheck:
+    path: /up                   # unauthenticated liveness route (server.go)
+
+registry:
+  server: ghcr.io
+  username: chiengyn
+  password:
+    - KAMAL_REGISTRY_PASSWORD   # GitHub PAT with write:packages (see .kamal/secrets)
+
+# Images are built and pushed to GHCR by CI (.github/workflows/docker.yml), so
+# normal deploys PULL them — run `kamal deploy --skip-push` (see DEPLOY.md). This
+# builder block is only used as a local fallback if you ever run `kamal build`
+# or deploy without --skip-push.
+builder:
+  arch: amd64                   # the Dockerfiles are amd64-only (static ffmpeg, etc.)
+  context: ./admin             # build context = the admin module dir
+
+env:
+  clear:
+    ADMIN_PORT: 8081
+    ADMIN_USER: admin
+    # MySQL — points at the accessory container on the shared "kamal" network.
+    DB_HOST: phimtor2-admin-mysql
+    DB_PORT: 3306
+    DB_NAME: phimtor
+    DB_USER: phimtor
+    # TMDB
+    TMDB_LANGUAGE: vi-VN
+    TMDB_FALLBACK_LANGUAGE: en-US
+    # Streamer base URL injected into the watch page — must be browser-reachable.
+    STREAMER_URL: https://<%= ENV["STREAMER_HOST"] %>
+    # Subtitles: store on a local volume shared with the viewer (see volumes).
+    SUBTITLE_STORAGE_BACKEND: local
+    SUBTITLE_STORAGE_DIR: /data/subtitles
+    OPENSUBTITLES_USER_AGENT: phimtor2 v1.0
+  secret:
+    - ADMIN_PASSWORD
+    - DB_PASSWORD
+    - TMDB_API_KEY
+    - OPENSUBTITLES_API_KEY
+    # Optional OpenSubtitles login (raises the daily download quota). Add these
+    # to the list and to .kamal/secrets only if you have an account:
+    #   - OPENSUBTITLES_USERNAME
+    #   - OPENSUBTITLES_PASSWORD
+
+# Saved subtitle .vtt files. The SAME named volume is mounted read-only-ish by
+# the viewer config so it can serve them (local blob store is shared on-host).
+volumes:
+  - "phimtor2_subtitles:/data"
+
+# Shared MySQL 8, managed by Kamal as an accessory on this host.
+accessories:
+  mysql:
+    image: mysql:8
+    host: <%= ENV["SERVER_IP"] %>
+    # Attach to Kamal's shared app network so admin/viewer resolve it by name.
+    options:
+      network: "kamal"
+    # Bind to loopback only (host-side) for debugging; apps reach it over the
+    # kamal network, not this port.
+    port: "127.0.0.1:3306:3306"
+    env:
+      clear:
+        MYSQL_DATABASE: phimtor
+        MYSQL_USER: phimtor
+      secret:
+        - MYSQL_ROOT_PASSWORD
+        - MYSQL_PASSWORD       # mirrors DB_PASSWORD (see .kamal/secrets)
+    files:
+      - config/mysql/phimtor.cnf:/etc/mysql/conf.d/phimtor.cnf
+    directories:
+      - data:/var/lib/mysql    # persisted on the host across deploys

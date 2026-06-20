@@ -1,0 +1,91 @@
+name: Deploy (manual)
+
+# Manual-only CD: this never runs on push. Trigger it from the Actions tab
+# ("Run workflow"), picking the branch/tag to deploy and which service(s).
+# It pulls the CI-built GHCR image for the chosen commit and runs
+# `kamal deploy --skip-push` over SSH — it does not build.
+#
+# Required repo SECRETS (Settings → Secrets and variables → Actions → Secrets):
+#   KAMAL_SSH_PRIVATE_KEY   private key whose public key is authorized on the
+#                           server for the Kamal SSH user (root by default)
+#   KAMAL_REGISTRY_PASSWORD GitHub PAT with read:packages (host pulls from ghcr)
+#   ADMIN_PASSWORD, TMDB_API_KEY, OPENSUBTITLES_API_KEY,
+#   DB_PASSWORD, MYSQL_ROOT_PASSWORD
+#
+# Required repo VARIABLES (same screen → Variables; these aren't secret and the
+# configs read them via ERB <%= ENV[...] %>):
+#   SERVER_IP, ADMIN_HOST, VIEWER_HOST, STREAMER_HOST
+#
+# Preconditions:
+#   - The host is already bootstrapped once from a workstation:
+#       kamal setup --skip-push   (installs proxy, logs in, boots MySQL)
+#   - The image for the deployed commit exists in GHCR (the build workflow ran).
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Service(s) to deploy
+        type: choice
+        default: all
+        options: [all, admin, viewer, streamer]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Optional manual approval gate: create a "production" environment in repo
+    # settings with required reviewers, and each run will pause for sign-off.
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (the dispatched branch/tag = the commit to deploy)
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install Kamal
+        run: gem install kamal
+
+      - name: Load SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.KAMAL_SSH_PRIVATE_KEY }}
+
+      - name: Seed known_hosts
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H "${{ vars.SERVER_IP }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          # Non-secret host config (read by the configs via ERB).
+          SERVER_IP: ${{ vars.SERVER_IP }}
+          ADMIN_HOST: ${{ vars.ADMIN_HOST }}
+          VIEWER_HOST: ${{ vars.VIEWER_HOST }}
+          STREAMER_HOST: ${{ vars.STREAMER_HOST }}
+          # Secrets.
+          KAMAL_REGISTRY_PASSWORD: ${{ secrets.KAMAL_REGISTRY_PASSWORD }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          admin()    { kamal deploy --skip-push; }
+          viewer()   { kamal deploy -c config/deploy.viewer.yml --skip-push; }
+          streamer() { kamal deploy -c config/deploy.streamer.yml --skip-push; }
+          case "${{ inputs.service }}" in
+            all)      admin; streamer; viewer ;;   # admin first: DB + migrations
+            admin)    admin ;;
+            viewer)   viewer ;;
+            streamer) streamer ;;
+          esac

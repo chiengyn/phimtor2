@@ -39,6 +39,13 @@ func (s *Server) setupRouter() {
 		http.ServeFile(w, r, "static/index.html")
 	})
 
+	// Liveness probe for kamal-proxy / load balancers (doesn't touch the
+	// torrent client or the filesystem).
+	r.Get("/up", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+
 	r.Route("/api/torrents", func(r chi.Router) {
 		r.Get("/", s.handleListTorrents)
 		r.Post("/", s.handleAddTorrent)

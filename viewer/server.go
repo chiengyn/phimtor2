@@ -115,6 +115,12 @@ func (s *Server) setupRouter() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	// Liveness probe for kamal-proxy / load balancers (no DB access).
+	r.Get("/up", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+
 	r.Get("/", s.handleHome)
 	r.Get("/titles", s.handleTitlesFragment)
 	r.Get("/titles/{id}", s.handleDetail)

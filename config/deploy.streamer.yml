@@ -1,0 +1,54 @@
+# Kamal deploy — STREAMER service (torrent streaming API + ffmpeg transcode).
+#
+#   kamal deploy -c config/deploy.streamer.yml
+#
+# Standalone: no MySQL, no secrets. The admin watch page and the viewer call it
+# (cross-origin from the browser for stats/stream; the viewer also adds torrents
+# server-to-server over the kamal network as http://phimtor2-streamer:8080).
+
+service: phimtor2-streamer
+image: chiengyn/phimtor2-streamer
+
+servers:
+  web:
+    - <%= ENV["SERVER_IP"] %>   # same host as admin/viewer
+
+proxy:
+  ssl: true
+  host: <%= ENV["STREAMER_HOST"] %>   # must be browser-reachable (CORS API)
+  app_port: 8080
+  healthcheck:
+    path: /up
+  # Streaming serves large, long-lived ranged responses. kamal-proxy streams
+  # responses by default; if you hit cut-offs on long downloads, raise the
+  # response timeout (default 30s):
+  #   response_timeout: 300
+  # and on recent Kamal you can also disable buffering:
+  #   buffering:
+  #     responses: false
+
+registry:
+  server: ghcr.io
+  username: chiengyn
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+# Images are built+pushed to GHCR by CI; deploys pull them via
+# `kamal deploy -c config/deploy.streamer.yml --skip-push`. Builder is a local
+# fallback only (see DEPLOY.md).
+builder:
+  arch: amd64
+  context: ./streamer
+
+env:
+  clear:
+    PORT: 8080
+    DATA_DIR: /data
+    READAHEAD_MB: 16
+    STORAGE_MODE: prefix-cache
+    PREFIX_MB: 32
+    CACHE_MB: 2048
+
+# Torrent cache (prefix tier persisted, cache tier wiped on startup).
+volumes:
+  - "phimtor2_streamer_data:/data"

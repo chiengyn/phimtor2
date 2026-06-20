@@ -89,7 +89,8 @@ torrent reader lives.
 distroless base, with a statically linked `ffmpeg` copied in (so transcoding
 works while keeping the image small; `capped-sqlite` remains unavailable without
 CGO). The minimal test UI (`static/`) is copied in alongside the binary.
-`.github/workflows/docker.yml` (repo root) builds and pushes to Docker Hub
-on pushes to `main` and `v*` tags (build context `./streamer`), using
-`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets. `DOCKERHUB.md` is the registry
-description.
+`.github/workflows/docker.yml` (repo root) builds and pushes all three service
+images to **GHCR** (`ghcr.io/<owner>/phimtor2-{admin,viewer,streamer}`) on pushes
+to `main` and `v*` tags — a matrix build, one job per service with build context
+`./<service>`, authenticated with the built-in `GITHUB_TOKEN` (no extra secrets).
+For deploying the stack to a host, see [`../DEPLOY.md`](../DEPLOY.md) (Kamal).

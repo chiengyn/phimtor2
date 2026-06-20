@@ -111,6 +111,13 @@ func (s *Server) setupRouter() {
 	r.Use(middleware.Recoverer)
 	r.Use(s.basicAuth) // protects the UI and the API
 
+	// Unauthenticated liveness probe for kamal-proxy / load balancers. The
+	// basicAuth middleware lets "/up" through (every other route is gated).
+	r.Get("/up", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+
 	r.Get("/", s.handleIndex)
 	r.Get("/watch", s.handleWatch)
 	r.Get("/titles/{id}", s.handleTitleDetail)
@@ -146,6 +153,10 @@ func (s *Server) setupRouter() {
 // basicAuth gates every route behind a single admin user/password.
 func (s *Server) basicAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/up" { // unauthenticated health check
+			next.ServeHTTP(w, r)
+			return
+		}
 		user, pass, ok := r.BasicAuth()
 		userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.user)) == 1
 		passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.pass)) == 1
