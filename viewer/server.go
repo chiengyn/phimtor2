@@ -1,20 +1,19 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
 const tmdbImageBase = "https://image.tmdb.org/t/p/"
-
-// mockVideoURL is a placeholder stream used by the watch page until real
-// playback is wired up.
-const mockVideoURL = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 
 type Server struct {
 	store    *Store
@@ -24,10 +23,27 @@ type Server struct {
 	watch    *template.Template
 	notFound *template.Template
 	grid     *template.Template
+
+	// streamerPublicURL is injected into the watch page for the browser to reach
+	// the streamer's stats + stream endpoints. streamer is the server-side client
+	// the viewer uses to add torrents (the browser never adds directly). blobs
+	// serves saved subtitle files read-only, keyed by storage backend name.
+	streamerPublicURL string
+	streamer          *streamerClient
+	blobs             map[string]BlobStore
 }
 
-func NewServer(store *Store) (*Server, error) {
-	s := &Server{store: store}
+func NewServer(store *Store, cfg Config) (*Server, error) {
+	blobs, err := newReadOnlyBlobStores(cfg)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{
+		store:             store,
+		streamerPublicURL: strings.TrimRight(cfg.StreamerPublicURL, "/"),
+		streamer:          newStreamerClient(cfg.StreamerInternalURL),
+		blobs:             blobs,
+	}
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
 	}
@@ -104,6 +120,10 @@ func (s *Server) setupRouter() {
 	r.Get("/titles/{id}", s.handleDetail)
 	r.Get("/watch/movie/{id}", s.handleWatchMovie)
 	r.Get("/watch/episode/{id}", s.handleWatchEpisode)
+
+	// Viewer-mediated playback API (same-origin, called by the watch page JS).
+	r.Post("/api/sources/{videoID}/prepare", s.handlePrepareSource)
+	r.Get("/api/subtitles/{id}/file", s.handleSubtitleFile)
 
 	fs := http.FileServer(http.Dir("static"))
 	r.Handle("/static/*", http.StripPrefix("/static/", fs))
@@ -195,12 +215,59 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	s.render(w, s.detail, "layout", title)
 }
 
-// watchData drives the (mocked) watch page.
+// watchData drives the watch page. Videos and subtitles are serialized to JSON
+// strings injected via data-* attributes; the page JS adds the chosen source to
+// the streamer (via the same-origin prepare endpoint) and streams it.
 type watchData struct {
-	Heading  string
-	Sub      string
-	VideoURL string
-	BackHref string
+	Heading       string
+	Sub           string
+	BackHref      string
+	StreamerURL   string // public streamer base URL (browser-reachable)
+	OwnerKind     string // "title" | "episode"
+	OwnerID       int64
+	VideosJSON    string // JSON array, injected via a data-* attribute
+	SubtitlesJSON string // JSON array, injected via a data-* attribute
+	HasVideo      bool
+}
+
+// watchVideo is the browser-facing subset of a Video (no magnet — the viewer
+// adds it to the streamer server-side).
+type watchVideo struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Resolution string `json:"resolution"`
+	FileSize   int64  `json:"file_size"`
+}
+
+// watchSubtitle is the browser-facing subset of a Subtitle.
+type watchSubtitle struct {
+	ID       int64  `json:"id"`
+	Language string `json:"language"`
+	Name     string `json:"name"`
+}
+
+func toWatchVideos(vs []Video) []watchVideo {
+	out := make([]watchVideo, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, watchVideo{ID: v.ID, Name: v.Name, Resolution: v.Resolution, FileSize: v.FileSize})
+	}
+	return out
+}
+
+func toWatchSubtitles(subs []Subtitle) []watchSubtitle {
+	out := make([]watchSubtitle, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, watchSubtitle{ID: sub.ID, Language: sub.Language, Name: sub.Name})
+	}
+	return out
+}
+
+func jsonOrEmpty(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }
 
 func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
@@ -218,11 +285,26 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		s.renderNotFound(w)
 		return
 	}
+	videos, err := s.store.VideosForTitle(r.Context(), title.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	subs, err := s.store.SubtitlesForTitle(r.Context(), title.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data := watchData{
-		Heading:  title.Title,
-		Sub:      yearOf(title.AirDate),
-		VideoURL: mockVideoURL,
-		BackHref: fmt.Sprintf("/titles/%d", title.ID),
+		Heading:       title.Title,
+		Sub:           yearOf(title.AirDate),
+		BackHref:      fmt.Sprintf("/titles/%d", title.ID),
+		StreamerURL:   s.streamerPublicURL,
+		OwnerKind:     "title",
+		OwnerID:       title.ID,
+		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
+		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
+		HasVideo:      len(videos) > 0,
 	}
 	s.render(w, s.watch, "layout", data)
 }
@@ -242,17 +324,115 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		s.renderNotFound(w)
 		return
 	}
+	videos, err := s.store.VideosForEpisode(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	subs, err := s.store.SubtitlesForEpisode(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	sub := fmt.Sprintf("Phần %d · Tập %d", ec.SeasonNumber, ec.EpisodeNumber)
 	if ec.EpisodeName != "" {
 		sub += ": " + ec.EpisodeName
 	}
 	data := watchData{
-		Heading:  ec.TitleName,
-		Sub:      sub,
-		VideoURL: mockVideoURL,
-		BackHref: fmt.Sprintf("/titles/%d", ec.TitleID),
+		Heading:       ec.TitleName,
+		Sub:           sub,
+		BackHref:      fmt.Sprintf("/titles/%d", ec.TitleID),
+		StreamerURL:   s.streamerPublicURL,
+		OwnerKind:     "episode",
+		OwnerID:       id,
+		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
+		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
+		HasVideo:      len(videos) > 0,
 	}
 	s.render(w, s.watch, "layout", data)
+}
+
+// handlePrepareSource adds the chosen video's torrent to the streamer
+// server-to-server and returns the info hash + file index for the browser to
+// stream. This is the only path that reaches the streamer's add API.
+func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "videoID"), 10, 64)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid video id")
+		return
+	}
+	video, err := s.store.GetVideo(r.Context(), id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if video == nil {
+		writeJSONError(w, http.StatusNotFound, "video not found")
+		return
+	}
+	infoHash, err := s.streamer.addTorrent(r.Context(), video.Magnet)
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"infoHash":  infoHash,
+		"fileIndex": video.FileIndex,
+	})
+}
+
+// handleSubtitleFile serves a saved subtitle file read-only from the shared blob
+// storage (the admin owns the bytes; the viewer only reads them).
+func (s *Server) handleSubtitleFile(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid subtitle id")
+		return
+	}
+	sub, err := s.store.GetSubtitle(r.Context(), id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if sub == nil {
+		writeJSONError(w, http.StatusNotFound, "subtitle not found")
+		return
+	}
+	store := s.blobs[sub.StorageBackend]
+	if store == nil {
+		writeJSONError(w, http.StatusInternalServerError, "storage backend "+sub.StorageBackend+" not configured")
+		return
+	}
+	data, err := store.Get(r.Context(), sub.StorageKey)
+	if errors.Is(err, errBlobNotFound) {
+		writeJSONError(w, http.StatusNotFound, "subtitle file not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", subtitleContentType(sub.Format))
+	w.Write(data)
+}
+
+// subtitleContentType maps a stored subtitle format to a Content-Type. Defaults
+// to WebVTT, which is what the admin stores.
+func subtitleContentType(format string) string {
+	if strings.EqualFold(format, "srt") {
+		return "application/x-subrip; charset=utf-8"
+	}
+	return "text/vtt; charset=utf-8"
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }
 
 func (s *Server) renderNotFound(w http.ResponseWriter) {
