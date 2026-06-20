@@ -24,7 +24,7 @@ func main() {
 	// Note: this is a read-only, public service. It never runs migrations —
 	// the admin service is the sole owner of the schema.
 
-	server, err := NewServer(store)
+	server, err := NewServer(store, cfg)
 	if err != nil {
 		log.Fatalf("build server: %v", err)
 	}

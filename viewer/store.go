@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -385,4 +386,145 @@ func dateStr(t sql.NullTime) string {
 		return ""
 	}
 	return t.Time.Format("2006-01-02")
+}
+
+// --- Videos (read-only) ----------------------------------------------------
+
+// videoColumns is the shared SELECT list / scan order for video rows, joining
+// the torrent source for info_hash + magnet (never the raw .torrent bytes).
+const videoColumns = `v.id, v.source_id, v.title_id, v.episode_id, v.name, v.resolution,
+	src.info_hash, src.magnet, v.file_index, v.file_path, v.file_size, v.created_at`
+
+func scanVideo(sc interface{ Scan(...any) error }) (Video, error) {
+	var v Video
+	var titleID, episodeID sql.NullInt64
+	if err := sc.Scan(&v.ID, &v.SourceID, &titleID, &episodeID, &v.Name, &v.Resolution,
+		&v.InfoHash, &v.Magnet, &v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt); err != nil {
+		return Video{}, err
+	}
+	if titleID.Valid {
+		v.TitleID = &titleID.Int64
+	}
+	if episodeID.Valid {
+		v.EpisodeID = &episodeID.Int64
+	}
+	return v, nil
+}
+
+func (s *Store) queryVideos(ctx context.Context, where string, arg int64) ([]Video, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+videoColumns+`
+		FROM videos v
+		JOIN torrent_sources src ON src.id = v.source_id
+		WHERE `+where+` ORDER BY v.created_at DESC, v.id DESC`, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Video
+	for rows.Next() {
+		v, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// VideosForTitle returns the movie videos attached to a title, newest first
+// (so the first entry is the default/latest source).
+func (s *Store) VideosForTitle(ctx context.Context, titleID int64) ([]Video, error) {
+	return s.queryVideos(ctx, "v.title_id = ?", titleID)
+}
+
+// VideosForEpisode returns the videos attached to a single TV episode, newest
+// first.
+func (s *Store) VideosForEpisode(ctx context.Context, episodeID int64) ([]Video, error) {
+	return s.queryVideos(ctx, "v.episode_id = ?", episodeID)
+}
+
+// GetVideo loads one video by id (with its source's info_hash and magnet), used
+// by the prepare endpoint to add the torrent to the streamer. Returns (nil, nil)
+// when no such video exists.
+func (s *Store) GetVideo(ctx context.Context, id int64) (*Video, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+videoColumns+`
+		FROM videos v
+		JOIN torrent_sources src ON src.id = v.source_id
+		WHERE v.id = ?`, id)
+	v, err := scanVideo(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+// --- Subtitles (read-only) -------------------------------------------------
+
+// subtitleColumns is the shared SELECT list / scan order for subtitle rows.
+const subtitleColumns = `id, title_id, episode_id, provider, provider_file_id, language,
+	name, download_count, format, storage_backend, storage_key, metadata, created_at`
+
+func scanSubtitle(sc interface{ Scan(...any) error }) (Subtitle, error) {
+	var sub Subtitle
+	var titleID, episodeID sql.NullInt64
+	var meta []byte
+	if err := sc.Scan(&sub.ID, &titleID, &episodeID, &sub.Provider, &sub.ProviderFileID,
+		&sub.Language, &sub.Name, &sub.DownloadCount, &sub.Format, &sub.StorageBackend,
+		&sub.StorageKey, &meta, &sub.CreatedAt); err != nil {
+		return Subtitle{}, err
+	}
+	if titleID.Valid {
+		sub.TitleID = &titleID.Int64
+	}
+	if episodeID.Valid {
+		sub.EpisodeID = &episodeID.Int64
+	}
+	if len(meta) > 0 {
+		sub.Metadata = append(json.RawMessage{}, meta...)
+	}
+	return sub, nil
+}
+
+// GetSubtitle loads one subtitle by id, returning (nil, nil) when none matches.
+func (s *Store) GetSubtitle(ctx context.Context, id int64) (*Subtitle, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+subtitleColumns+` FROM subtitles WHERE id = ?`, id)
+	sub, err := scanSubtitle(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sub, nil
+}
+
+func (s *Store) querySubtitles(ctx context.Context, where string, arg int64) ([]Subtitle, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+subtitleColumns+` FROM subtitles WHERE `+where+` ORDER BY language, created_at`, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Subtitle
+	for rows.Next() {
+		sub, err := scanSubtitle(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
+}
+
+// SubtitlesForTitle returns the subtitles attached to a movie title.
+func (s *Store) SubtitlesForTitle(ctx context.Context, titleID int64) ([]Subtitle, error) {
+	return s.querySubtitles(ctx, "title_id = ?", titleID)
+}
+
+// SubtitlesForEpisode returns the subtitles attached to a single TV episode.
+func (s *Store) SubtitlesForEpisode(ctx context.Context, episodeID int64) ([]Subtitle, error) {
+	return s.querySubtitles(ctx, "episode_id = ?", episodeID)
 }
