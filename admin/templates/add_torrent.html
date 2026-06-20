@@ -58,7 +58,7 @@
     #sub-status.err { color: #ff8b94; }
   </style>
 </head>
-<body data-streamer="{{ .StreamerURL }}" data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}" data-season-id="{{ .SeasonID }}" data-episodes="{{ .EpisodesJSON }}" data-title-name="{{ .Title.Title }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}">
+<body data-streamer="{{ .StreamerURL }}" data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}" data-season-id="{{ .SeasonID }}" data-episodes="{{ .EpisodesJSON }}" data-title-name="{{ if .Title.OriginalTitle }}{{ .Title.OriginalTitle }}{{ else }}{{ .Title.Title }}{{ end }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}">
   <header>
     <h1>➕ Thêm torrent</h1>
     <a href="/titles/{{ .Title.ID }}">← Quay lại</a>
