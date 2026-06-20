@@ -47,9 +47,18 @@
     #status { color: #8b98a5; font-size: .9rem; }
     #status.err { color: #ff8b94; }
     .hidden { display: none; }
+    .sub-result { display: flex; align-items: center; gap: .6rem; padding: .4rem 0; border-top: 1px solid #1c2530; font-size: .85rem; }
+    .sub-result:first-child { border-top: none; }
+    .sub-lang { font-size: .65rem; font-weight: 700; text-transform: uppercase; background: #30363d; color: #c4b5fd; padding: .1rem .4rem; border-radius: 4px; flex: none; }
+    .sub-rel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #adbac7; }
+    .sub-dl { color: #6b7681; white-space: nowrap; font-size: .8rem; }
+    .sub-save { background: #16a34a; border-color: #16a34a; }
+    .sub-save:hover { background: #15803d; }
+    #sub-status { color: #8b98a5; font-size: .85rem; }
+    #sub-status.err { color: #ff8b94; }
   </style>
 </head>
-<body data-streamer="{{ .StreamerURL }}" data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}" data-season-id="{{ .SeasonID }}" data-episodes="{{ .EpisodesJSON }}">
+<body data-streamer="{{ .StreamerURL }}" data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}" data-season-id="{{ .SeasonID }}" data-episodes="{{ .EpisodesJSON }}" data-title-name="{{ .Title.Title }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}">
   <header>
     <h1>➕ Thêm torrent</h1>
     <a href="/titles/{{ .Title.ID }}">← Quay lại</a>
@@ -109,6 +118,22 @@
         </select>
       </label>
       <button id="pack-save-btn" onclick="savePack()">Lưu cả gói</button>
+    </div>
+
+    <div class="card hidden" id="subtitle-card">
+      <h2>Phụ đề (tùy chọn)</h2>
+      <p class="muted">Tìm phụ đề trên OpenSubtitles và lưu cho mục này. Tệp phụ đề sẽ được tải về và lưu trữ.</p>
+      <label class="field" id="sub-episode-field" style="display:none">
+        <span>Gán phụ đề cho tập</span>
+        <select id="sub-episode-select"></select>
+      </label>
+      <div class="row">
+        <input type="text" id="sub-query" placeholder="Từ khóa tìm kiếm…">
+        <input type="text" id="sub-lang" value="vi" style="flex:0 0 80px;text-align:center" title="Mã ngôn ngữ, vd: en,vi">
+        <button id="sub-search-btn" onclick="searchSubs()">Tìm phụ đề</button>
+      </div>
+      <div style="margin-top:.6rem"><span id="sub-status"></span></div>
+      <div id="sub-results"></div>
     </div>
   </main>
 
@@ -431,6 +456,101 @@ async function savePack() {
     btn.disabled = false; btn.textContent = 'Lưu cả gói';
   }
 }
+
+// --- Subtitles ------------------------------------------------------------
+// Independent of the torrent flow: subtitles attach to the movie/episode, not to
+// a torrent file. The card downloads + persists the chosen subtitle server-side.
+
+const SUBTITLES_ENABLED = document.body.dataset.subtitlesEnabled === 'true';
+const TITLE_NAME = document.body.dataset.titleName || '';
+let subResults = [];
+
+function initSubtitleCard() {
+  if (!SUBTITLES_ENABLED) return;
+  document.getElementById('subtitle-card').classList.remove('hidden');
+  document.getElementById('sub-query').value = TITLE_NAME;
+  if (PACK_MODE) {
+    // Season pack: the subtitle must target a specific episode.
+    const field = document.getElementById('sub-episode-field');
+    const sel = document.getElementById('sub-episode-select');
+    sel.innerHTML = EPISODES.map(e => `<option value="${e.id}">${escHtml(e.label)}</option>`).join('');
+    field.style.display = '';
+  }
+}
+
+// subOwner returns the {title_id} or {episode_id} a saved subtitle attaches to,
+// or null (with a status message) when a pack-mode episode hasn't been chosen.
+function subOwner() {
+  if (PACK_MODE) {
+    const sel = document.getElementById('sub-episode-select');
+    if (!sel.value) { setSubStatus('Chọn tập để gán phụ đề.', true); return null; }
+    return { episode_id: Number(sel.value) };
+  }
+  if (EPISODE_ID) return { episode_id: Number(EPISODE_ID) };
+  return { title_id: Number(TITLE_ID) };
+}
+
+function setSubStatus(text, isErr) {
+  const el = document.getElementById('sub-status');
+  el.textContent = text;
+  el.className = isErr ? 'err' : '';
+}
+
+async function searchSubs() {
+  const query = document.getElementById('sub-query').value.trim();
+  const lang = document.getElementById('sub-lang').value.trim() || 'en';
+  const box = document.getElementById('sub-results');
+  if (!query) { setSubStatus('Nhập từ khóa tìm kiếm.', true); return; }
+  setSubStatus('Đang tìm…');
+  box.innerHTML = '';
+  try {
+    const params = new URLSearchParams({ query, languages: lang });
+    const res = await fetch(`/api/subtitles/search?${params}`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    subResults = await res.json();
+    setSubStatus('');
+    if (!subResults.length) { box.innerHTML = '<p class="muted">Không tìm thấy phụ đề.</p>'; return; }
+    box.innerHTML = subResults.map((s, i) => `
+      <div class="sub-result">
+        <span class="sub-lang">${escHtml(s.language || '?')}</span>
+        <span class="sub-rel" title="${escHtml(s.release || '')}">${escHtml(s.release || '(không tên)')}</span>
+        <span class="sub-dl">⬇ ${s.downloadCount || 0}</span>
+        <button class="btn-sm sub-save" onclick="saveSub(${i}, this)">Lưu</button>
+      </div>`).join('');
+  } catch (e) {
+    setSubStatus('Lỗi: ' + e.message, true);
+  }
+}
+
+async function saveSub(i, btn) {
+  const s = subResults[i];
+  if (!s) return;
+  const owner = subOwner();
+  if (!owner) return;
+  btn.disabled = true; btn.textContent = '…';
+  const body = Object.assign({
+    provider: s.provider || 'opensubtitles',
+    file_id: String(s.fileId),
+    language: s.language || '',
+    name: s.release || '',
+    download_count: s.downloadCount || 0,
+  }, owner);
+  try {
+    const res = await fetch('/api/subtitles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    btn.textContent = '✓ Đã lưu';
+    setSubStatus('Đã lưu phụ đề.');
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Lưu';
+    setSubStatus('Lưu thất bại: ' + e.message, true);
+  }
+}
+
+initSubtitleCard();
 </script>
 </body>
 </html>

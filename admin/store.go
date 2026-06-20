@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -301,14 +302,22 @@ func (s *Store) GetTitle(ctx context.Context, id int64) (*Title, error) {
 		if err != nil {
 			return nil, err
 		}
+		subsByEpisode, err := s.loadSubtitlesForEpisodes(ctx, id)
+		if err != nil {
+			return nil, err
+		}
 		for i := range t.Seasons {
 			for j := range t.Seasons[i].Episodes {
 				ep := &t.Seasons[i].Episodes[j]
 				ep.Videos = byEpisode[ep.ID]
+				ep.Subtitles = subsByEpisode[ep.ID]
 			}
 		}
 	} else {
 		if t.Videos, err = s.loadVideosForTitle(ctx, id); err != nil {
+			return nil, err
+		}
+		if t.Subtitles, err = s.SubtitlesForTitle(ctx, id); err != nil {
 			return nil, err
 		}
 	}
@@ -658,6 +667,153 @@ func (s *Store) loadVideosForEpisodes(ctx context.Context, titleID int64) (map[i
 	return byEpisode, rows.Err()
 }
 
+// --- subtitles ---
+
+// AddSubtitle inserts one subtitle row (the file itself is already stored in a
+// BlobStore by the caller). Exactly one of sub.TitleID / sub.EpisodeID must be
+// set (mirrors chk_subtitle_owner). On return sub.ID holds the new id.
+func (s *Store) AddSubtitle(ctx context.Context, sub *Subtitle) error {
+	if (sub.TitleID == nil) == (sub.EpisodeID == nil) {
+		return fmt.Errorf("subtitle must reference exactly one of title or episode")
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO subtitles
+			(title_id, episode_id, provider, provider_file_id, language, name,
+			 download_count, format, storage_backend, storage_key, metadata)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		nullInt64(sub.TitleID), nullInt64(sub.EpisodeID), sub.Provider, sub.ProviderFileID,
+		sub.Language, sub.Name, sub.DownloadCount, sub.Format, sub.StorageBackend,
+		sub.StorageKey, nullJSON(sub.Metadata))
+	if err != nil {
+		return fmt.Errorf("insert subtitle: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	sub.ID = id
+	return nil
+}
+
+// subtitleColumns is the shared SELECT list / scan order for subtitle rows.
+const subtitleColumns = `id, title_id, episode_id, provider, provider_file_id, language,
+	name, download_count, format, storage_backend, storage_key, metadata, created_at`
+
+// scanSubtitle reads one subtitle row in subtitleColumns order.
+func scanSubtitle(sc interface{ Scan(...any) error }) (Subtitle, error) {
+	var sub Subtitle
+	var titleID, episodeID sql.NullInt64
+	var meta []byte
+	if err := sc.Scan(&sub.ID, &titleID, &episodeID, &sub.Provider, &sub.ProviderFileID,
+		&sub.Language, &sub.Name, &sub.DownloadCount, &sub.Format, &sub.StorageBackend,
+		&sub.StorageKey, &meta, &sub.CreatedAt); err != nil {
+		return Subtitle{}, err
+	}
+	if titleID.Valid {
+		sub.TitleID = &titleID.Int64
+	}
+	if episodeID.Valid {
+		sub.EpisodeID = &episodeID.Int64
+	}
+	if len(meta) > 0 {
+		sub.Metadata = append(json.RawMessage{}, meta...)
+	}
+	return sub, nil
+}
+
+// GetSubtitle loads one subtitle by id, returning (nil, nil) when none matches.
+func (s *Store) GetSubtitle(ctx context.Context, id int64) (*Subtitle, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+subtitleColumns+` FROM subtitles WHERE id = ?`, id)
+	sub, err := scanSubtitle(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sub, nil
+}
+
+// DeleteSubtitle removes a subtitle row and returns the deleted row (so the
+// caller can delete its blob from the right backend). Returns (nil, nil) when no
+// row matched.
+func (s *Store) DeleteSubtitle(ctx context.Context, id int64) (*Subtitle, error) {
+	sub, err := s.GetSubtitle(ctx, id)
+	if err != nil || sub == nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM subtitles WHERE id = ?`, id); err != nil {
+		return nil, err
+	}
+	return sub, nil
+}
+
+// SubtitlesForTitle returns the subtitles attached directly to a movie title.
+func (s *Store) SubtitlesForTitle(ctx context.Context, titleID int64) ([]Subtitle, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+subtitleColumns+` FROM subtitles WHERE title_id = ? ORDER BY language, created_at`, titleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Subtitle
+	for rows.Next() {
+		sub, err := scanSubtitle(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
+}
+
+// SubtitlesForEpisode returns the subtitles attached to a single TV episode.
+func (s *Store) SubtitlesForEpisode(ctx context.Context, episodeID int64) ([]Subtitle, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+subtitleColumns+` FROM subtitles WHERE episode_id = ? ORDER BY language, created_at`, episodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Subtitle
+	for rows.Next() {
+		sub, err := scanSubtitle(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
+}
+
+// loadSubtitlesForEpisodes returns, in one query, every episode subtitle under a
+// title keyed by episode_id (joining through seasons like loadVideosForEpisodes),
+// so GetTitle can attach them without an N+1.
+func (s *Store) loadSubtitlesForEpisodes(ctx context.Context, titleID int64) (map[int64][]Subtitle, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sub.id, sub.title_id, sub.episode_id, sub.provider, sub.provider_file_id, sub.language,
+		       sub.name, sub.download_count, sub.format, sub.storage_backend, sub.storage_key, sub.metadata, sub.created_at
+		FROM subtitles sub
+		JOIN episodes e ON e.id = sub.episode_id
+		JOIN seasons se ON se.id = e.season_id
+		WHERE se.title_id = ? ORDER BY sub.episode_id, sub.language, sub.created_at`, titleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byEpisode := map[int64][]Subtitle{}
+	for rows.Next() {
+		sub, err := scanSubtitle(rows)
+		if err != nil {
+			return nil, err
+		}
+		if sub.EpisodeID != nil {
+			byEpisode[*sub.EpisodeID] = append(byEpisode[*sub.EpisodeID], sub)
+		}
+	}
+	return byEpisode, rows.Err()
+}
+
 // --- small helpers for NULL-able columns ---
 
 func nullStr(s string) interface{} {
@@ -672,6 +828,13 @@ func nullInt64(p *int64) interface{} {
 		return nil
 	}
 	return *p
+}
+
+func nullJSON(m json.RawMessage) interface{} {
+	if len(m) == 0 {
+		return nil
+	}
+	return []byte(m)
 }
 
 func dateArg(s string) interface{} {

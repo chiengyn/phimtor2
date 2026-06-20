@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -58,20 +60,45 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	},
 }).ParseFS(templatesFS, "templates/*.html"))
 
+// defaultSubtitleProvider is used when a request does not name one. It also gates
+// the "subtitles enabled" UI flag.
+const defaultSubtitleProvider = "opensubtitles"
+
 type Server struct {
 	store       *Store
 	tmdb        *TMDBClient
-	os          *OpenSubtitlesClient
+	providers   map[string]SubtitleProvider // keyed by provider name
+	blobs       map[string]BlobStore        // keyed by backend name ("local"/"s3")
+	blobPrimary string                      // backend new subtitles are written to
 	streamerURL string
 	user        string
 	pass        string
 	router      chi.Router
 }
 
-func NewServer(store *Store, tmdb *TMDBClient, osc *OpenSubtitlesClient, streamerURL, user, pass string) *Server {
-	s := &Server{store: store, tmdb: tmdb, os: osc, streamerURL: streamerURL, user: user, pass: pass}
+func NewServer(store *Store, tmdb *TMDBClient, providers map[string]SubtitleProvider, blobs map[string]BlobStore, blobPrimary, streamerURL, user, pass string) *Server {
+	s := &Server{
+		store: store, tmdb: tmdb, providers: providers, blobs: blobs, blobPrimary: blobPrimary,
+		streamerURL: streamerURL, user: user, pass: pass,
+	}
 	s.setupRouter()
 	return s
+}
+
+// provider returns the named subtitle provider, defaulting to OpenSubtitles when
+// name is empty. Returns nil when no such provider is registered.
+func (s *Server) provider(name string) SubtitleProvider {
+	if name == "" {
+		name = defaultSubtitleProvider
+	}
+	return s.providers[name]
+}
+
+// subtitlesEnabled reports whether the default subtitle provider is usable, which
+// the templates use to show/hide the subtitle search UI.
+func (s *Server) subtitlesEnabled() bool {
+	p := s.providers[defaultSubtitleProvider]
+	return p != nil && p.Enabled()
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +121,7 @@ func (s *Server) setupRouter() {
 		r.Get("/", s.handleListTitles)
 		r.Get("/{id}", s.handleGetTitle)
 		r.Get("/{id}/videos", s.handleListTitleVideos)
+		r.Get("/{id}/subtitles", s.handleListTitleSubtitles)
 		r.Delete("/{id}", s.handleDeleteTitle)
 	})
 	r.Post("/api/import", s.handleImport)
@@ -107,6 +135,9 @@ func (s *Server) setupRouter() {
 	r.Route("/api/subtitles", func(r chi.Router) {
 		r.Get("/search", s.handleSearchSubtitles)
 		r.Get("/download", s.handleDownloadSubtitle)
+		r.Post("/", s.handleSaveSubtitle)
+		r.Get("/{id}/file", s.handleSubtitleFile)
+		r.Delete("/{id}", s.handleDeleteSubtitle)
 	})
 
 	s.router = r
@@ -176,7 +207,7 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	render(w, "watch.html", map[string]any{
 		"StreamerURL":      s.streamerURL,
-		"SubtitlesEnabled": s.os.Enabled(),
+		"SubtitlesEnabled": s.subtitlesEnabled(),
 	})
 }
 
@@ -185,14 +216,23 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 // optionally overridden by ?query=. There is no moviehash here — the admin holds
 // no torrent data.
 func (s *Server) handleSearchSubtitles(w http.ResponseWriter, r *http.Request) {
-	if !s.os.Enabled() {
-		writeError(w, http.StatusServiceUnavailable, "OpenSubtitles not configured (set OPENSUBTITLES_API_KEY)")
+	provider := s.provider(r.URL.Query().Get("provider"))
+	if provider == nil || !provider.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "subtitle provider not configured (set OPENSUBTITLES_API_KEY)")
 		return
 	}
 
 	title, season, episode := parseSubtitleQuery(path.Base(r.URL.Query().Get("file")))
 	if q := strings.TrimSpace(r.URL.Query().Get("query")); q != "" {
 		title = q
+	}
+	// Explicit season/episode override what we parsed from the file name (the add
+	// and detail screens know them directly; the player only has a file name).
+	if n, err := strconv.Atoi(r.URL.Query().Get("season")); err == nil && n > 0 {
+		season = n
+	}
+	if n, err := strconv.Atoi(r.URL.Query().Get("episode")); err == nil && n > 0 {
+		episode = n
 	}
 	if strings.TrimSpace(title) == "" {
 		writeError(w, http.StatusBadRequest, "provide a file or query to search")
@@ -203,7 +243,7 @@ func (s *Server) handleSearchSubtitles(w http.ResponseWriter, r *http.Request) {
 		langs = "en"
 	}
 
-	subs, err := s.os.Search(r.Context(), SearchParams{Query: title, Languages: langs, Season: season, Episode: episode})
+	subs, err := provider.Search(r.Context(), SearchParams{Query: title, Languages: langs, Season: season, Episode: episode})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -214,25 +254,26 @@ func (s *Server) handleSearchSubtitles(w http.ResponseWriter, r *http.Request) {
 // handleDownloadSubtitle resolves an OpenSubtitles file_id to WebVTT text that
 // the player loads as a caption track.
 func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) {
-	if !s.os.Enabled() {
-		writeError(w, http.StatusServiceUnavailable, "OpenSubtitles not configured (set OPENSUBTITLES_API_KEY)")
+	provider := s.provider(r.URL.Query().Get("provider"))
+	if provider == nil || !provider.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "subtitle provider not configured (set OPENSUBTITLES_API_KEY)")
 		return
 	}
 
-	fileID, err := strconv.Atoi(r.URL.Query().Get("file_id"))
-	if err != nil || fileID <= 0 {
+	fileID := strings.TrimSpace(r.URL.Query().Get("file_id"))
+	if fileID == "" {
 		writeError(w, http.StatusBadRequest, "invalid file_id")
 		return
 	}
 
-	vtt, err := s.os.Download(r.Context(), fileID)
+	data, format, err := provider.Download(r.Context(), fileID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	_, _ = w.Write([]byte(vtt))
+	w.Header().Set("Content-Type", subtitleContentType(format))
+	_, _ = w.Write(data)
 }
 
 // handleListTitles renders the titles list fragment for htmx to swap into #list.
@@ -290,7 +331,11 @@ func (s *Server) handleTitleDetail(w http.ResponseWriter, r *http.Request) {
 	if title == nil {
 		return
 	}
-	render(w, "detail.html", map[string]any{"Title": title, "StreamerURL": s.streamerURL})
+	render(w, "detail.html", map[string]any{
+		"Title":            title,
+		"StreamerURL":      s.streamerURL,
+		"SubtitlesEnabled": s.subtitlesEnabled(),
+	})
 }
 
 // handleListTitleVideos renders the video-region fragment that the detail page
@@ -301,6 +346,16 @@ func (s *Server) handleListTitleVideos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "video-region", title)
+}
+
+// handleListTitleSubtitles renders the subtitle-region fragment that the detail
+// page re-fetches when the "subtitlesChanged" event fires.
+func (s *Server) handleListTitleSubtitles(w http.ResponseWriter, r *http.Request) {
+	title := s.lookupTitle(w, r)
+	if title == nil {
+		return
+	}
+	render(w, "subtitle-region", title)
 }
 
 // packEpisode is one selectable episode passed to the season-pack add page so the
@@ -366,11 +421,12 @@ func (s *Server) handleAddTorrentPage(w http.ResponseWriter, r *http.Request) {
 	episodesJSON, _ := json.Marshal(packEpisodes)
 
 	render(w, "add_torrent.html", map[string]any{
-		"Title":        title,
-		"EpisodeID":    episodeID,
-		"SeasonID":     seasonID,
-		"ContextLabel": contextLabel,
-		"StreamerURL":  s.streamerURL,
+		"Title":            title,
+		"EpisodeID":        episodeID,
+		"SeasonID":         seasonID,
+		"ContextLabel":     contextLabel,
+		"StreamerURL":      s.streamerURL,
+		"SubtitlesEnabled": s.subtitlesEnabled(),
 		// Plain string embedded in a data- attribute (NOT inside a <script>):
 		// html/template JSON-string-encodes values in script context, which would
 		// turn this array into a quoted string and break JSON.parse on the client.
@@ -399,22 +455,55 @@ func (s *Server) handlePlayVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Link back to the owning title's detail page when we can resolve it.
+	// Link back to the owning title's detail page when we can resolve it, and
+	// load the saved subtitles for this video's owner so the player can offer them.
 	backURL := "/"
+	ownerKind, ownerID := "", int64(0)
+	var subs []Subtitle
 	if video.TitleID != nil {
 		backURL = fmt.Sprintf("/titles/%d", *video.TitleID)
+		ownerKind, ownerID = "title", *video.TitleID
+		subs, err = s.store.SubtitlesForTitle(r.Context(), *video.TitleID)
 	} else if video.EpisodeID != nil {
+		ownerKind, ownerID = "episode", *video.EpisodeID
 		if titleID, ok := s.store.TitleIDForEpisode(r.Context(), *video.EpisodeID); ok {
 			backURL = fmt.Sprintf("/titles/%d", titleID)
 		}
+		subs, err = s.store.SubtitlesForEpisode(r.Context(), *video.EpisodeID)
 	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	subsJSON, _ := json.Marshal(savedSubtitleSummaries(subs))
 
 	render(w, "play.html", map[string]any{
 		"Video":            video,
 		"StreamerURL":      s.streamerURL,
-		"SubtitlesEnabled": s.os.Enabled(),
+		"SubtitlesEnabled": s.subtitlesEnabled(),
 		"BackURL":          backURL,
+		"SubOwnerKind":     ownerKind,
+		"SubOwnerID":       ownerID,
+		// Plain JSON string for a data- attribute (see EpisodesJSON note above).
+		"SubtitlesJSON": string(subsJSON),
 	})
+}
+
+// subtitleSummary is the minimal shape the player needs to list a saved subtitle
+// as a caption track (the file is served from /api/subtitles/{id}/file).
+type subtitleSummary struct {
+	ID       int64  `json:"id"`
+	Language string `json:"language"`
+	Name     string `json:"name"`
+}
+
+func savedSubtitleSummaries(subs []Subtitle) []subtitleSummary {
+	out := make([]subtitleSummary, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, subtitleSummary{ID: sub.ID, Language: sub.Language, Name: sub.Name})
+	}
+	return out
 }
 
 // handleSaveVideo persists one video the admin previewed against the streamer.
@@ -622,6 +711,167 @@ func (s *Server) handleDeleteVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("HX-Trigger", "torrentsChanged")
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleSaveSubtitle downloads a subtitle from its provider, stores the file in
+// the primary BlobStore, and records a subtitles row attached to a movie title
+// or a single TV episode. The browser sends the search-result fields (provider,
+// file_id, language, name, download_count) it already has, plus the owner id.
+func (s *Server) handleSaveSubtitle(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Provider      string          `json:"provider"`
+		FileID        string          `json:"file_id"`
+		Language      string          `json:"language"`
+		Name          string          `json:"name"`
+		DownloadCount int             `json:"download_count"`
+		Metadata      json.RawMessage `json:"metadata"`
+		TitleID       *int64          `json:"title_id"`
+		EpisodeID     *int64          `json:"episode_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	provider := s.provider(body.Provider)
+	if provider == nil || !provider.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "subtitle provider not configured")
+		return
+	}
+	switch {
+	case strings.TrimSpace(body.FileID) == "":
+		writeError(w, http.StatusBadRequest, "file_id required")
+		return
+	case (body.TitleID == nil) == (body.EpisodeID == nil):
+		writeError(w, http.StatusBadRequest, "provide exactly one of title_id or episode_id")
+		return
+	}
+
+	data, format, err := provider.Download(r.Context(), body.FileID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	lang := strings.TrimSpace(body.Language)
+	if lang == "" {
+		lang = "sub"
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = fmt.Sprintf("%s %s", provider.Name(), body.FileID)
+	}
+
+	store := s.blobs[s.blobPrimary]
+	key := subtitleStorageKey(body.TitleID, body.EpisodeID, provider.Name(), body.FileID, lang, format)
+	if err := store.Put(r.Context(), key, data, subtitleContentType(format)); err != nil {
+		writeError(w, http.StatusInternalServerError, "store subtitle: "+err.Error())
+		return
+	}
+
+	sub := &Subtitle{
+		TitleID: body.TitleID, EpisodeID: body.EpisodeID,
+		Provider: provider.Name(), ProviderFileID: body.FileID, Language: lang, Name: name,
+		DownloadCount: body.DownloadCount, Format: format,
+		StorageBackend: store.Name(), StorageKey: key, Metadata: body.Metadata,
+	}
+	if err := s.store.AddSubtitle(r.Context(), sub); err != nil {
+		// Don't orphan the blob we just wrote if the row insert fails.
+		_ = store.Delete(r.Context(), key)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("HX-Trigger", "subtitlesChanged")
+	writeJSON(w, http.StatusCreated, map[string]int64{"id": sub.ID})
+}
+
+// handleSubtitleFile serves a saved subtitle's file, reading it from whichever
+// BlobStore the row was written to.
+func (s *Server) handleSubtitleFile(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	sub, err := s.store.GetSubtitle(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if sub == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	store := s.blobs[sub.StorageBackend]
+	if store == nil {
+		writeError(w, http.StatusInternalServerError, "storage backend "+sub.StorageBackend+" not configured")
+		return
+	}
+	data, err := store.Get(r.Context(), sub.StorageKey)
+	if err == errBlobNotFound {
+		writeError(w, http.StatusNotFound, "subtitle file missing")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", subtitleContentType(sub.Format))
+	_, _ = w.Write(data)
+}
+
+// handleDeleteSubtitle removes a subtitle row and then its stored file. Like the
+// other delete handlers it returns an empty 200 (not 204) so the htmx outerHTML
+// swap removes the row.
+func (s *Server) handleDeleteSubtitle(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	sub, err := s.store.DeleteSubtitle(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if sub == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if store := s.blobs[sub.StorageBackend]; store != nil {
+		if err := store.Delete(r.Context(), sub.StorageKey); err != nil {
+			log.Printf("delete subtitle blob %s/%s: %v", sub.StorageBackend, sub.StorageKey, err)
+		}
+	}
+	w.Header().Set("HX-Trigger", "subtitlesChanged")
+	w.WriteHeader(http.StatusOK)
+}
+
+// subtitleContentType maps a stored format to its MIME type.
+func subtitleContentType(format string) string {
+	if format == "srt" {
+		return "application/x-subrip; charset=utf-8"
+	}
+	return "text/vtt; charset=utf-8"
+}
+
+// subtitleKeyUnsafe matches anything not allowed in a storage key segment.
+var subtitleKeyUnsafe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+// subtitleStorageKey builds a unique BlobStore key for a saved subtitle, grouped
+// by owner. The nanosecond suffix keeps re-saves of the same provider/file from
+// sharing one key (so deleting one never removes another's file).
+func subtitleStorageKey(titleID, episodeID *int64, provider, fileID, lang, format string) string {
+	owner := "misc"
+	if titleID != nil {
+		owner = fmt.Sprintf("title-%d", *titleID)
+	} else if episodeID != nil {
+		owner = fmt.Sprintf("episode-%d", *episodeID)
+	}
+	clean := func(s string) string { return subtitleKeyUnsafe.ReplaceAllString(s, "-") }
+	file := fmt.Sprintf("%s-%s-%s-%d.%s", clean(provider), clean(fileID), clean(lang), time.Now().UnixNano(), clean(format))
+	return "subtitles/" + owner + "/" + file
 }
 
 // lookupTitle parses the {id} URL param and loads the full title, writing the
