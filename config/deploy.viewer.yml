@@ -1,0 +1,55 @@
+# Kamal deploy — VIEWER service (public, read-only browse/watch UI).
+#
+#   kamal deploy -c config/deploy.viewer.yml
+#
+# Reads the SAME MySQL the admin owns and never migrates. The MySQL accessory
+# is defined in config/deploy.yml (admin); this config only connects to it.
+
+service: phimtor2-viewer
+image: chiengyn/phimtor2-viewer
+
+servers:
+  web:
+    - <%= ENV["SERVER_IP"] %>   # same host as admin/streamer
+
+proxy:
+  ssl: true
+  host: <%= ENV["VIEWER_HOST"] %>   # the public site, e.g. yourdomain.com
+  app_port: 8082
+  healthcheck:
+    path: /up
+
+registry:
+  server: ghcr.io
+  username: chiengyn
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+# Images are built+pushed to GHCR by CI; deploys pull them via
+# `kamal deploy -c config/deploy.viewer.yml --skip-push`. Builder is a local
+# fallback only (see DEPLOY.md).
+builder:
+  arch: amd64
+  context: ./viewer
+
+env:
+  clear:
+    VIEWER_PORT: 8082
+    # Same shared MySQL accessory as admin (named on the kamal network).
+    DB_HOST: phimtor2-admin-mysql
+    DB_PORT: 3306
+    DB_NAME: phimtor
+    DB_USER: phimtor
+    # Streamer: public URL is browser-reachable (stats + stream); internal URL
+    # is server-to-server (adding torrents) over the kamal network.
+    STREAMER_PUBLIC_URL: https://<%= ENV["STREAMER_HOST"] %>
+    STREAMER_INTERNAL_URL: http://phimtor2-streamer:8080
+    # Read the same subtitle blob store admin writes (shared host volume).
+    SUBTITLE_STORAGE_BACKEND: local
+    SUBTITLE_STORAGE_DIR: /data/subtitles
+  secret:
+    - DB_PASSWORD
+
+# Mount the SAME named volume admin writes subtitles to (viewer only reads it).
+volumes:
+  - "phimtor2_subtitles:/data"
