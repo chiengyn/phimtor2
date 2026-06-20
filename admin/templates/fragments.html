@@ -80,6 +80,7 @@
     <div class="torrent-name">{{ .Name }}</div>
     <div class="muted">{{ .FilePath }} · {{ filesize .FileSize }}</div>
   </div>
+  <a class="btn-play" href="/videos/{{ .ID }}/play" title="Phát video">▶ Phát</a>
   <button class="danger"
           hx-delete="/api/videos/{{ .ID }}"
           hx-confirm="Xóa video này?"
