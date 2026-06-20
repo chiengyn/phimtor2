@@ -27,5 +27,25 @@ services:
       timeout: 5s
       retries: 20
 
+  # Optional S3-compatible object storage for testing SUBTITLE_STORAGE_BACKEND=s3.
+  # Off by default; start it with:  docker compose --profile s3 up -d
+  # Then set in .env: SUBTITLE_STORAGE_BACKEND=s3, S3_ENDPOINT=localhost:9000,
+  # S3_BUCKET=phimtor, S3_ACCESS_KEY=minioadmin, S3_SECRET_KEY=minioadmin,
+  # S3_USE_SSL=false  (create the bucket once via the console at :9001).
+  minio:
+    image: minio/minio
+    profiles: ["s3"]
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
 volumes:
   mysql_data:
+  minio_data:

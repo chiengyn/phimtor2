@@ -18,6 +18,18 @@ import (
 
 const osBaseURL = "https://api.opensubtitles.com/api/v1"
 
+// SubtitleProvider is the common interface over a subtitle source. OpenSubtitles
+// is the only implementation today, but the admin looks providers up by name (a
+// registry on the Server) so more platforms can be added without touching the
+// HTTP/store layers. Download returns the file bytes plus its format (e.g.
+// "vtt"); callers persist both.
+type SubtitleProvider interface {
+	Name() string
+	Enabled() bool
+	Search(ctx context.Context, p SearchParams) ([]SubtitleResult, error)
+	Download(ctx context.Context, fileID string) (data []byte, format string, err error)
+}
+
 // OpenSubtitlesClient is a thin proxy over the OpenSubtitles REST API. The
 // browser never talks to OpenSubtitles directly: the Api-Key would leak and
 // the API does not allow authenticated cross-origin calls, so all requests are
@@ -45,10 +57,15 @@ func NewOpenSubtitlesClient(apiKey, userAgent, username, password string) *OpenS
 	}
 }
 
+func (c *OpenSubtitlesClient) Name() string { return "opensubtitles" }
+
 func (c *OpenSubtitlesClient) Enabled() bool { return c != nil && c.apiKey != "" }
 
-// Subtitle is the trimmed shape returned to the UI.
-type Subtitle struct {
+// SubtitleResult is the trimmed shape of one search hit returned to the UI. It
+// carries the Provider so the browser can pass it back when saving (the saved
+// row in the DB is the separate Subtitle model in models.go).
+type SubtitleResult struct {
+	Provider      string `json:"provider"`
 	FileID        int    `json:"fileId"`
 	Language      string `json:"language"`
 	Release       string `json:"release"`
@@ -78,7 +95,7 @@ func (c *OpenSubtitlesClient) newRequest(ctx context.Context, method, path strin
 
 // Search returns subtitle candidates matched by text query (and optional
 // season/episode for TV).
-func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]Subtitle, error) {
+func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]SubtitleResult, error) {
 	q := url.Values{}
 	if p.Query != "" {
 		q.Set("query", p.Query)
@@ -122,13 +139,14 @@ func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]Sub
 		return nil, fmt.Errorf("decode search response: %w", err)
 	}
 
-	subs := make([]Subtitle, 0, len(out.Data))
+	subs := make([]SubtitleResult, 0, len(out.Data))
 	for _, d := range out.Data {
 		a := d.Attributes
 		if len(a.Files) == 0 {
 			continue
 		}
-		subs = append(subs, Subtitle{
+		subs = append(subs, SubtitleResult{
+			Provider:      c.Name(),
 			FileID:        a.Files[0].FileID,
 			Language:      a.Language,
 			Release:       a.Release,
@@ -139,12 +157,20 @@ func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]Sub
 }
 
 // Download resolves a file_id to subtitle text in WebVTT form. The API can emit
-// WebVTT directly via sub_format; we convert from SubRip as a safety net.
-func (c *OpenSubtitlesClient) Download(ctx context.Context, fileID int) (string, error) {
-	body, _ := json.Marshal(map[string]any{"file_id": fileID, "sub_format": "webvtt"})
+// WebVTT directly via sub_format; we convert from SubRip as a safety net. The
+// fileID is a string to satisfy the provider-agnostic SubtitleProvider
+// interface; OpenSubtitles file ids are numeric. Returns the bytes and the
+// format ("vtt").
+func (c *OpenSubtitlesClient) Download(ctx context.Context, fileID string) ([]byte, string, error) {
+	id, err := strconv.Atoi(fileID)
+	if err != nil || id <= 0 {
+		return nil, "", fmt.Errorf("invalid file_id %q", fileID)
+	}
+
+	body, _ := json.Marshal(map[string]any{"file_id": id, "sub_format": "webvtt"})
 	req, err := c.newRequest(ctx, http.MethodPost, "/download", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if tok := c.ensureToken(ctx); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
@@ -152,11 +178,11 @@ func (c *OpenSubtitlesClient) Download(ctx context.Context, fileID int) (string,
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download: %s", osErr(resp))
+		return nil, "", fmt.Errorf("download: %s", osErr(resp))
 	}
 
 	var out struct {
@@ -164,39 +190,39 @@ func (c *OpenSubtitlesClient) Download(ctx context.Context, fileID int) (string,
 		Message string `json:"message"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode download response: %w", err)
+		return nil, "", fmt.Errorf("decode download response: %w", err)
 	}
 	if out.Link == "" {
 		msg := out.Message
 		if msg == "" {
 			msg = "no download link returned (quota may be exhausted)"
 		}
-		return "", fmt.Errorf("download: %s", msg)
+		return nil, "", fmt.Errorf("download: %s", msg)
 	}
 
 	freq, err := http.NewRequestWithContext(ctx, http.MethodGet, out.Link, nil)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	freq.Header.Set("User-Agent", c.userAgent)
 	fresp, err := c.http.Do(freq)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	defer fresp.Body.Close()
 	if fresp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("fetch subtitle: %s", fresp.Status)
+		return nil, "", fmt.Errorf("fetch subtitle: %s", fresp.Status)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(fresp.Body, 8<<20))
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	text := string(data)
 	if !strings.HasPrefix(strings.TrimSpace(text), "WEBVTT") {
 		text = srtToVTT(text)
 	}
-	return text, nil
+	return []byte(text), "vtt", nil
 }
 
 // ensureToken logs in once (if credentials are set) and caches the JWT. Failures

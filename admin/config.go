@@ -40,6 +40,19 @@ type Config struct {
 	OpenSubtitlesUserAgent string
 	OpenSubtitlesUsername  string
 	OpenSubtitlesPassword  string
+
+	// Subtitle storage. Saved subtitle files are written to a BlobStore selected
+	// by SubtitleStorageBackend ("local" | "s3"). The local backend uses
+	// SubtitleStorageDir; the s3 backend uses the S3_* settings (and is only
+	// built when S3Bucket is set). S3 secrets are env-only.
+	SubtitleStorageBackend string
+	SubtitleStorageDir     string
+	S3Endpoint             string
+	S3Region               string
+	S3Bucket               string
+	S3AccessKey            string
+	S3SecretKey            string
+	S3UseSSL               bool
 }
 
 func loadConfig() Config {
@@ -66,6 +79,15 @@ func loadConfig() Config {
 		OpenSubtitlesUserAgent: envStr("OPENSUBTITLES_USER_AGENT", "phimtor2 v1.0"),
 		OpenSubtitlesUsername:  envStr("OPENSUBTITLES_USERNAME", ""),
 		OpenSubtitlesPassword:  envStr("OPENSUBTITLES_PASSWORD", ""),
+
+		SubtitleStorageBackend: envStr("SUBTITLE_STORAGE_BACKEND", "local"),
+		SubtitleStorageDir:     envStr("SUBTITLE_STORAGE_DIR", "./data/subtitles"),
+		S3Endpoint:             envStr("S3_ENDPOINT", ""),
+		S3Region:               envStr("S3_REGION", "us-east-1"),
+		S3Bucket:               envStr("S3_BUCKET", ""),
+		S3AccessKey:            envStr("S3_ACCESS_KEY", ""),
+		S3SecretKey:            envStr("S3_SECRET_KEY", ""),
+		S3UseSSL:               envBool("S3_USE_SSL", true),
 	}
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
@@ -78,6 +100,8 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.TMDBFallbackLang, "tmdb-fallback", cfg.TMDBFallbackLang, "Fallback TMDB language")
 	flag.StringVar(&cfg.AdminUser, "admin-user", cfg.AdminUser, "HTTP Basic auth user")
 	flag.StringVar(&cfg.StreamerURL, "streamer-url", cfg.StreamerURL, "Base URL of the streamer service (used by the watch page)")
+	flag.StringVar(&cfg.SubtitleStorageBackend, "subtitle-storage", cfg.SubtitleStorageBackend, "Subtitle storage backend: local | s3")
+	flag.StringVar(&cfg.SubtitleStorageDir, "subtitle-dir", cfg.SubtitleStorageDir, "Local subtitle storage directory")
 	flag.Parse()
 
 	return cfg
@@ -105,6 +129,15 @@ func envInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+func envBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return def

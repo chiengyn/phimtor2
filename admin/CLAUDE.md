@@ -56,6 +56,14 @@ unset).
   (required to enable subtitle search/download), `OPENSUBTITLES_USER_AGENT`, and
   optional `OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD` (a login token
   raises the per-day download quota).
+- Subtitle storage (`blobstore.go`): saved subtitle files are written to a
+  `BlobStore`. `SUBTITLE_STORAGE_BACKEND` selects `local` (default) or `s3`.
+  Local uses `SUBTITLE_STORAGE_DIR` (default `./data/subtitles`, gitignored). S3
+  uses `S3_ENDPOINT`/`S3_REGION`/`S3_BUCKET`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/
+  `S3_USE_SSL` (the s3 store is only built when `S3_BUCKET` is set; secrets are
+  env-only). The local store is always available, so reads/deletes route by each
+  row's recorded `storage_backend` even if the default later changes. A MinIO
+  service for testing is in the root compose under the `s3` profile.
 
 ## Architecture
 
@@ -78,9 +86,19 @@ Flat single `main` package. Layers, in request order:
   - `GET /watch` — the torrent watch page (`watch.html`), with `STREAMER_URL`
     and a `SubtitlesEnabled` flag injected via `<body data-*>` (the page is plain
     JS, not htmx).
-  - `GET /api/subtitles/search` (`?file=&query=&languages=`) and
-    `GET /api/subtitles/download` (`?file_id=`) — the OpenSubtitles proxy
-    (`opensubtitles.go`); search returns JSON, download returns WebVTT.
+  - `GET /api/subtitles/search` (`?file=&query=&languages=&season=&episode=`) and
+    `GET /api/subtitles/download` (`?file_id=`) — the live subtitle-provider proxy
+    (`opensubtitles.go`, behind the `SubtitleProvider` interface so more providers
+    can be registered); search returns JSON, download returns WebVTT.
+  - `POST /api/subtitles` (JSON) — download a search hit from its provider, store
+    the file in the primary `BlobStore`, and record a `subtitles` row attached to
+    a movie (`title_id`) or episode (`episode_id`); fires `HX-Trigger:
+    subtitlesChanged`. `GET /api/subtitles/{id}/file` serves the stored file;
+    `DELETE /api/subtitles/{id}` removes row + blob. `GET
+    /api/titles/{id}/subtitles` returns the `subtitle-region` fragment.
+  - The subtitle search/select/save UI lives on three surfaces: the add-torrent
+    page, the title detail page (a modal, with saved subtitles listed per
+    movie/episode), and the play page (which also auto-loads saved subtitles).
 
 - **Ref parsing** (`ref.go`): `parseRef` turns the admin's input into a
   `(mediaType, id)` pair. A themoviedb.org link carries its own type
@@ -115,7 +133,13 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
   statement terminator** — not even inside a comment.
 - The schema (`0001_init.sql`) is `utf8mb4`/`utf8mb4_unicode_ci` throughout:
   `titles` (+`uniq_tmdb`), `genres`, `title_genres`, `seasons`, `episodes`, with
-  cascading FKs.
+  cascading FKs. Later migrations add `torrent_sources`/`videos` (`0003`) and
+  `subtitles` (`0004`). Both `videos` and `subtitles` use the same owner pattern:
+  exactly one of `title_id`/`episode_id` is set (a `CHECK` enforces it), FKs
+  cascade. `subtitles` keeps only the file's locator (`storage_backend` +
+  `storage_key`) — the bytes live in a `BlobStore`, not MySQL — plus the provider
+  metadata (`provider`, `provider_file_id`, `language`, `download_count`, and a
+  JSON `metadata` for extras).
 
 A new column the viewer should display must also be added to **`viewer/`'s** own
 `models.go`/`store.go` — the two services duplicate their query layers rather than

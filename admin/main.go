@@ -40,8 +40,14 @@ func main() {
 		cfg.OpenSubtitlesUsername,
 		cfg.OpenSubtitlesPassword,
 	)
+	providers := map[string]SubtitleProvider{osc.Name(): osc}
 
-	server := NewServer(store, tmdb, osc, cfg.StreamerURL, cfg.AdminUser, cfg.AdminPassword)
+	blobs, blobPrimary, err := newBlobStores(cfg)
+	if err != nil {
+		log.Fatalf("subtitle storage: %v", err)
+	}
+
+	server := NewServer(store, tmdb, providers, blobs, blobPrimary, cfg.StreamerURL, cfg.AdminUser, cfg.AdminPassword)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{

@@ -43,9 +43,32 @@
     .torrent-name { font-weight: 600; word-break: break-word; }
     button.danger { font: inherit; padding: .4rem .7rem; border-radius: 8px; background: transparent; border: 1px solid #5a2330; color: #ff8b94; cursor: pointer; flex: none; }
     button.danger:hover { background: #2a141a; }
+    .btn-play { font: inherit; }
+    .region-title { font-size: 1.1rem; margin: 2rem 0 .5rem; }
+    button.btn-add { font: inherit; border: none; cursor: pointer; }
+    body:not(.subs-enabled) .sub-add { display: none; }
+    /* subtitle search modal */
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 50; }
+    .modal.hidden { display: none; }
+    .modal-box { background: #11161d; border: 1px solid #222b36; border-radius: 12px; width: 100%; max-width: 560px; padding: 1.1rem 1.25rem; max-height: 85vh; overflow-y: auto; }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .75rem; }
+    .modal-close { background: transparent; border: none; color: #8b98a5; font-size: 1.1rem; cursor: pointer; }
+    .modal-row { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .modal-row input[type=text] { flex: 1; min-width: 160px; padding: .5rem .65rem; border-radius: 8px; border: 1px solid #303b48; background: #161b22; color: #e6edf3; }
+    .modal-row input.lang { flex: 0 0 80px; text-align: center; }
+    .modal-row button { padding: .5rem .8rem; border-radius: 8px; border: 1px solid #2563eb; background: #2563eb; color: #fff; cursor: pointer; }
+    .sub-result { display: flex; align-items: center; gap: .6rem; padding: .45rem 0; border-top: 1px solid #1c2530; font-size: .85rem; }
+    .sub-result:first-child { border-top: none; }
+    .sub-lang { font-size: .65rem; font-weight: 700; text-transform: uppercase; background: #30363d; color: #c4b5fd; padding: .1rem .4rem; border-radius: 4px; flex: none; }
+    .sub-rel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #adbac7; }
+    .sub-dl { color: #6b7681; white-space: nowrap; font-size: .8rem; }
+    .sub-save { background: #16a34a; border: 1px solid #16a34a; color: #fff; border-radius: 8px; padding: .3rem .6rem; font-size: .8rem; cursor: pointer; flex: none; }
+    .sub-save:hover { background: #15803d; }
+    #sub-modal-status { font-size: .85rem; margin: .5rem 0; }
+    #sub-modal-status.err { color: #ff8b94; }
   </style>
 </head>
-<body>
+<body class="{{ if .SubtitlesEnabled }}subs-enabled{{ end }}" data-title-name="{{ .Title.Title }}">
   <header>
     <h1>🎬 phimtor2</h1>
     <a href="/">← Danh sách</a>
@@ -63,6 +86,121 @@
     </div>
 
     {{ template "video-region" .Title }}
+    {{ template "subtitle-region" .Title }}
   </main>
+
+  <div id="sub-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <strong id="sub-modal-title">Thêm phụ đề</strong>
+        <button class="modal-close" type="button" onclick="closeSubModal()">✕</button>
+      </div>
+      <div class="modal-row">
+        <input type="text" id="sub-modal-query" placeholder="Từ khóa tìm kiếm…" onkeydown="if(event.key==='Enter')searchSubModal()">
+        <input type="text" id="sub-modal-lang" class="lang" value="vi" title="Mã ngôn ngữ, vd: en,vi">
+        <button type="button" onclick="searchSubModal()">Tìm</button>
+      </div>
+      <div id="sub-modal-status" class="muted"></div>
+      <div id="sub-modal-results"></div>
+    </div>
+  </div>
+
+<script>
+const TITLE_NAME = document.body.dataset.titleName || '';
+let subTarget = null;       // { kind:'title'|'episode', id, season, episode }
+let subModalResults = [];
+
+function escHtml(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function openSubModal(kind, id, season, episode) {
+  subTarget = { kind, id, season: season || 0, episode: episode || 0 };
+  subModalResults = [];
+  document.getElementById('sub-modal-results').innerHTML = '';
+  document.getElementById('sub-modal-status').textContent = '';
+  document.getElementById('sub-modal-status').className = 'muted';
+  let q = TITLE_NAME;
+  if (subTarget.season && subTarget.episode) {
+    q += ' S' + String(subTarget.season).padStart(2, '0') + 'E' + String(subTarget.episode).padStart(2, '0');
+  }
+  document.getElementById('sub-modal-query').value = q;
+  document.getElementById('sub-modal').classList.remove('hidden');
+  document.getElementById('sub-modal-query').focus();
+}
+
+function closeSubModal() {
+  document.getElementById('sub-modal').classList.add('hidden');
+  subTarget = null;
+}
+
+function setSubModalStatus(text, isErr) {
+  const el = document.getElementById('sub-modal-status');
+  el.textContent = text;
+  el.className = isErr ? 'err' : 'muted';
+}
+
+async function searchSubModal() {
+  if (!subTarget) return;
+  const query = document.getElementById('sub-modal-query').value.trim();
+  const lang = document.getElementById('sub-modal-lang').value.trim() || 'en';
+  const box = document.getElementById('sub-modal-results');
+  if (!query) { setSubModalStatus('Nhập từ khóa tìm kiếm.', true); return; }
+  setSubModalStatus('Đang tìm…');
+  box.innerHTML = '';
+  try {
+    const params = new URLSearchParams({ query, languages: lang });
+    if (subTarget.season) params.set('season', subTarget.season);
+    if (subTarget.episode) params.set('episode', subTarget.episode);
+    const res = await fetch(`/api/subtitles/search?${params}`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    subModalResults = await res.json();
+    setSubModalStatus('');
+    if (!subModalResults.length) { box.innerHTML = '<p class="muted">Không tìm thấy phụ đề.</p>'; return; }
+    box.innerHTML = subModalResults.map((s, i) => `
+      <div class="sub-result">
+        <span class="sub-lang">${escHtml(s.language || '?')}</span>
+        <span class="sub-rel" title="${escHtml(s.release || '')}">${escHtml(s.release || '(không tên)')}</span>
+        <span class="sub-dl">⬇ ${s.downloadCount || 0}</span>
+        <button class="sub-save" type="button" onclick="saveSubModal(${i}, this)">Lưu</button>
+      </div>`).join('');
+  } catch (e) {
+    setSubModalStatus('Lỗi: ' + e.message, true);
+  }
+}
+
+async function saveSubModal(i, btn) {
+  const s = subModalResults[i];
+  if (!s || !subTarget) return;
+  btn.disabled = true; btn.textContent = '…';
+  const body = {
+    provider: s.provider || 'opensubtitles',
+    file_id: String(s.fileId),
+    language: s.language || '',
+    name: s.release || '',
+    download_count: s.downloadCount || 0,
+  };
+  if (subTarget.kind === 'episode') body.episode_id = Number(subTarget.id);
+  else body.title_id = Number(subTarget.id);
+  try {
+    const res = await fetch('/api/subtitles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    // Refresh the subtitle-region (it listens for subtitlesChanged on body).
+    htmx.trigger(document.body, 'subtitlesChanged');
+    closeSubModal();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Lưu';
+    setSubModalStatus('Lưu thất bại: ' + e.message, true);
+  }
+}
+
+document.getElementById('sub-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'sub-modal') closeSubModal();
+});
+</script>
 </body>
 </html>
