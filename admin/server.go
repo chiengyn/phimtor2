@@ -88,6 +88,7 @@ func (s *Server) setupRouter() {
 	r.Get("/watch", s.handleWatch)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
+	r.Get("/videos/{id}/play", s.handlePlayVideo)
 
 	r.Route("/api/titles", func(r chi.Router) {
 		r.Get("/", s.handleListTitles)
@@ -374,6 +375,45 @@ func (s *Server) handleAddTorrentPage(w http.ResponseWriter, r *http.Request) {
 		// html/template JSON-string-encodes values in script context, which would
 		// turn this array into a quoted string and break JSON.parse on the client.
 		"EpisodesJSON": string(episodesJSON),
+	})
+}
+
+// handlePlayVideo renders the standalone player page for one stored video. The
+// page (plain JS, like the watch page) ensures the torrent is added to the
+// streamer (POSTing the stored magnet — idempotent), streams the video's
+// specific file by info_hash + file_index, and polls the streamer's per-torrent
+// stats endpoint. Subtitles use the same admin-side OpenSubtitles proxy.
+func (s *Server) handlePlayVideo(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	video, err := s.store.GetVideo(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if video == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// Link back to the owning title's detail page when we can resolve it.
+	backURL := "/"
+	if video.TitleID != nil {
+		backURL = fmt.Sprintf("/titles/%d", *video.TitleID)
+	} else if video.EpisodeID != nil {
+		if titleID, ok := s.store.TitleIDForEpisode(r.Context(), *video.EpisodeID); ok {
+			backURL = fmt.Sprintf("/titles/%d", titleID)
+		}
+	}
+
+	render(w, "play.html", map[string]any{
+		"Video":            video,
+		"StreamerURL":      s.streamerURL,
+		"SubtitlesEnabled": s.os.Enabled(),
+		"BackURL":          backURL,
 	})
 }
 

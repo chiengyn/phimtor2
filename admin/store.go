@@ -550,6 +550,21 @@ func (s *Store) GetVideo(ctx context.Context, id int64) (*Video, error) {
 	return &v, nil
 }
 
+// TitleIDForEpisode resolves the owning title id for an episode (episode ->
+// season -> title), so the player page can link back to the title detail. The
+// bool is false when the episode does not exist.
+func (s *Store) TitleIDForEpisode(ctx context.Context, episodeID int64) (int64, bool) {
+	var titleID int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT s.title_id FROM episodes e
+		JOIN seasons s ON s.id = e.season_id
+		WHERE e.id = ?`, episodeID).Scan(&titleID)
+	if err != nil {
+		return 0, false
+	}
+	return titleID, true
+}
+
 // DeleteVideo removes a video, then reaps its torrent source if no other video
 // still references it. Returns false when no video row matched.
 func (s *Store) DeleteVideo(ctx context.Context, id int64) (bool, error) {
