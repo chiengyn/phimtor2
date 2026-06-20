@@ -1,4 +1,4 @@
-{{define "head_title"}}{{.Heading}} – Xem – phimtor{{end}}
+{{define "head_title"}}{{.Heading}} – Xem – phimnet{{end}}
 {{define "content"}}
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 <style>
@@ -369,7 +369,7 @@ function escHtml(s) {
 (async function init() {
 	renderSourceChips();
 	renderSubList();
-	console.info('phimtor: nhập streamDebug() vào console để xem tiến trình tải & số liệu gỡ lỗi.');
+	console.info('phimnet: nhập streamDebug() vào console để xem tiến trình tải & số liệu gỡ lỗi.');
 	if (VIDEOS.length) {
 		await playSource(VIDEOS[0].id); // default = latest added (store orders newest first)
 		if (SAVED_SUBS.length) applySavedSubtitle(SAVED_SUBS[0].id);
