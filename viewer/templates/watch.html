@@ -7,45 +7,59 @@
 
 	.watch-meta-top h1 { margin: 0 0 6px; font-size: 1.8rem; font-weight: 800; }
 
-	.watch-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin-top: 16px; }
-	.source-select { display: flex; align-items: center; gap: 8px; }
-	.source-select label { color: var(--muted); font-size: 0.85rem; }
-	.source-select select {
-		background: var(--surface-2); color: var(--text);
-		border: 1px solid #3a3a3a; border-radius: var(--radius);
-		padding: 7px 10px; font-size: 0.85rem; outline: none; cursor: pointer;
-	}
-	.source-select select option { background: var(--surface); }
+	.ctrl-group { margin-top: 20px; }
+	.ctrl-label { display: block; color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
 
-	.subtitle-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 	.btn {
 		cursor: pointer; border: none; border-radius: var(--radius);
 		padding: 7px 14px; font-size: 0.85rem; font-weight: 600;
 		background: var(--surface-2); color: var(--text);
 	}
 	.btn:hover { background: #3a3a3a; }
-	.btn-clear { background: transparent; color: var(--muted); border: 1px solid #3a3a3a; padding: 3px 8px; font-size: 0.8rem; }
+	.btn-sm { padding: 5px 11px; font-size: 0.8rem; }
+	.btn-clear { background: transparent; color: var(--muted); border: 1px solid #3a3a3a; }
 	.btn-clear:hover { color: var(--accent); border-color: var(--accent); }
-	.subtitle-status { color: var(--muted); font-size: 0.85rem; }
+	.subtitle-status { display: inline-block; color: var(--muted); font-size: 0.82rem; margin-top: 8px; }
 
-	.saved-subs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-	.saved-chip {
-		display: inline-flex; align-items: center; gap: 7px;
+	/* Source chips (always shown, even for a single source). */
+	.source-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+	.chip {
+		display: inline-flex; align-items: center; gap: 8px;
 		background: var(--surface); border: 1px solid #3a3a3a; border-radius: 999px;
-		padding: 4px 12px; font-size: 0.8rem; color: var(--text); cursor: pointer;
+		padding: 6px 14px; font-size: 0.82rem; color: var(--text); cursor: pointer;
+		transition: border-color 0.15s ease, background 0.15s ease;
 	}
-	.saved-chip:hover { border-color: var(--accent); }
-	.saved-chip.active { border-color: var(--accent); color: #fff; background: rgba(229,9,20,0.18); }
-	.saved-chip .lang { font-weight: 700; text-transform: uppercase; color: var(--accent); font-size: 0.72rem; }
+	.chip:hover { border-color: var(--muted); }
+	.chip.active { border-color: var(--accent); background: rgba(229,9,20,0.18); }
+	.chip .badge { font-weight: 700; font-size: 0.72rem; color: var(--accent); }
+	.chip .chip-sub { color: var(--muted); }
 
+	/* Subtitle list. */
+	.sub-section { margin-top: 22px; }
+	.sub-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+	.sub-head .ctrl-label { margin: 0; }
+	.sub-list { display: flex; flex-direction: column; gap: 6px; max-width: 720px; }
+	.sub-row {
+		display: flex; align-items: center; gap: 12px;
+		background: var(--surface); border: 1px solid #2f2f2f; border-radius: var(--radius);
+		padding: 9px 14px; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease;
+	}
+	.sub-row:hover { border-color: var(--muted); }
+	.sub-row.active { border-color: var(--accent); background: rgba(229,9,20,0.12); }
+	.sub-row .lang {
+		flex: 0 0 auto; font-weight: 700; text-transform: uppercase; font-size: 0.7rem;
+		color: var(--accent); background: rgba(229,9,20,0.15); border-radius: 3px; padding: 2px 7px;
+	}
+	.sub-row .sub-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; }
+	.sub-row .sub-meta { flex: 0 0 auto; color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
+	.sub-empty { color: var(--muted); font-size: 0.85rem; }
+
+	/* Debug zone (progress + stats) — hidden unless revealed from the console. */
 	.progress-wrap { margin-top: 18px; }
 	.progress-bar { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
 	.progress-fill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.8s linear; }
 	.progress-text { color: var(--muted); font-size: 0.82rem; margin-top: 6px; }
-
-	.debug-panel { margin-top: 14px; color: var(--muted); font-size: 0.8rem; }
-	.debug-panel summary { cursor: pointer; color: #777; }
-	.stats { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; }
+	.stats { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; color: var(--muted); font-size: 0.8rem; }
 	.stat { white-space: nowrap; }
 	.stat b { color: var(--text); font-weight: 600; }
 	.loading-text { color: #666; font-style: italic; }
@@ -71,28 +85,29 @@
 		<video id="player" controls playsinline></video>
 	</div>
 
-	<div class="watch-controls">
-		<div class="source-select" id="source-select" hidden>
-			<label for="source-picker">Nguồn</label>
-			<select id="source-picker" onchange="playSource(Number(this.value))"></select>
-		</div>
-		<div class="subtitle-bar">
-			<label class="btn" for="subtitle-input">＋ Phụ đề</label>
+	<div class="ctrl-group">
+		<span class="ctrl-label">Nguồn phát</span>
+		<div class="source-chips" id="source-chips"></div>
+	</div>
+
+	<div class="sub-section">
+		<div class="sub-head">
+			<span class="ctrl-label">Phụ đề</span>
+			<label class="btn btn-sm" for="subtitle-input">＋ Tải tệp .srt/.vtt</label>
 			<input type="file" id="subtitle-input" accept=".srt,.vtt" hidden onchange="loadSubtitleFile(this.files[0]); this.value=''">
-			<span id="subtitle-status" class="subtitle-status"></span>
+			<button class="btn btn-sm btn-clear" id="sub-off-btn" onclick="clearSubtitle()" hidden>Tắt phụ đề</button>
 		</div>
-	</div>
-	<div class="saved-subs" id="saved-subs" hidden></div>
-
-	<div class="progress-wrap">
-		<div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-		<div class="progress-text" id="progress-text">Đang chuẩn bị…</div>
+		<div class="sub-list" id="sub-list"></div>
+		<span id="subtitle-status" class="subtitle-status"></span>
 	</div>
 
-	<details class="debug-panel">
-		<summary>Thông tin gỡ lỗi (debug)</summary>
+	<div id="debug-zone" hidden>
+		<div class="progress-wrap">
+			<div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+			<div class="progress-text" id="progress-text">Đang chuẩn bị…</div>
+		</div>
 		<div class="stats" id="stats"><span class="loading-text">…</span></div>
-	</details>
+	</div>
 
 	<div class="status-msg" id="status-msg"></div>
 	{{else}}
@@ -117,6 +132,7 @@ if (!Array.isArray(SAVED_SUBS)) SAVED_SUBS = [];
 
 let player = null;
 let currentInfoHash = null;
+let activeVideoID = null;
 let statsTimer = null;
 let subtitleURL = null;
 let activeVtt = null;       // currently applied subtitle text (re-applied on source switch)
@@ -133,24 +149,28 @@ function setStatus(text, isErr) {
 
 function videoLabel(v) {
 	const parts = [];
-	if (v.resolution) parts.push(v.resolution);
 	if (v.name) parts.push(v.name);
-	let label = parts.join(' · ') || ('Nguồn #' + v.id);
-	if (v.file_size) label += '  (' + formatBytes(v.file_size) + ')';
-	return label;
+	if (v.file_size) parts.push(formatBytes(v.file_size));
+	return parts.join(' · ');
 }
 
-function renderSourcePicker() {
-	if (VIDEOS.length <= 1) return;
-	const box = document.getElementById('source-select');
-	const sel = document.getElementById('source-picker');
-	sel.innerHTML = VIDEOS.map(v => `<option value="${v.id}">${escHtml(videoLabel(v))}</option>`).join('');
-	box.hidden = false;
+// renderSourceChips shows every source as a chip (even a single one) and
+// highlights the active one.
+function renderSourceChips() {
+	const box = document.getElementById('source-chips');
+	box.innerHTML = VIDEOS.map(v => {
+		const sub = videoLabel(v);
+		return `<span class="chip${v.id === activeVideoID ? ' active' : ''}" onclick="playSource(${v.id})">
+			<span class="badge">${escHtml(v.resolution || 'SD')}</span>
+			${sub ? `<span class="chip-sub">${escHtml(sub)}</span>` : ''}
+		</span>`;
+	}).join('');
 }
 
 // playSource asks the viewer to add the chosen source to the streamer (the
 // browser never adds directly), then streams the returned file.
 async function playSource(videoID) {
+	if (videoID === activeVideoID && player) return;
 	setStatus('Đang chuẩn bị nguồn phát…');
 	document.getElementById('progress-text').textContent = 'Đang chuẩn bị…';
 	let data;
@@ -163,8 +183,8 @@ async function playSource(videoID) {
 		return;
 	}
 	currentInfoHash = data.infoHash;
-	const sel = document.getElementById('source-picker');
-	if (sel) sel.value = String(videoID);
+	activeVideoID = videoID;
+	renderSourceChips();
 	const src = `${API}/${data.infoHash}/files/${data.fileIndex}/stream`;
 	buildPlayer(src);
 	setStatus('');
@@ -185,7 +205,7 @@ function buildPlayer(streamURL) {
 	if (activeVtt) applyVtt(activeVtt, activeVttLabel);
 }
 
-// --- Stats / progress -----------------------------------------------------
+// --- Stats / progress (debug only) ----------------------------------------
 
 function startStatsPolling() {
 	if (statsTimer) clearInterval(statsTimer);
@@ -228,6 +248,14 @@ function statsChips(s) {
 		${s.piecesTotal ? `<span class="stat" title="Mảnh đã hoàn thành">🧩 ${s.piecesComplete || 0}/${s.piecesTotal}</span>` : ''}`;
 }
 
+// streamDebug toggles the hidden progress/stats panel — call streamDebug() from
+// the browser console to reveal it (debugging only; not shown to users).
+window.streamDebug = function(show) {
+	if (show === undefined) show = true;
+	document.getElementById('debug-zone').hidden = !show;
+	return show ? 'Đã hiện bảng gỡ lỗi tải xuống.' : 'Đã ẩn bảng gỡ lỗi.';
+};
+
 // --- Subtitles ------------------------------------------------------------
 
 function srtToVtt(text) {
@@ -248,8 +276,8 @@ async function loadSubtitleFile(file) {
 		else if (ext === 'srt') vtt = srtToVtt(text);
 		else throw new Error('định dạng không hỗ trợ (dùng .srt hoặc .vtt)');
 		activeSavedId = null;
-		renderSavedSubs();
 		setSubtitle(vtt, file.name);
+		renderSubList();
 	} catch(e) {
 		alert('Lỗi phụ đề: ' + e.message);
 	}
@@ -261,8 +289,8 @@ function setSubtitle(vttText, label) {
 	activeVtt = vttText;
 	activeVttLabel = label;
 	applyVtt(vttText, label);
-	document.getElementById('subtitle-status').innerHTML =
-		`${escHtml(label)} <button class="btn btn-clear" onclick="clearSubtitle()">✕</button>`;
+	document.getElementById('subtitle-status').textContent = 'Đang bật: ' + label;
+	document.getElementById('sub-off-btn').hidden = false;
 }
 
 function applyVtt(vttText, label) {
@@ -293,20 +321,28 @@ function clearSubtitle() {
 		try { player.toggleCaptions(false); } catch(e) {}
 	}
 	document.getElementById('subtitle-status').textContent = '';
-	renderSavedSubs();
+	document.getElementById('sub-off-btn').hidden = true;
+	renderSubList();
 }
 
-// --- Saved subtitles ------------------------------------------------------
+// --- Saved subtitles (list) -----------------------------------------------
 
-function renderSavedSubs() {
-	const box = document.getElementById('saved-subs');
-	if (!SAVED_SUBS.length) { box.hidden = true; box.innerHTML = ''; return; }
-	box.hidden = false;
-	box.innerHTML = SAVED_SUBS.map(s => `
-		<span class="saved-chip${s.id === activeSavedId ? ' active' : ''}" onclick="applySavedSubtitle(${s.id})" title="${escHtml(s.name || '')}">
+function renderSubList() {
+	const box = document.getElementById('sub-list');
+	if (!SAVED_SUBS.length) {
+		box.innerHTML = '<span class="sub-empty">Chưa có phụ đề đã lưu cho nội dung này.</span>';
+		return;
+	}
+	box.innerHTML = SAVED_SUBS.map(s => {
+		const meta = [];
+		if (typeof s.download_count === 'number') meta.push('⬇ ' + s.download_count.toLocaleString('vi-VN'));
+		if (s.provider) meta.push(s.provider);
+		return `<div class="sub-row${s.id === activeSavedId ? ' active' : ''}" onclick="applySavedSubtitle(${s.id})">
 			<span class="lang">${escHtml(s.language || '?')}</span>
-			<span>${escHtml(s.name || 'phụ đề')}</span>
-		</span>`).join('');
+			<span class="sub-name" title="${escHtml(s.name || '')}">${escHtml(s.name || 'Phụ đề')}</span>
+			${meta.length ? `<span class="sub-meta">${escHtml(meta.join(' · '))}</span>` : ''}
+		</div>`;
+	}).join('');
 }
 
 async function applySavedSubtitle(id) {
@@ -316,9 +352,9 @@ async function applySavedSubtitle(id) {
 		const res = await fetch(`/api/subtitles/${id}/file`);
 		if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
 		const vtt = await res.text();
-		setSubtitle(vtt, s.name || s.language || 'Phụ đề');
 		activeSavedId = id;
-		renderSavedSubs();
+		setSubtitle(vtt, s.name || s.language || 'Phụ đề');
+		renderSubList();
 	} catch(e) {
 		alert('Không tải được phụ đề đã lưu: ' + e.message);
 	}
@@ -331,8 +367,9 @@ function escHtml(s) {
 // --- Init -----------------------------------------------------------------
 
 (async function init() {
-	renderSourcePicker();
-	renderSavedSubs();
+	renderSourceChips();
+	renderSubList();
+	console.info('phimtor: nhập streamDebug() vào console để xem tiến trình tải & số liệu gỡ lỗi.');
 	if (VIDEOS.length) {
 		await playSource(VIDEOS[0].id); // default = latest added (store orders newest first)
 		if (SAVED_SUBS.length) applySavedSubtitle(SAVED_SUBS[0].id);

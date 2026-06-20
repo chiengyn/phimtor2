@@ -241,9 +241,11 @@ type watchVideo struct {
 
 // watchSubtitle is the browser-facing subset of a Subtitle.
 type watchSubtitle struct {
-	ID       int64  `json:"id"`
-	Language string `json:"language"`
-	Name     string `json:"name"`
+	ID            int64  `json:"id"`
+	Language      string `json:"language"`
+	Name          string `json:"name"`
+	Provider      string `json:"provider"`
+	DownloadCount int    `json:"download_count"`
 }
 
 func toWatchVideos(vs []Video) []watchVideo {
@@ -257,7 +259,13 @@ func toWatchVideos(vs []Video) []watchVideo {
 func toWatchSubtitles(subs []Subtitle) []watchSubtitle {
 	out := make([]watchSubtitle, 0, len(subs))
 	for _, sub := range subs {
-		out = append(out, watchSubtitle{ID: sub.ID, Language: sub.Language, Name: sub.Name})
+		out = append(out, watchSubtitle{
+			ID:            sub.ID,
+			Language:      sub.Language,
+			Name:          sub.Name,
+			Provider:      sub.Provider,
+			DownloadCount: sub.DownloadCount,
+		})
 	}
 	return out
 }
