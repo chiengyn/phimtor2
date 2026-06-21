@@ -1,4 +1,9 @@
 {{define "head_title"}}{{.Heading}} – Xem – phimnet{{end}}
+{{define "head_extra"}}
+<meta name="description" content="Xem {{.Heading}} online tại phimnet.">
+<meta name="robots" content="noindex, follow">
+<link rel="canonical" href="{{abs .BackHref}}">
+{{end}}
 {{define "content"}}
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 <style>

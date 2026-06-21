@@ -12,6 +12,16 @@
 * { box-sizing: border-box; }
 [x-cloak] { display: none !important; }
 
+/* Visually hidden, but available to screen readers and search crawlers — used
+   for the page <h1> on the browse home, whose visual identity is the header. */
+.sr-only {
+	position: absolute;
+	width: 1px; height: 1px;
+	padding: 0; margin: -1px;
+	overflow: hidden; clip: rect(0, 0, 0, 0);
+	white-space: nowrap; border: 0;
+}
+
 body {
 	margin: 0;
 	font-family: "Netflix Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;

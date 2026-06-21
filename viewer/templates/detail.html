@@ -1,4 +1,15 @@
-{{define "head_title"}}{{.Title}} – phimnet{{end}}
+{{define "head_title"}}{{.Title}}{{with year .AirDate}} ({{.}}){{end}} – Xem online phụ đề tiếng Việt – phimnet{{end}}
+{{define "head_extra"}}
+<meta name="description" content="{{if .Overview}}{{truncate 160 .Overview}}{{else}}Xem {{.Title}}{{with year .AirDate}} ({{.}}){{end}} {{if eq .Type "tv"}}phim bộ{{else}}phim lẻ{{end}} online, phụ đề tiếng Việt, chất lượng cao tại phimnet.{{end}}">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="{{abs (printf "/titles/%d" .ID)}}">
+<meta property="og:type" content="video.{{if eq .Type "tv"}}tv_show{{else}}movie{{end}}">
+<meta property="og:title" content="{{.Title}}{{with year .AirDate}} ({{.}}){{end}}">
+{{if .Overview}}<meta property="og:description" content="{{truncate 200 .Overview}}">{{end}}
+<meta property="og:url" content="{{abs (printf "/titles/%d" .ID)}}">
+{{$og := img "w1280" .BackdropPath}}{{if not $og}}{{$og = img "w780" .PosterPath}}{{end}}{{if $og}}<meta property="og:image" content="{{$og}}">{{end}}
+<script type="application/ld+json">{{jsonLD .}}</script>
+{{end}}
 {{define "content"}}
 <article class="detail">
 	{{$bd := img "w1280" .BackdropPath}}

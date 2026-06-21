@@ -10,6 +10,11 @@ import (
 type Config struct {
 	Port int
 
+	// PublicURL is the browser-facing origin of the viewer itself (e.g.
+	// "https://phimnet.online"), used to build absolute canonical / Open Graph
+	// / sitemap URLs for SEO. Empty in local dev → URLs fall back to relative.
+	PublicURL string
+
 	// MySQL connection. DSN, when set, overrides the individual DB_* fields.
 	DSN        string
 	DBHost     string
@@ -39,7 +44,8 @@ type Config struct {
 
 func loadConfig() Config {
 	cfg := Config{
-		Port: envInt("VIEWER_PORT", 8082),
+		Port:      envInt("VIEWER_PORT", 8082),
+		PublicURL: envStr("VIEWER_PUBLIC_URL", ""),
 
 		DSN:        envStr("MYSQL_DSN", ""),
 		DBHost:     envStr("DB_HOST", "127.0.0.1"),
@@ -62,6 +68,7 @@ func loadConfig() Config {
 	}
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
+	flag.StringVar(&cfg.PublicURL, "public-url", cfg.PublicURL, "Browser-facing origin of the viewer (for canonical/OG/sitemap URLs)")
 	flag.StringVar(&cfg.DSN, "dsn", cfg.DSN, "MySQL DSN (overrides DB_* flags when set)")
 	flag.StringVar(&cfg.DBHost, "db-host", cfg.DBHost, "MySQL host")
 	flag.IntVar(&cfg.DBPort, "db-port", cfg.DBPort, "MySQL port")

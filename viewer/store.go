@@ -102,6 +102,40 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]TitleSummary, 
 	return out, rows.Err()
 }
 
+// SitemapEntry is one indexable title for the XML sitemap.
+type SitemapEntry struct {
+	ID        int64
+	UpdatedAt time.Time
+}
+
+// SitemapTitles lists every title with its last-modified time, newest first,
+// for sitemap.xml. Missing timestamps fall back to "now" so the entry is still
+// emitted with a valid <lastmod>.
+func (s *Store) SitemapTitles(ctx context.Context) ([]SitemapEntry, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, updated_at FROM titles ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SitemapEntry
+	for rows.Next() {
+		var e SitemapEntry
+		var updated sql.NullTime
+		if err := rows.Scan(&e.ID, &updated); err != nil {
+			return nil, err
+		}
+		if updated.Valid {
+			e.UpdatedAt = updated.Time
+		} else {
+			e.UpdatedAt = time.Now()
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // Row is a labelled horizontal strip of titles on the browse home page.
 type Row struct {
 	Key    string // query string that re-filters to this row, e.g. "type=movie"

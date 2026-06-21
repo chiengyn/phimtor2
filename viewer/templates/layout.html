@@ -3,7 +3,15 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>{{block "head_title" .}}phimnet{{end}}</title>
+	<title>{{block "head_title" .}}phimnet – Xem phim lẻ, phim bộ online phụ đề tiếng Việt{{end}}</title>
+	<meta name="theme-color" content="#141414">
+	<meta property="og:site_name" content="phimnet">
+	<meta property="og:locale" content="vi_VN">
+	<meta name="twitter:card" content="summary_large_image">
+	{{block "head_extra" .}}
+	<meta name="description" content="phimnet – Xem phim lẻ và phim bộ online miễn phí, phụ đề tiếng Việt, chất lượng cao.">
+	<meta name="robots" content="index, follow">
+	{{end}}
 	<script src="https://unpkg.com/htmx.org@2.0.4"></script>
 	<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 	<link rel="stylesheet" href="/static/style.css">

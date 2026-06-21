@@ -1,5 +1,16 @@
-{{define "head_title"}}phimnet – Khám phá phim{{end}}
+{{define "head_title"}}phimnet – Xem phim lẻ, phim bộ online phụ đề tiếng Việt{{end}}
+{{define "head_extra"}}
+<meta name="description" content="phimnet – Xem phim lẻ và phim bộ online miễn phí, phụ đề tiếng Việt, cập nhật phim mới mỗi ngày.">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="{{abs "/"}}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="phimnet – Xem phim online phụ đề tiếng Việt">
+<meta property="og:description" content="Xem phim lẻ và phim bộ online miễn phí, phụ đề tiếng Việt, cập nhật mỗi ngày.">
+<meta property="og:url" content="{{abs "/"}}">
+<script type="application/ld+json">{{siteJSONLD}}</script>
+{{end}}
 {{define "content"}}
+<h1 class="sr-only">phimnet – Xem phim lẻ và phim bộ online phụ đề tiếng Việt</h1>
 <section class="filters">
 	<input class="search" type="search" name="q" placeholder="Tìm phim..." value="{{.Query}}"
 		hx-get="/titles" hx-target="#results" hx-trigger="input changed delay:300ms, search"

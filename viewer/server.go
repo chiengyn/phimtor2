@@ -31,6 +31,11 @@ type Server struct {
 	streamerPublicURL string
 	streamer          *streamerClient
 	blobs             map[string]BlobStore
+
+	// publicURL is the viewer's own browser-facing origin (no trailing slash),
+	// used to build absolute canonical / Open Graph / sitemap URLs. Empty in
+	// local dev, where SEO URLs fall back to site-relative.
+	publicURL string
 }
 
 func NewServer(store *Store, cfg Config) (*Server, error) {
@@ -43,6 +48,7 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		streamerPublicURL: strings.TrimRight(cfg.StreamerPublicURL, "/"),
 		streamer:          newStreamerClient(cfg.StreamerInternalURL),
 		blobs:             blobs,
+		publicURL:         strings.TrimRight(cfg.PublicURL, "/"),
 	}
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
@@ -55,23 +61,55 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.router.ServeHTTP(w, r)
 }
 
-// funcMap holds the small helpers the templates rely on for TMDB image URLs and
-// date formatting.
-var funcMap = template.FuncMap{
+// baseFuncMap holds the pure (request-independent) helpers the templates rely on
+// for TMDB image URLs and date formatting. SEO helpers that need the configured
+// public origin are added per-server in funcMap.
+var baseFuncMap = template.FuncMap{
 	// img builds a TMDB image URL for a size bucket (e.g. "w342"); empty paths
 	// yield "" so templates can fall back to a placeholder.
-	"img": func(size, path string) string {
-		if path == "" {
-			return ""
-		}
-		return tmdbImageBase + size + path
-	},
+	"img": tmdbImageURL,
 	// year extracts the 4-digit year from a "YYYY-MM-DD" date string.
 	"year": yearOf,
 	// rating formats a vote average to one decimal place.
 	"rating": func(v float64) string {
 		return fmt.Sprintf("%.1f", v)
 	},
+	// truncate shortens text to at most n runes (word-aware), appending an
+	// ellipsis — used to keep meta descriptions within search-snippet length.
+	"truncate": truncate,
+}
+
+// funcMap returns the template helpers for this server: the pure baseFuncMap
+// plus SEO closures (abs / jsonLD / siteJSONLD) that need the public origin.
+func (s *Server) funcMap() template.FuncMap {
+	fm := template.FuncMap{
+		"abs":        s.abs,
+		"jsonLD":     s.titleJSONLD,
+		"siteJSONLD": s.siteJSONLD,
+	}
+	for k, v := range baseFuncMap {
+		fm[k] = v
+	}
+	return fm
+}
+
+// tmdbImageURL builds a TMDB image URL for a size bucket (e.g. "w342"); empty
+// paths yield "" so callers can fall back to a placeholder.
+func tmdbImageURL(size, path string) string {
+	if path == "" {
+		return ""
+	}
+	return tmdbImageBase + size + path
+}
+
+// abs turns a site-relative path into an absolute URL using the configured
+// public origin. With no origin configured (local dev) it returns the path
+// unchanged, which is still valid for a same-document canonical link.
+func (s *Server) abs(path string) string {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return s.publicURL + path
 }
 
 // yearOf extracts the 4-digit year from a "YYYY-MM-DD" date string.
@@ -82,13 +120,28 @@ func yearOf(date string) string {
 	return ""
 }
 
+// truncate shortens s to at most n runes, cutting at the last word boundary and
+// appending an ellipsis. Whitespace is collapsed so multi-line overviews render
+// as a clean single-line description.
+func truncate(n int, s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) <= n {
+		return s
+	}
+	r := []rune(s)[:n]
+	if i := strings.LastIndex(string(r), " "); i > 0 {
+		r = []rune(string(r)[:i])
+	}
+	return strings.TrimRight(string(r), " ,.;:") + "…"
+}
+
 func (s *Server) parseTemplates() error {
 	parse := func(files ...string) (*template.Template, error) {
 		paths := make([]string, len(files))
 		for i, f := range files {
 			paths[i] = "templates/" + f
 		}
-		return template.New("").Funcs(funcMap).ParseFiles(paths...)
+		return template.New("").Funcs(s.funcMap()).ParseFiles(paths...)
 	}
 
 	var err error
@@ -120,6 +173,10 @@ func (s *Server) setupRouter() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
+
+	// Crawler endpoints.
+	r.Get("/robots.txt", s.handleRobots)
+	r.Get("/sitemap.xml", s.handleSitemap)
 
 	r.Get("/", s.handleHome)
 	r.Get("/titles", s.handleTitlesFragment)
@@ -192,8 +249,11 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	s.render(w, s.home, "layout", data)
 }
 
-// handleTitlesFragment returns only the grid of cards, for htmx swaps.
+// handleTitlesFragment returns only the grid of cards, for htmx swaps. It's a
+// layout-less partial, so keep it out of search indexes (the canonical content
+// lives on "/" and the detail pages).
 func (s *Server) handleTitlesFragment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Robots-Tag", "noindex")
 	f := filterFromQuery(r)
 	titles, err := s.store.ListTitles(r.Context(), f)
 	if err != nil {
@@ -447,6 +507,136 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// --- SEO: structured data, robots, sitemap --------------------------------
+
+// baseURL returns the absolute origin to use for crawler output. It prefers the
+// configured public origin and falls back to the request's scheme + host (so
+// robots.txt / sitemap.xml still emit absolute URLs in local dev).
+func (s *Server) baseURL(r *http.Request) string {
+	if s.publicURL != "" {
+		return s.publicURL
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+// titleJSONLD builds schema.org Movie/TVSeries + BreadcrumbList structured data
+// for a detail page. json.Marshal escapes <, >, & by default, so the result is
+// safe to embed directly inside a <script> element.
+func (s *Server) titleJSONLD(t *Title) template.JS {
+	if t == nil {
+		return ""
+	}
+	url := s.abs(fmt.Sprintf("/titles/%d", t.ID))
+
+	work := map[string]any{
+		"@context": "https://schema.org",
+		"@type":    "Movie",
+		"name":     t.Title,
+		"url":      url,
+	}
+	if t.Type == "tv" {
+		work["@type"] = "TVSeries"
+		if n := len(t.Seasons); n > 0 {
+			work["numberOfSeasons"] = n
+		}
+	}
+	if t.OriginalTitle != "" && t.OriginalTitle != t.Title {
+		work["alternateName"] = t.OriginalTitle
+	}
+	if t.Overview != "" {
+		work["description"] = t.Overview
+	}
+	if img := tmdbImageURL("w780", t.PosterPath); img != "" {
+		work["image"] = img
+	}
+	if len(t.AirDate) >= 10 {
+		work["datePublished"] = t.AirDate[:10]
+	}
+	if len(t.Genres) > 0 {
+		gs := make([]string, len(t.Genres))
+		for i, g := range t.Genres {
+			gs[i] = g.Name
+		}
+		work["genre"] = gs
+	}
+	if t.OriginalLanguage != "" {
+		work["inLanguage"] = t.OriginalLanguage
+	}
+	if t.Type != "tv" && t.Runtime != nil && *t.Runtime > 0 {
+		work["duration"] = fmt.Sprintf("PT%dM", *t.Runtime)
+	}
+
+	breadcrumb := map[string]any{
+		"@context": "https://schema.org",
+		"@type":    "BreadcrumbList",
+		"itemListElement": []any{
+			map[string]any{"@type": "ListItem", "position": 1, "name": "Trang chủ", "item": s.abs("/")},
+			map[string]any{"@type": "ListItem", "position": 2, "name": t.Title, "item": url},
+		},
+	}
+
+	b, err := json.Marshal([]any{work, breadcrumb})
+	if err != nil {
+		return ""
+	}
+	return template.JS(b)
+}
+
+// siteJSONLD builds the site-wide WebSite structured data, including a
+// SearchAction so search engines can offer a sitelinks search box.
+func (s *Server) siteJSONLD() template.JS {
+	site := map[string]any{
+		"@context": "https://schema.org",
+		"@type":    "WebSite",
+		"name":     "phimnet",
+		"url":      s.abs("/"),
+		"potentialAction": map[string]any{
+			"@type":       "SearchAction",
+			"target":      s.abs("/?q={search_term_string}"),
+			"query-input": "required name=search_term_string",
+		},
+	}
+	b, err := json.Marshal(site)
+	if err != nil {
+		return ""
+	}
+	return template.JS(b)
+}
+
+func (s *Server) handleRobots(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: %s/sitemap.xml\n", s.baseURL(r))
+}
+
+// handleSitemap emits an XML sitemap of the home page plus every title detail
+// page, with each title's last-modified date so crawlers can prioritise updates.
+func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
+	entries, err := s.store.SitemapTitles(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	base := s.baseURL(r)
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` + "\n")
+	b.WriteString("  <url><loc>" + base + "/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>\n")
+	for _, e := range entries {
+		b.WriteString(fmt.Sprintf(
+			"  <url><loc>%s/titles/%d</loc><lastmod>%s</lastmod><changefreq>weekly</changefreq></url>\n",
+			base, e.ID, e.UpdatedAt.Format("2006-01-02")))
+	}
+	b.WriteString("</urlset>\n")
+
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	_, _ = w.Write([]byte(b.String()))
 }
 
 func (s *Server) renderNotFound(w http.ResponseWriter) {
