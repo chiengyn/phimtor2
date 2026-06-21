@@ -118,6 +118,26 @@ main { max-width: 1400px; margin: 0 auto; padding: 8px 4% 48px; }
 .card-meta { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
 .empty { color: var(--muted); grid-column: 1 / -1; padding: 40px 0; text-align: center; }
 
+/* Pagination controls under the discovery grid. */
+.pager {
+	display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+	align-items: center; margin: 28px 0 8px;
+}
+.pager-btn, .pager-num {
+	font: inherit; cursor: pointer; min-width: 38px; padding: 8px 12px;
+	border-radius: var(--radius); border: 1px solid var(--surface-2);
+	background: var(--surface); color: inherit; text-align: center;
+}
+.pager-btn:hover, .pager-num:hover { background: var(--surface-2); }
+.pager-num.current {
+	background: var(--accent); border-color: var(--accent);
+	color: #fff; font-weight: 700; cursor: default;
+}
+.pager-btn.disabled {
+	opacity: 0.4; cursor: default; pointer-events: none;
+}
+.pager-gap { color: var(--muted); padding: 0 4px; }
+
 /* --- Browse rows (Netflix-style carousels) --- */
 .row { margin-bottom: 34px; }
 .row-title {

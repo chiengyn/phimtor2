@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -194,6 +195,9 @@ func (s *Server) setupRouter() {
 	s.router = r
 }
 
+// gridPageSize is how many title cards one discovery-grid page holds.
+const gridPageSize = 36
+
 // filterFromQuery reads the discovery filter from the request query params.
 func filterFromQuery(r *http.Request) TitleFilter {
 	f := TitleFilter{
@@ -208,9 +212,151 @@ func filterFromQuery(r *http.Request) TitleFilter {
 	return f
 }
 
+// pageFromQuery reads the 1-based page number; anything missing or < 1 is page 1.
+func pageFromQuery(r *http.Request) int {
+	if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 1 {
+		return p
+	}
+	return 1
+}
+
+// gridPage is one page of discovery-grid cards plus its pagination controls.
+type gridPage struct {
+	Titles []TitleSummary
+	Pager  pager
+}
+
+// gridFilterURL builds the /titles fragment URL for a given page, preserving the
+// active filter so paging keeps the same results.
+func gridFilterURL(f TitleFilter, page int) template.URL {
+	v := url.Values{}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		v.Set("q", q)
+	}
+	if f.GenreID > 0 {
+		v.Set("genre", strconv.Itoa(f.GenreID))
+	}
+	if f.Type == "movie" || f.Type == "tv" {
+		v.Set("type", f.Type)
+	}
+	v.Set("page", strconv.Itoa(page))
+	return template.URL("/titles?" + v.Encode())
+}
+
+// loadGridPage fetches one page of filtered titles (clamping the requested page
+// to the valid range) and builds its pagination controls.
+func (s *Server) loadGridPage(r *http.Request, f TitleFilter, page int) (gridPage, error) {
+	total, err := s.store.CountTitles(r.Context(), f)
+	if err != nil {
+		return gridPage{}, err
+	}
+	pages := totalPages(total, gridPageSize)
+	page = clampPage(page, pages)
+	titles, err := s.store.ListTitles(r.Context(), f, gridPageSize, (page-1)*gridPageSize)
+	if err != nil {
+		return gridPage{}, err
+	}
+	return gridPage{
+		Titles: titles,
+		Pager:  buildPager(page, pages, func(n int) template.URL { return gridFilterURL(f, n) }),
+	}, nil
+}
+
+// --- Pagination ------------------------------------------------------------
+
+// pager is the set of numbered page controls rendered under a paginated list.
+// PrevURL/NextURL are empty at the respective ends. Links is the windowed run of
+// page numbers (a Gap entry marks an elided "…" stretch).
+type pager struct {
+	Page    int
+	Pages   int
+	PrevURL template.URL
+	NextURL template.URL
+	Links   []pagerLink
+}
+
+type pagerLink struct {
+	Num     int
+	URL     template.URL
+	Current bool
+	Gap     bool // an ellipsis placeholder, not a real page
+}
+
+// Show reports whether the pager is worth rendering (more than one page).
+func (p pager) Show() bool { return p.Pages > 1 }
+
+func totalPages(total, size int) int {
+	pages := (total + size - 1) / size
+	if pages < 1 {
+		return 1
+	}
+	return pages
+}
+
+func clampPage(page, pages int) int {
+	if page < 1 {
+		return 1
+	}
+	if page > pages {
+		return pages
+	}
+	return page
+}
+
+// pageWindow lists the page numbers to show around the current page, always
+// including the first and last; a 0 marks an elided gap between runs.
+func pageWindow(page, pages int) []int {
+	const span = 2 // pages shown on each side of the current one
+	keep := map[int]bool{1: true, pages: true, page: true}
+	for i := 1; i <= span; i++ {
+		if page-i >= 1 {
+			keep[page-i] = true
+		}
+		if page+i <= pages {
+			keep[page+i] = true
+		}
+	}
+	var out []int
+	prev := 0
+	for n := 1; n <= pages; n++ {
+		if !keep[n] {
+			continue
+		}
+		if prev != 0 && n-prev > 1 {
+			out = append(out, 0) // gap
+		}
+		out = append(out, n)
+		prev = n
+	}
+	return out
+}
+
+// buildPager assembles the pager for the current page, using urlFor to build the
+// link for each page number.
+func buildPager(page, pages int, urlFor func(int) template.URL) pager {
+	p := pager{Page: page, Pages: pages}
+	if pages <= 1 {
+		return p
+	}
+	if page > 1 {
+		p.PrevURL = urlFor(page - 1)
+	}
+	if page < pages {
+		p.NextURL = urlFor(page + 1)
+	}
+	for _, n := range pageWindow(page, pages) {
+		if n == 0 {
+			p.Links = append(p.Links, pagerLink{Gap: true})
+			continue
+		}
+		p.Links = append(p.Links, pagerLink{Num: n, URL: urlFor(n), Current: n == page})
+	}
+	return p
+}
+
 type homeData struct {
-	Rows     []Row          // browse view (no active filter)
-	Titles   []TitleSummary // flat results (filter active)
+	Rows     []Row    // browse view (no active filter)
+	Grid     gridPage // flat results (filter active)
 	Genres   []Genre
 	Query    string
 	GenreID  int
@@ -236,7 +382,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if data.Filtered {
-		if data.Titles, err = s.store.ListTitles(r.Context(), f); err != nil {
+		if data.Grid, err = s.loadGridPage(r, f, pageFromQuery(r)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -255,12 +401,12 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTitlesFragment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Robots-Tag", "noindex")
 	f := filterFromQuery(r)
-	titles, err := s.store.ListTitles(r.Context(), f)
+	gp, err := s.loadGridPage(r, f, pageFromQuery(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.render(w, s.grid, "grid", titles)
+	s.render(w, s.grid, "grid", gp)
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {

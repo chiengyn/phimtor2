@@ -62,7 +62,9 @@ Flat single `main` package.
 - **Routes** (`server.go` `setupRouter`):
   - `GET /` — home. With an active filter (`q`/`genre`/`type`) it renders a flat
     **grid**; otherwise Netflix-style **rows**.
-  - `GET /titles` — the grid **fragment only**, for htmx swaps as filters change.
+  - `GET /titles?...&page=N` — the grid **fragment only** (cards + numbered
+    pager), for htmx swaps as filters change or the page changes; swapped into
+    `#results`. `page` is 1-based and clamped to the valid range server-side.
   - `GET /titles/{id}` — full detail page (genres, and for TV its seasons/episodes).
   - `GET /watch/movie/{id}` and `GET /watch/episode/{id}` — the watch page.
   - `POST /api/sources/{videoID}/prepare` — viewer-mediated playback (see below).
@@ -101,11 +103,15 @@ Flat single `main` package.
   a separate copy from admin's (no shared package).
 
 - **Store** (`store.go`): read-only `database/sql` queries.
-  - `ListTitles(filter)` — discovery list with optional free-text title `LIKE`,
-    genre, and type constraints, newest first.
+  - `ListTitles(filter, limit, offset)` — one **page** of the discovery list
+    (optional free-text title `LIKE`, genre, and type constraints), newest first.
+    `CountTitles(filter)` returns the total for the same filter so the grid can
+    render a numbered pager; both share `titleFilterClause` so the page and the
+    count always agree.
   - `ListRows` — the browse home: loads every title once, then buckets into rows
     (movies, then TV, then one row per genre), keeping each row newest-first with a
-    single pass over the title order. Empty rows are omitted.
+    single pass over the title order. Empty rows are omitted; each row is capped at
+    `rowLimit` (the carousel's heading links to the paginated grid for the rest).
   - `ListGenres` — only genres attached to at least one title (filter dropdown).
   - `GetTitle` — full title with genres and (TV) seasons+episodes; `(nil, nil)` on
     miss.

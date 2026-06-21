@@ -1,9 +1,18 @@
+{{/* list: one page of catalogue cards followed by numbered page controls.
+     Swapped into #list both on first paint / titlesChanged reload and on page
+     navigation (the pager buttons target #list). */}}
 {{ define "list" }}
-  {{- if . -}}
-    {{- range . }}{{ template "card" . }}{{ end -}}
-  {{- else -}}
-    <p class="muted">Chưa có gì.</p>
-  {{- end -}}
+  {{- range .Titles }}{{ template "card" . }}{{ else }}<p class="muted">Chưa có gì.</p>{{ end -}}
+  {{- with .Pager }}{{ if .Show }}{{ template "pager" . }}{{ end }}{{ end -}}
+{{ end }}
+
+{{/* pager: numbered page controls; each button htmx-swaps the page into #list. */}}
+{{ define "pager" }}
+<nav class="pager" aria-label="Phân trang">
+  {{ if .PrevURL }}<button type="button" class="pager-btn" hx-get="{{ .PrevURL }}" hx-target="#list" hx-swap="innerHTML">‹ Trước</button>{{ else }}<span class="pager-btn disabled">‹ Trước</span>{{ end }}
+  {{ range .Links }}{{ if .Gap }}<span class="pager-gap">…</span>{{ else if .Current }}<span class="pager-num current" aria-current="page">{{ .Num }}</span>{{ else }}<button type="button" class="pager-num" hx-get="{{ .URL }}" hx-target="#list" hx-swap="innerHTML">{{ .Num }}</button>{{ end }}{{ end }}
+  {{ if .NextURL }}<button type="button" class="pager-btn" hx-get="{{ .NextURL }}" hx-target="#list" hx-swap="innerHTML">Sau ›</button>{{ else }}<span class="pager-btn disabled">Sau ›</span>{{ end }}
+</nav>
 {{ end }}
 
 {{ define "card" }}

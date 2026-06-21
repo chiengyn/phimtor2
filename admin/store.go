@@ -234,10 +234,20 @@ type TitleSummary struct {
 	PosterPath string `json:"poster_path"`
 }
 
-func (s *Store) ListTitles(ctx context.Context) ([]TitleSummary, error) {
+// CountTitles returns the total number of titles, for computing the number of
+// catalogue-list pages.
+func (s *Store) CountTitles(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM titles`).Scan(&n)
+	return n, err
+}
+
+// ListTitles returns one page of title summaries, newest first; offset skips
+// earlier pages.
+func (s *Store) ListTitles(ctx context.Context, limit, offset int) ([]TitleSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tmdb_id, type, title, air_date, poster_path
-		FROM titles ORDER BY updated_at DESC`)
+		FROM titles ORDER BY updated_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}

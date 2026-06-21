@@ -29,5 +29,5 @@
 		<option value="tv" {{if eq .Type "tv"}}selected{{end}}>Phim bộ</option>
 	</select>
 </section>
-<div id="results">{{if .Filtered}}{{template "grid" .Titles}}{{else}}{{template "rows" .Rows}}{{end}}</div>
+<div id="results">{{if .Filtered}}{{template "grid" .Grid}}{{else}}{{template "rows" .Rows}}{{end}}</div>
 {{end}}

@@ -60,8 +60,10 @@ type TitleFilter struct {
 	Type    string // "movie" | "tv"; anything else = any
 }
 
-// ListTitles returns title summaries matching the filter, newest first.
-func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]TitleSummary, error) {
+// titleFilterClause builds the shared WHERE clause (and its args) for the
+// discovery filter, used by both ListTitles and CountTitles so the page of rows
+// and the total count always agree. It returns "" when the filter is empty.
+func titleFilterClause(f TitleFilter) (string, []any) {
 	var where []string
 	var args []any
 
@@ -77,12 +79,28 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]TitleSummary, 
 		where = append(where, "type = ?")
 		args = append(args, f.Type)
 	}
-
-	query := `SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average FROM titles`
-	if len(where) > 0 {
-		query += " WHERE " + strings.Join(where, " AND ")
+	if len(where) == 0 {
+		return "", nil
 	}
-	query += " ORDER BY updated_at DESC"
+	return " WHERE " + strings.Join(where, " AND "), args
+}
+
+// CountTitles returns how many titles match the filter, for computing the total
+// number of discovery-grid pages.
+func (s *Store) CountTitles(ctx context.Context, f TitleFilter) (int, error) {
+	clause, args := titleFilterClause(f)
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM titles`+clause, args...).Scan(&n)
+	return n, err
+}
+
+// ListTitles returns one page of title summaries matching the filter, newest
+// first; offset skips earlier pages.
+func (s *Store) ListTitles(ctx context.Context, f TitleFilter, limit, offset int) ([]TitleSummary, error) {
+	clause, args := titleFilterClause(f)
+	query := `SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average FROM titles` +
+		clause + " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -141,6 +159,11 @@ func (s *Store) SitemapTitles(ctx context.Context) ([]SitemapEntry, error) {
 	}
 	return out, rows.Err()
 }
+
+// rowLimit caps how many titles each browse row carries. Rows are horizontal
+// carousels, so there is no point loading the whole catalog into one; the row
+// heading links to the filtered grid (which paginates) for the full list.
+const rowLimit = 24
 
 // Row is a labelled horizontal strip of titles on the browse home page.
 type Row struct {
@@ -237,17 +260,25 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 
 	var out []Row
 	if len(movies) > 0 {
-		out = append(out, Row{Key: "type=movie", Label: "Phim lẻ", Titles: movies})
+		out = append(out, Row{Key: "type=movie", Label: "Phim lẻ", Titles: capRow(movies)})
 	}
 	if len(tv) > 0 {
-		out = append(out, Row{Key: "type=tv", Label: "Phim bộ", Titles: tv})
+		out = append(out, Row{Key: "type=tv", Label: "Phim bộ", Titles: capRow(tv)})
 	}
 	for _, gid := range genreOrder {
 		if ts := genreTitles[gid]; len(ts) > 0 {
-			out = append(out, Row{Key: fmt.Sprintf("genre=%d", gid), Label: genreName[gid], Titles: ts})
+			out = append(out, Row{Key: fmt.Sprintf("genre=%d", gid), Label: genreName[gid], Titles: capRow(ts)})
 		}
 	}
 	return out, nil
+}
+
+// capRow trims a row's titles to rowLimit (carousels never show more).
+func capRow(ts []TitleSummary) []TitleSummary {
+	if len(ts) > rowLimit {
+		return ts[:rowLimit]
+	}
+	return ts
 }
 
 // ListGenres returns only the genres actually attached to at least one title,

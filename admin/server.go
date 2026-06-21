@@ -180,16 +180,146 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 	})
 }
 
+// adminPageSize is how many title cards one catalogue-list page holds.
+const adminPageSize = 24
+
+// titleListPage is one page of catalogue cards plus its pagination controls.
+type titleListPage struct {
+	Titles []TitleSummary
+	Pager  pager
+}
+
+// loadTitleListPage fetches one page of titles (clamping the requested page to
+// the valid range) and builds its pagination controls.
+func (s *Server) loadTitleListPage(ctx context.Context, page int) (titleListPage, error) {
+	total, err := s.store.CountTitles(ctx)
+	if err != nil {
+		return titleListPage{}, err
+	}
+	pages := totalPages(total, adminPageSize)
+	page = clampPage(page, pages)
+	titles, err := s.store.ListTitles(ctx, adminPageSize, (page-1)*adminPageSize)
+	if err != nil {
+		return titleListPage{}, err
+	}
+	return titleListPage{
+		Titles: titles,
+		Pager: buildPager(page, pages, func(n int) template.URL {
+			return template.URL(fmt.Sprintf("/api/titles?page=%d", n))
+		}),
+	}, nil
+}
+
 // handleIndex renders the full admin page with the current catalog so the list
 // is present on first paint (htmx refreshes it afterwards via the
 // "titlesChanged" event).
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	titles, err := s.store.ListTitles(r.Context())
+	list, err := s.loadTitleListPage(r.Context(), pageFromQuery(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, "index.html", map[string]any{"Titles": titles})
+	render(w, "index.html", map[string]any{"List": list})
+}
+
+// --- Pagination ------------------------------------------------------------
+
+// pager is the set of numbered page controls rendered under a paginated list.
+// PrevURL/NextURL are empty at the respective ends; Links is the windowed run of
+// page numbers (a Gap entry marks an elided "…" stretch).
+type pager struct {
+	Page    int
+	Pages   int
+	PrevURL template.URL
+	NextURL template.URL
+	Links   []pagerLink
+}
+
+type pagerLink struct {
+	Num     int
+	URL     template.URL
+	Current bool
+	Gap     bool // an ellipsis placeholder, not a real page
+}
+
+// Show reports whether the pager is worth rendering (more than one page).
+func (p pager) Show() bool { return p.Pages > 1 }
+
+// pageFromQuery reads the 1-based page number; anything missing or < 1 is page 1.
+func pageFromQuery(r *http.Request) int {
+	if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 1 {
+		return p
+	}
+	return 1
+}
+
+func totalPages(total, size int) int {
+	pages := (total + size - 1) / size
+	if pages < 1 {
+		return 1
+	}
+	return pages
+}
+
+func clampPage(page, pages int) int {
+	if page < 1 {
+		return 1
+	}
+	if page > pages {
+		return pages
+	}
+	return page
+}
+
+// pageWindow lists the page numbers to show around the current page, always
+// including the first and last; a 0 marks an elided gap between runs.
+func pageWindow(page, pages int) []int {
+	const span = 2 // pages shown on each side of the current one
+	keep := map[int]bool{1: true, pages: true, page: true}
+	for i := 1; i <= span; i++ {
+		if page-i >= 1 {
+			keep[page-i] = true
+		}
+		if page+i <= pages {
+			keep[page+i] = true
+		}
+	}
+	var out []int
+	prev := 0
+	for n := 1; n <= pages; n++ {
+		if !keep[n] {
+			continue
+		}
+		if prev != 0 && n-prev > 1 {
+			out = append(out, 0) // gap
+		}
+		out = append(out, n)
+		prev = n
+	}
+	return out
+}
+
+// buildPager assembles the pager for the current page, using urlFor to build the
+// link for each page number.
+func buildPager(page, pages int, urlFor func(int) template.URL) pager {
+	p := pager{Page: page, Pages: pages}
+	if pages <= 1 {
+		return p
+	}
+	if page > 1 {
+		p.PrevURL = urlFor(page - 1)
+	}
+	if page < pages {
+		p.NextURL = urlFor(page + 1)
+	}
+	for _, n := range pageWindow(page, pages) {
+		if n == 0 {
+			p.Links = append(p.Links, pagerLink{Gap: true})
+			continue
+		}
+		p.Links = append(p.Links, pagerLink{Num: n, URL: urlFor(n), Current: n == page})
+	}
+	return p
 }
 
 // handleImport reads the form-encoded request from the htmx form, imports the
@@ -377,14 +507,15 @@ func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) 
 	_, _ = w.Write(data)
 }
 
-// handleListTitles renders the titles list fragment for htmx to swap into #list.
+// handleListTitles renders the titles list fragment (cards + pager) for htmx to
+// swap into #list, both for the titlesChanged reload and for page navigation.
 func (s *Server) handleListTitles(w http.ResponseWriter, r *http.Request) {
-	titles, err := s.store.ListTitles(r.Context())
+	list, err := s.loadTitleListPage(r.Context(), pageFromQuery(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, "list", titles)
+	render(w, "list", list)
 }
 
 func (s *Server) handleGetTitle(w http.ResponseWriter, r *http.Request) {
