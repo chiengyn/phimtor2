@@ -1,6 +1,14 @@
 {{define "layout"}}<!DOCTYPE html>
 <html lang="vi">
 <head>
+	<!-- Google tag (gtag.js) -->
+	<script async src="https://www.googletagmanager.com/gtag/js?id=G-ZV02QSY5PE"></script>
+	<script>
+		window.dataLayer = window.dataLayer || [];
+		function gtag(){dataLayer.push(arguments);}
+		gtag('js', new Date());
+		gtag('config', 'G-ZV02QSY5PE');
+	</script>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>{{block "head_title" .}}phimnet – Xem phim lẻ, phim bộ online phụ đề tiếng Việt{{end}}</title>
