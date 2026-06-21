@@ -1,6 +1,6 @@
 {{define "rows"}}{{range .}}
 <section class="row">
-	<h2 class="row-title"><a href="/?{{.Key}}">{{.Label}} <span class="row-chevron">›</span></a></h2>
+	<h2 class="row-title"><a href="{{.Href}}">{{.Label}} <span class="row-chevron">›</span></a></h2>
 	<div class="row-track">
 		{{range .Titles}}{{template "card" .}}{{end}}
 	</div>

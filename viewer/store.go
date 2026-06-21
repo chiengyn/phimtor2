@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"strings"
 	"time"
 
@@ -146,6 +147,13 @@ type Row struct {
 	Key    string // query string that re-filters to this row, e.g. "type=movie"
 	Label  string
 	Titles []TitleSummary
+}
+
+// Href is the browse link for this row. It returns a template.URL so
+// html/template does not query-escape the "=" in Key (which would turn
+// "/?type=movie" into "/?type%3dmovie" and break the filter).
+func (r Row) Href() template.URL {
+	return template.URL("/?" + r.Key)
 }
 
 // ListRows groups every title into Netflix-style browse rows: one row per type
