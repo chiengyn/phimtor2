@@ -37,6 +37,11 @@ jobs:
           # Mirrors the image names in the Kamal configs:
           #   ghcr.io/<owner>/phimtor2-admin | -viewer | -streamer
           images: ghcr.io/${{ github.repository_owner }}/phimtor2-${{ matrix.service }}
+          # Kamal verifies this label on pull (docker inspect .Config.Labels.service)
+          # and refuses to run an image without it. Kamal adds it when IT builds, so
+          # CI-built images must set it explicitly to be deployable with --skip-push.
+          labels: |
+            service=phimtor2-${{ matrix.service }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}

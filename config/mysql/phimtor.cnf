@@ -1,6 +1,14 @@
-# MySQL config for the Kamal "mysql" accessory — mounted at
-# /etc/mysql/conf.d/phimtor.cnf. Matches the utf8mb4 settings the compose stack
-# uses so Vietnamese text round-trips.
+# MariaDB config for the Kamal "mysql" accessory — mounted at
+# /etc/mysql/conf.d/phimtor.cnf. Keeps the utf8mb4 settings the app needs so
+# Vietnamese text round-trips, plus low-memory tuning for the small 1 GB host.
 [mysqld]
 character-set-server = utf8mb4
 collation-server     = utf8mb4_unicode_ci
+
+# --- low-memory tuning (1 GB host) ---
+# Shrink the InnoDB buffer pool (default 128M) — the catalog is small.
+innodb_buffer_pool_size = 64M
+# performance_schema can cost 100s of MB of RAM; off for a tiny box.
+performance_schema      = OFF
+# Cap connections — only admin + viewer connect.
+max_connections         = 50

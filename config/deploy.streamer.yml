@@ -47,7 +47,7 @@ env:
     READAHEAD_MB: 16
     STORAGE_MODE: prefix-cache
     PREFIX_MB: 32
-    CACHE_MB: 2048
+    CACHE_MB: 512
 
 # Torrent cache (prefix tier persisted, cache tier wiped on startup).
 volumes:

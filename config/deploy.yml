@@ -77,10 +77,13 @@ env:
 volumes:
   - "phimtor2_subtitles:/data"
 
-# Shared MySQL 8, managed by Kamal as an accessory on this host.
+# Shared MariaDB (LTS), managed by Kamal as an accessory on this host.
+# MariaDB is a lighter, wire-compatible drop-in for MySQL 8 (same go-sql-driver,
+# same MYSQL_* env vars, same utf8mb4 .cnf) — chosen for the small 1 GB host.
+# The accessory key stays "mysql" so DB_HOST (phimtor2-admin-mysql) is unchanged.
 accessories:
   mysql:
-    image: mysql:8
+    image: mariadb:11.4
     host: <%= ENV["SERVER_IP"] %>
     # Attach to Kamal's shared app network so admin/viewer resolve it by name.
     options:
