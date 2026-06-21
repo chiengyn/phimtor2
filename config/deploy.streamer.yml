@@ -26,13 +26,15 @@ proxy:
   app_port: 8080
   healthcheck:
     path: /up
-  # Streaming serves large, long-lived ranged responses. kamal-proxy streams
-  # responses by default; if you hit cut-offs on long downloads, raise the
-  # response timeout (default 30s):
-  #   response_timeout: 300
-  # and on recent Kamal you can also disable buffering:
-  #   buffering:
-  #     responses: false
+  # Streaming serves large, long-lived ranged responses. kamal-proxy BUFFERS both
+  # requests and responses by default, which is fatal here: a browser <video>
+  # asks for an open-ended range (bytes=0- => the rest of a multi-GB file), so the
+  # proxy tries to buffer the whole file before sending a single byte and the
+  # player just hangs. Disable response buffering so the proxy streams, and raise
+  # the response (target) timeout from the 30s default for long playback sessions.
+  response_timeout: 3600
+  buffering:
+    responses: false
 
 registry:
   server: ghcr.io
