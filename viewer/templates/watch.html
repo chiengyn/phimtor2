@@ -43,8 +43,11 @@
 	}
 	.chip:hover { border-color: var(--muted); }
 	.chip.active { border-color: var(--accent); background: rgba(229,9,20,0.18); }
+	.chip.locked { cursor: not-allowed; opacity: 0.55; }
+	.chip.locked:hover { border-color: #3a3a3a; }
 	.chip .badge { font-weight: 700; font-size: 0.72rem; color: var(--accent); }
 	.chip .chip-sub { color: var(--muted); }
+	.chip .chip-lock { color: var(--muted); font-size: 0.72rem; }
 
 	/* Subtitle list. */
 	.sub-section { margin-top: 22px; }
@@ -249,6 +252,14 @@ function renderSourceChips() {
 	const box = document.getElementById('source-chips');
 	box.innerHTML = VIDEOS.map(v => {
 		const sub = videoLabel(v);
+		// 4K sources are reserved for paid users for now: shown but not playable.
+		if (v.available === false) {
+			return `<span class="chip locked" title="Sắp ra mắt cho người dùng trả phí">
+				<span class="badge">${escHtml(v.resolution || 'SD')}</span>
+				${sub ? `<span class="chip-sub">${escHtml(sub)}</span>` : ''}
+				<span class="chip-lock">🔒 Sắp ra mắt</span>
+			</span>`;
+		}
 		return `<span class="chip${v.id === activeVideoID ? ' active' : ''}" onclick="playSource(${v.id})">
 			<span class="badge">${escHtml(v.resolution || 'SD')}</span>
 			${sub ? `<span class="chip-sub">${escHtml(sub)}</span>` : ''}
@@ -260,6 +271,8 @@ function renderSourceChips() {
 // browser never adds directly), then streams the returned file.
 async function playSource(videoID) {
 	if (videoID === activeVideoID && player) return;
+	const v = VIDEOS.find(x => x.id === videoID);
+	if (v && v.available === false) return; // gated source — not playable yet
 	setStatus('Đang chuẩn bị nguồn phát…');
 	document.getElementById('progress-text').textContent = 'Đang chuẩn bị…';
 	let data;
@@ -566,9 +579,14 @@ function resetSubStyle() {
 	renderSourceChips();
 	renderSubList();
 	console.info('phimnet: nhập streamDebug() vào console để xem tiến trình tải & số liệu gỡ lỗi.');
-	if (VIDEOS.length) {
-		await playSource(VIDEOS[0].id); // default = latest added (store orders newest first)
+	// Default = latest added playable source. The store orders newest first, so
+	// the first available (non-gated, e.g. 1080p) entry is the latest 1080p.
+	const defaultVideo = VIDEOS.find(v => v.available !== false);
+	if (defaultVideo) {
+		await playSource(defaultVideo.id);
 		if (SAVED_SUBS.length) applySavedSubtitle(SAVED_SUBS[0].id);
+	} else if (VIDEOS.length) {
+		setStatus('Các nguồn 4K hiện chưa khả dụng.', true);
 	}
 })();
 </script>

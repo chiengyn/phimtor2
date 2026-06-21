@@ -458,13 +458,26 @@ type watchData struct {
 	HasVideo      bool
 }
 
+// lockedResolutions are video qualities currently reserved for future paid
+// users: the viewer still lists them (so users can see the source exists) but
+// refuses to play them. 4K (2160p) is gated for now — remove the entry here to
+// re-enable playback. resolutionAvailable is the single source of truth used by
+// both the watch page (chip + default selection) and the prepare endpoint.
+var lockedResolutions = map[string]bool{"2160p": true}
+
+func resolutionAvailable(res string) bool {
+	return !lockedResolutions[res]
+}
+
 // watchVideo is the browser-facing subset of a Video (no magnet — the viewer
-// adds it to the streamer server-side).
+// adds it to the streamer server-side). Available is false for sources gated
+// behind lockedResolutions, so the browser can show but not play them.
 type watchVideo struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	Resolution string `json:"resolution"`
 	FileSize   int64  `json:"file_size"`
+	Available  bool   `json:"available"`
 }
 
 // watchSubtitle is the browser-facing subset of a Subtitle.
@@ -479,7 +492,7 @@ type watchSubtitle struct {
 func toWatchVideos(vs []Video) []watchVideo {
 	out := make([]watchVideo, 0, len(vs))
 	for _, v := range vs {
-		out = append(out, watchVideo{ID: v.ID, Name: v.Name, Resolution: v.Resolution, FileSize: v.FileSize})
+		out = append(out, watchVideo{ID: v.ID, Name: v.Name, Resolution: v.Resolution, FileSize: v.FileSize, Available: resolutionAvailable(v.Resolution)})
 	}
 	return out
 }
@@ -604,6 +617,10 @@ func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if video == nil {
 		writeJSONError(w, http.StatusNotFound, "video not found")
+		return
+	}
+	if !resolutionAvailable(video.Resolution) {
+		writeJSONError(w, http.StatusForbidden, "nguồn này hiện không khả dụng")
 		return
 	}
 	infoHash, err := s.streamer.addTorrent(r.Context(), video.Magnet)
