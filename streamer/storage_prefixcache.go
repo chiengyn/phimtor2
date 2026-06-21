@@ -3,14 +3,18 @@ package main
 import (
 	"container/list"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	"go.etcd.io/bbolt"
 )
 
 // prefixCacheStorage is a two-tier storage backend.
@@ -56,19 +60,34 @@ func newPrefixCacheStorage(cfg StorageConfig) (storage.ClientImplCloser, error) 
 	prefixDir := filepath.Join(cfg.DataDir, "prefix")
 	cacheDir := filepath.Join(cfg.DataDir, "cache")
 
-	// The cache tier is ephemeral; start each run with an empty cache.
-	if err := os.RemoveAll(cacheDir); err != nil {
-		return nil, fmt.Errorf("clear cache dir: %w", err)
-	}
-	for _, d := range []string{prefixDir, cacheDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return nil, fmt.Errorf("create storage dir %s: %w", d, err)
-		}
+	if err := os.MkdirAll(prefixDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create storage dir %s: %w", prefixDir, err)
 	}
 
+	// Open the persistent prefix completion DB first. Bolt takes an exclusive file
+	// lock on it, so this is what enforces a single streamer instance per data
+	// directory. Acquiring it BEFORE wiping the cache is deliberate: if another
+	// instance is still running (e.g. an overlapping deploy), we fail fast and
+	// safely here instead of racing its cache writes during the wipe below — that
+	// race surfaced as "clear cache dir: ... directory not empty".
 	prefixCompletion, err := storage.NewBoltPieceCompletion(prefixDir)
 	if err != nil {
+		if errors.Is(err, bbolt.ErrTimeout) {
+			return nil, fmt.Errorf("open prefix completion: another streamer instance is already using %q (its prefix lock is held) — stop that container before starting a new one: %w", cfg.DataDir, err)
+		}
 		return nil, fmt.Errorf("open prefix completion: %w", err)
+	}
+
+	// The cache tier is ephemeral; start each run with an empty cache. We hold the
+	// prefix lock now, so no sibling is concurrently writing here; the short retry
+	// only rides out a just-exited sibling still flushing files (transient ENOTEMPTY).
+	if err := removeAllWithRetry(cacheDir); err != nil {
+		prefixCompletion.Close()
+		return nil, fmt.Errorf("clear cache dir: %w", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		prefixCompletion.Close()
+		return nil, fmt.Errorf("create storage dir %s: %w", cacheDir, err)
 	}
 
 	s := &prefixCacheStorage{
@@ -91,6 +110,22 @@ func newPrefixCacheStorage(cfg StorageConfig) (storage.ClientImplCloser, error) 
 		return s.cacheCap + s.prefixResident, true
 	}
 	return s, nil
+}
+
+// removeAllWithRetry deletes dir and everything under it, retrying briefly on
+// "directory not empty". os.RemoveAll is already recursive, but it can return
+// ENOTEMPTY if files appear under a subdirectory while it is being emptied (e.g.
+// a sibling process flushing blobs as it shuts down). A few short retries ride
+// that out without masking a genuine, persistent failure.
+func removeAllWithRetry(dir string) error {
+	var err error
+	for i := 0; i < 5; i++ {
+		if err = os.RemoveAll(dir); err == nil || !errors.Is(err, syscall.ENOTEMPTY) {
+			return err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return err
 }
 
 func (s *prefixCacheStorage) Close() error {
