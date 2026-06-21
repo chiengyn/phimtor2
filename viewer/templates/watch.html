@@ -103,6 +103,20 @@
 		border-radius: var(--radius); padding: 7px 10px; font-size: 0.85rem;
 	}
 	.sub-style-actions { margin-top: 14px; }
+
+	/* --- Responsive (phones) --- */
+	@media (max-width: 600px) {
+		.watch .plyr video { max-height: 56vh; }
+		.watch-meta-top h1 { font-size: 1.4rem; }
+		.player { margin: 12px 0 18px; }
+		.ctrl-group { margin-top: 16px; }
+		/* Let the source/subtitle rows use the full width on small screens. */
+		.sub-list, .sub-style { max-width: 100%; }
+		.sub-style-grid { grid-template-columns: 1fr; gap: 12px; }
+		.sub-head { gap: 8px; }
+		.sub-head .btn { flex: 1 1 auto; text-align: center; }
+		.sub-row .sub-meta { display: none; }
+	}
 </style>
 <section class="watch"
 	data-streamer="{{.StreamerURL}}"

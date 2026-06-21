@@ -133,7 +133,7 @@ main { max-width: 1400px; margin: 0 auto; padding: 8px 4% 48px; }
 /* --- Detail --- */
 .detail { position: relative; }
 .backdrop {
-	position: absolute; inset: -8px -4% auto -4%; height: 560px;
+	position: absolute; inset: -8px -4% auto -4%; height: clamp(320px, 50vw, 560px);
 	background-size: cover; background-position: center top;
 	opacity: 0.55;
 	z-index: 0;
@@ -153,8 +153,8 @@ main { max-width: 1400px; margin: 0 auto; padding: 8px 4% 48px; }
 .detail-poster img { width: 100%; border-radius: var(--radius); display: block; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
 .detail-poster .poster-empty { aspect-ratio: 2/3; background: var(--surface-2); border-radius: var(--radius); }
 .detail-info { flex: 1 1 320px; }
-.detail-info h1 { margin: 0 0 6px; font-size: 2.6rem; font-weight: 800; line-height: 1.1; }
-.detail-info h1 .year { color: var(--muted); font-weight: 400; font-size: 1.6rem; }
+.detail-info h1 { margin: 0 0 6px; font-size: clamp(1.7rem, 4.5vw, 2.6rem); font-weight: 800; line-height: 1.1; }
+.detail-info h1 .year { color: var(--muted); font-weight: 400; font-size: clamp(1.1rem, 2.8vw, 1.6rem); }
 .original-title { color: var(--muted); font-style: italic; margin: 0 0 12px; }
 .meta-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 14px 0; color: var(--muted); }
 .badge { background: rgba(255,255,255,0.12); padding: 4px 10px; border-radius: var(--radius); font-size: 0.8rem; color: var(--text); }
@@ -215,3 +215,67 @@ main { max-width: 1400px; margin: 0 auto; padding: 8px 4% 48px; }
 .notfound { text-align: center; padding: 100px 20px; }
 .notfound h1 { font-size: 5rem; margin: 0; color: var(--accent); font-weight: 900; }
 .back-link { display: inline-block; margin-top: 16px; color: var(--text); }
+
+/* --- Responsive ---------------------------------------------------------- */
+
+/* On touch devices the hover-zoom can clip a card against the screen edge and
+   feels janky, so neutralise it (hover styles are pointer-only anyway). */
+@media (hover: none) {
+	.card:hover { transform: none; box-shadow: none; }
+	.row-track .card:hover { transform: none; }
+	.row-chevron { opacity: 1; transform: none; }
+}
+
+/* Tablets / small laptops. */
+@media (max-width: 900px) {
+	.detail-main { gap: 24px; padding-top: 64px; }
+	.detail-poster { flex: 0 0 220px; }
+	.row-title { font-size: 1.15rem; }
+}
+
+/* Phones. */
+@media (max-width: 600px) {
+	.site-header { padding: 14px 4%; }
+	.brand { font-size: 1.4rem; }
+	main { padding: 8px 4% 40px; }
+
+	/* Filters stack: search full-width, the two selects share a row. */
+	.filters { gap: 10px; margin-bottom: 20px; }
+	.filters .search { flex: 1 1 100%; }
+	.filters select { flex: 1 1 calc(50% - 5px); min-width: 0; }
+
+	/* Two comfortable columns on a narrow screen. */
+	.grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px 10px; }
+	.card-body { padding: 8px 10px 12px; }
+	.card-title { font-size: 0.88rem; }
+	.card-meta { font-size: 0.74rem; }
+
+	/* Browse carousels: slightly smaller fixed cards. */
+	.row { margin-bottom: 26px; }
+	.row-track .card { flex: 0 0 132px; }
+
+	/* Detail: poster + info stack to full width. */
+	.detail-main { padding-top: 36px; gap: 18px; }
+	.detail-poster { flex: 0 0 150px; }
+	.detail-info { flex: 1 1 100%; }
+	.meta-row { gap: 10px; margin: 12px 0; }
+	.overview { margin-top: 14px; }
+	.watch-btn { display: flex; width: 100%; justify-content: center; font-size: 1rem; padding: 13px; }
+
+	/* Seasons / episodes. */
+	.seasons { margin-top: 32px; }
+	.season-head { padding: 13px 14px; font-size: 0.96rem; }
+	.episodes { padding: 4px 14px 14px; }
+	.episode { gap: 12px; flex-wrap: wrap; }
+	.ep-num { font-size: 1.1rem; min-width: 22px; }
+	.ep-body { flex: 1 1 auto; min-width: 0; }
+	.watch-btn-sm { margin-left: auto; }
+
+	/* Watch page heading. */
+	.watch-meta-top h1 { font-size: 1.4rem; }
+	.watch-meta h1 { font-size: 1.4rem; }
+
+	/* 404. */
+	.notfound { padding: 70px 20px; }
+	.notfound h1 { font-size: 3.5rem; }
+}
