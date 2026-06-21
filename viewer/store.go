@@ -42,12 +42,14 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // TitleSummary is the lightweight row rendered in the discovery grid.
 type TitleSummary struct {
-	ID         int64
-	TMDBID     int
-	Type       string
-	Title      string
-	AirDate    string
-	PosterPath string
+	ID            int64
+	TMDBID        int
+	Type          string
+	Title         string
+	OriginalTitle string
+	AirDate       string
+	PosterPath    string
+	VoteAverage   float64
 }
 
 // TitleFilter narrows the discovery list. Zero values mean "no constraint".
@@ -75,7 +77,7 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]TitleSummary, 
 		args = append(args, f.Type)
 	}
 
-	query := `SELECT id, tmdb_id, type, title, air_date, poster_path FROM titles`
+	query := `SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average FROM titles`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -90,13 +92,16 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]TitleSummary, 
 	var out []TitleSummary
 	for rows.Next() {
 		var t TitleSummary
+		var origTitle, poster sql.NullString
 		var air sql.NullTime
-		var poster sql.NullString
-		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &air, &poster); err != nil {
+		var vote sql.NullFloat64
+		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote); err != nil {
 			return nil, err
 		}
+		t.OriginalTitle = origTitle.String
 		t.AirDate = dateStr(air)
 		t.PosterPath = poster.String
+		t.VoteAverage = vote.Float64
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -149,7 +154,7 @@ type Row struct {
 func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 	// Load every title once, newest first.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tmdb_id, type, title, air_date, poster_path FROM titles ORDER BY updated_at DESC`)
+		`SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average FROM titles ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -160,13 +165,16 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 	var movies, tv []TitleSummary
 	for rows.Next() {
 		var t TitleSummary
+		var origTitle, poster sql.NullString
 		var air sql.NullTime
-		var poster sql.NullString
-		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &air, &poster); err != nil {
+		var vote sql.NullFloat64
+		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote); err != nil {
 			return nil, err
 		}
+		t.OriginalTitle = origTitle.String
 		t.AirDate = dateStr(air)
 		t.PosterPath = poster.String
+		t.VoteAverage = vote.Float64
 		byID[t.ID] = t
 		order = append(order, t.ID)
 		switch t.Type {

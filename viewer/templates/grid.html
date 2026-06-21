@@ -6,6 +6,7 @@
 	</div>
 	<div class="card-body">
 		<div class="card-title">{{.Title}}</div>
+		{{if and .OriginalTitle (ne .OriginalTitle .Title)}}<div class="card-original">{{.OriginalTitle}}</div>{{end}}
 		<div class="card-meta">{{with year .AirDate}}{{.}} · {{end}}{{if eq .Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}}</div>
 	</div>
 </a>
