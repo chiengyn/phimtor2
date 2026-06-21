@@ -16,6 +16,7 @@
     header h1 { margin: 0; font-size: 1.2rem; }
     main { max-width: 700px; margin: 0 auto; padding: 1.5rem; }
     .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+    .row.actions { margin-top: .75rem; }
     input, button {
       font: inherit; padding: .55rem .7rem; border-radius: 8px;
       border: 1px solid #303b48; background: #161b22; color: #e6edf3;
@@ -58,33 +59,41 @@
     <div class="card">
       <h2>Phim mới từ YTS</h2>
       <p class="muted">Lấy các phim YTS thêm gần đây nhất, khớp với TMDB qua IMDb id.</p>
-      <form class="row" hx-post="/api/crawl/yts" hx-target="#crawl-status" hx-swap="outerHTML">
-        <label class="row">Số phim mới nhất <input type="number" name="limit" value="20" min="1" max="50"></label>
-        <button type="submit">Chạy</button>
-        <span class="htmx-indicator muted">Đang chạy…</span>
-        <label class="row">
-          <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
-          Tải phụ đề từ OpenSubtitles
-        </label>
-        <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
-        {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
+      <form hx-post="/api/crawl/yts" hx-target="#crawl-status" hx-swap="outerHTML">
+        <div class="row">
+          <label class="row">Số phim mới nhất <input type="number" name="limit" value="20" min="1" max="50"></label>
+          <label class="row">
+            <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
+            Tải phụ đề từ OpenSubtitles
+          </label>
+          <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
+          {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
+        </div>
+        <div class="row actions">
+          <button type="submit">Chạy</button>
+          <span class="htmx-indicator muted">Đang chạy…</span>
+        </div>
       </form>
     </div>
 
     <div class="card">
       <h2>Top rated TMDB</h2>
       <p class="muted">Dò danh sách phim được đánh giá cao nhất trên TMDB theo trang (20 phim/trang).</p>
-      <form class="row" hx-post="/api/crawl/top-rated" hx-target="#crawl-status" hx-swap="outerHTML">
-        <label class="row">Từ trang <input type="number" name="start_page" value="1" min="1"></label>
-        <label class="row">đến trang <input type="number" name="end_page" value="1" min="1"></label>
-        <button type="submit">Chạy</button>
-        <span class="htmx-indicator muted">Đang chạy…</span>
-        <label class="row">
-          <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
-          Tải phụ đề từ OpenSubtitles
-        </label>
-        <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
-        {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
+      <form hx-post="/api/crawl/top-rated" hx-target="#crawl-status" hx-swap="outerHTML">
+        <div class="row">
+          <label class="row">Từ trang <input type="number" name="start_page" value="1" min="1"></label>
+          <label class="row">đến trang <input type="number" name="end_page" value="1" min="1"></label>
+          <label class="row">
+            <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
+            Tải phụ đề từ OpenSubtitles
+          </label>
+          <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
+          {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
+        </div>
+        <div class="row actions">
+          <button type="submit">Chạy</button>
+          <span class="htmx-indicator muted">Đang chạy…</span>
+        </div>
       </form>
     </div>
 
