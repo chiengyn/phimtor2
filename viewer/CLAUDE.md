@@ -9,8 +9,11 @@ Guidance for the **public viewer** service
 
 The **read side** of the shared catalog: a public, server-rendered browse /
 discovery / watch UI over the movie/TV metadata that [`admin/`](../admin/CLAUDE.md)
-imports. It renders Go `html/template` pages, enhanced with htmx (live filtering)
-and Alpine.js, in Vietnamese.
+imports. It renders Go `html/template` pages in Vietnamese. The browse/discovery
+flow is **fully server-rendered with no JS framework**: filtering is a GET
+`<form>` and pagination is plain `<a>` links, so every state has a real,
+shareable URL (search/genre/type/page all live in the query string). Only the
+Plyr-based watch page carries page-specific JS.
 
 It is **strictly read-only**: it never writes and **never runs migrations** —
 [`admin/`](../admin/CLAUDE.md) is the sole owner of the schema. The viewer assumes
@@ -53,18 +56,21 @@ Flat single `main` package.
 
 - **Templates** (`server.go` `parseTemplates`, `templates/`): parsed once at
   startup into named sets, each layered on `layout.html`. `home.html` composes
-  `rows.html` (browse) and `grid.html` (filtered results); `grid.html` also
-  defines the shared `card` partial. A small `funcMap` provides `img` (TMDB image
-  URLs — empty path ⇒ `""` so templates fall back to a placeholder), `year`
-  (4-digit year from a `YYYY-MM-DD` string), and `rating` (one decimal).
-  `tmdbImageBase` builds poster/backdrop URLs client-unaware of TMDB.
+  `rows.html` (browse) and `grid.html` (filtered results + the `pager`);
+  `grid.html` also defines the shared `card` partial. A small `funcMap` provides
+  `img` (TMDB image URLs — empty path ⇒ `""` so templates fall back to a
+  placeholder), `year` (4-digit year from a `YYYY-MM-DD` string), and `rating`
+  (one decimal). `tmdbImageBase` builds poster/backdrop URLs client-unaware of
+  TMDB. `detail.html` uses native `<details>` for season collapse (no JS).
 
 - **Routes** (`server.go` `setupRouter`):
-  - `GET /` — home. With an active filter (`q`/`genre`/`type`) it renders a flat
-    **grid**; otherwise Netflix-style **rows**.
-  - `GET /titles?...&page=N` — the grid **fragment only** (cards + numbered
-    pager), for htmx swaps as filters change or the page changes; swapped into
-    `#results`. `page` is 1-based and clamped to the valid range server-side.
+  - `GET /` — home, fully server-rendered. With an active filter
+    (`q`/`genre`/`type`) it renders a paginated **grid** (`?page=N`, 1-based,
+    clamped server-side); otherwise Netflix-style **rows**. `handleHome` first
+    **redirects to the canonical URL** (`homeURL`): it drops empty/odd query
+    params the GET filter form submits, forces page 1 in browse mode, and snaps
+    an out-of-range `page` back to the last page — so the address bar always
+    shows the clean, shareable URL for the current state.
   - `GET /titles/{id}` — full detail page (genres, and for TV its seasons/episodes).
   - `GET /watch/movie/{id}` and `GET /watch/episode/{id}` — the watch page.
   - `POST /api/sources/{videoID}/prepare` — viewer-mediated playback (see below).

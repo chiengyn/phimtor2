@@ -37,12 +37,12 @@
 	<section class="seasons">
 		<h2>Các phần</h2>
 		{{range .Seasons}}
-		<div class="season" x-data="{ open: false }">
-			<button class="season-head" type="button" @click="open = !open">
+		<details class="season">
+			<summary class="season-head">
 				<span>{{if .Name}}{{.Name}}{{else}}Phần {{.SeasonNumber}}{{end}}</span>
 				<span class="ep-count">{{len .Episodes}} tập</span>
-			</button>
-			<div class="episodes" x-show="open" x-cloak>
+			</summary>
+			<div class="episodes">
 				{{range .Episodes}}
 				<div class="episode">
 					<span class="ep-num">{{.EpisodeNumber}}</span>
@@ -54,7 +54,7 @@
 				</div>
 				{{end}}
 			</div>
-		</div>
+		</details>
 		{{end}}
 	</section>
 	{{end}}

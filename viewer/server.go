@@ -23,7 +23,6 @@ type Server struct {
 	detail   *template.Template
 	watch    *template.Template
 	notFound *template.Template
-	grid     *template.Template
 
 	// streamerPublicURL is injected into the watch page for the browser to reach
 	// the streamer's stats + stream endpoints. streamer is the server-side client
@@ -158,9 +157,6 @@ func (s *Server) parseTemplates() error {
 	if s.notFound, err = parse("layout.html", "404.html"); err != nil {
 		return err
 	}
-	if s.grid, err = parse("grid.html"); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -180,7 +176,6 @@ func (s *Server) setupRouter() {
 	r.Get("/sitemap.xml", s.handleSitemap)
 
 	r.Get("/", s.handleHome)
-	r.Get("/titles", s.handleTitlesFragment)
 	r.Get("/titles/{id}", s.handleDetail)
 	r.Get("/watch/movie/{id}", s.handleWatchMovie)
 	r.Get("/watch/episode/{id}", s.handleWatchEpisode)
@@ -198,18 +193,25 @@ func (s *Server) setupRouter() {
 // gridPageSize is how many title cards one discovery-grid page holds.
 const gridPageSize = 36
 
-// filterFromQuery reads the discovery filter from the request query params.
+// filterFromQuery reads (and normalizes) the discovery filter from the request
+// query params. An unrecognized type or non-numeric genre is dropped, so the
+// filter always holds canonical values.
 func filterFromQuery(r *http.Request) TitleFilter {
-	f := TitleFilter{
-		Query: r.URL.Query().Get("q"),
-		Type:  r.URL.Query().Get("type"),
+	q := r.URL.Query()
+	f := TitleFilter{Query: strings.TrimSpace(q.Get("q"))}
+	if t := q.Get("type"); t == "movie" || t == "tv" {
+		f.Type = t
 	}
-	if g := r.URL.Query().Get("genre"); g != "" {
-		if id, err := strconv.Atoi(g); err == nil {
-			f.GenreID = id
-		}
+	if id, err := strconv.Atoi(q.Get("genre")); err == nil && id > 0 {
+		f.GenreID = id
 	}
 	return f
+}
+
+// active reports whether any constraint is set (so the home page shows the grid
+// rather than the browse rows).
+func (f TitleFilter) active() bool {
+	return f.Query != "" || f.GenreID > 0 || f.Type != ""
 }
 
 // pageFromQuery reads the 1-based page number; anything missing or < 1 is page 1.
@@ -220,31 +222,39 @@ func pageFromQuery(r *http.Request) int {
 	return 1
 }
 
+// homeURL builds the canonical "/" browse URL for a filter + page: empty
+// constraints and page 1 are omitted, and keys are encoded in a stable order so
+// the same state always yields the same shareable URL. Used both for the page
+// links and to canonicalize the address (see handleHome's redirect).
+func homeURL(f TitleFilter, page int) string {
+	v := url.Values{}
+	if f.Query != "" {
+		v.Set("q", f.Query)
+	}
+	if f.GenreID > 0 {
+		v.Set("genre", strconv.Itoa(f.GenreID))
+	}
+	if f.Type != "" {
+		v.Set("type", f.Type)
+	}
+	if page > 1 {
+		v.Set("page", strconv.Itoa(page))
+	}
+	if len(v) == 0 {
+		return "/"
+	}
+	return "/?" + v.Encode()
+}
+
 // gridPage is one page of discovery-grid cards plus its pagination controls.
 type gridPage struct {
 	Titles []TitleSummary
 	Pager  pager
 }
 
-// gridFilterURL builds the /titles fragment URL for a given page, preserving the
-// active filter so paging keeps the same results.
-func gridFilterURL(f TitleFilter, page int) template.URL {
-	v := url.Values{}
-	if q := strings.TrimSpace(f.Query); q != "" {
-		v.Set("q", q)
-	}
-	if f.GenreID > 0 {
-		v.Set("genre", strconv.Itoa(f.GenreID))
-	}
-	if f.Type == "movie" || f.Type == "tv" {
-		v.Set("type", f.Type)
-	}
-	v.Set("page", strconv.Itoa(page))
-	return template.URL("/titles?" + v.Encode())
-}
-
 // loadGridPage fetches one page of filtered titles (clamping the requested page
-// to the valid range) and builds its pagination controls.
+// to the valid range) and builds its pagination controls; each page link is a
+// full "/" navigation so the URL changes as the user pages.
 func (s *Server) loadGridPage(r *http.Request, f TitleFilter, page int) (gridPage, error) {
 	total, err := s.store.CountTitles(r.Context(), f)
 	if err != nil {
@@ -258,7 +268,7 @@ func (s *Server) loadGridPage(r *http.Request, f TitleFilter, page int) (gridPag
 	}
 	return gridPage{
 		Titles: titles,
-		Pager:  buildPager(page, pages, func(n int) template.URL { return gridFilterURL(f, n) }),
+		Pager:  buildPager(page, pages, func(n int) template.URL { return template.URL(homeURL(f, n)) }),
 	}, nil
 }
 
@@ -366,6 +376,21 @@ type homeData struct {
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	f := filterFromQuery(r)
+	reqPage := pageFromQuery(r)
+	filtered := f.active()
+
+	// Canonicalize the address: the browse view never paginates (force page 1),
+	// and the filter form submits empty/odd params (q=&genre=&type=, key order)
+	// that homeURL strips. Redirect once to the clean URL so what the user sees,
+	// shares and bookmarks is the canonical "/?..." for this state.
+	wantPage := reqPage
+	if !filtered {
+		wantPage = 1
+	}
+	if want := homeURL(f, wantPage); want != r.URL.RequestURI() {
+		http.Redirect(w, r, want, http.StatusFound)
+		return
+	}
 
 	genres, err := s.store.ListGenres(r.Context())
 	if err != nil {
@@ -378,12 +403,17 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		Query:    f.Query,
 		GenreID:  f.GenreID,
 		Type:     f.Type,
-		Filtered: f.Query != "" || f.GenreID > 0 || f.Type != "",
+		Filtered: filtered,
 	}
 
-	if data.Filtered {
-		if data.Grid, err = s.loadGridPage(r, f, pageFromQuery(r)); err != nil {
+	if filtered {
+		if data.Grid, err = s.loadGridPage(r, f, reqPage); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// A page past the end was clamped; send the address to the real last page.
+		if eff := data.Grid.Pager.Page; eff != reqPage {
+			http.Redirect(w, r, homeURL(f, eff), http.StatusFound)
 			return
 		}
 	} else {
@@ -393,20 +423,6 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, s.home, "layout", data)
-}
-
-// handleTitlesFragment returns only the grid of cards, for htmx swaps. It's a
-// layout-less partial, so keep it out of search indexes (the canonical content
-// lives on "/" and the detail pages).
-func (s *Server) handleTitlesFragment(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("X-Robots-Tag", "noindex")
-	f := filterFromQuery(r)
-	gp, err := s.loadGridPage(r, f, pageFromQuery(r))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.render(w, s.grid, "grid", gp)
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {

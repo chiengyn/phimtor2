@@ -14,10 +14,10 @@
 
 {{define "grid"}}<div class="grid">{{range .Titles}}{{template "card" .}}{{else}}<p class="empty">Không tìm thấy phim nào.</p>{{end}}</div>{{with .Pager}}{{if .Show}}{{template "pager" .}}{{end}}{{end}}{{end}}
 
-{{/* pager renders numbered page controls. Each control is htmx-driven (the
-     whole discovery UI is), swapping the new page into #results in place. */}}
+{{/* pager renders numbered page controls as plain links, so each page is a real
+     server-rendered navigation with its own shareable URL. */}}
 {{define "pager"}}<nav class="pager" aria-label="Phân trang">
-	{{if .PrevURL}}<button type="button" class="pager-btn" hx-get="{{.PrevURL}}" hx-target="#results" hx-swap="innerHTML">‹ Trước</button>{{else}}<span class="pager-btn disabled">‹ Trước</span>{{end}}
-	{{range .Links}}{{if .Gap}}<span class="pager-gap">…</span>{{else if .Current}}<span class="pager-num current" aria-current="page">{{.Num}}</span>{{else}}<button type="button" class="pager-num" hx-get="{{.URL}}" hx-target="#results" hx-swap="innerHTML">{{.Num}}</button>{{end}}{{end}}
-	{{if .NextURL}}<button type="button" class="pager-btn" hx-get="{{.NextURL}}" hx-target="#results" hx-swap="innerHTML">Sau ›</button>{{else}}<span class="pager-btn disabled">Sau ›</span>{{end}}
+	{{if .PrevURL}}<a class="pager-btn" href="{{.PrevURL}}" rel="prev">‹ Trước</a>{{else}}<span class="pager-btn disabled">‹ Trước</span>{{end}}
+	{{range .Links}}{{if .Gap}}<span class="pager-gap">…</span>{{else if .Current}}<span class="pager-num current" aria-current="page">{{.Num}}</span>{{else}}<a class="pager-num" href="{{.URL}}">{{.Num}}</a>{{end}}{{end}}
+	{{if .NextURL}}<a class="pager-btn" href="{{.NextURL}}" rel="next">Sau ›</a>{{else}}<span class="pager-btn disabled">Sau ›</span>{{end}}
 </nav>{{end}}
