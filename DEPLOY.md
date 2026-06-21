@@ -2,7 +2,8 @@
 
 The three services deploy to a **single host** with [Kamal](https://kamal-deploy.org),
 each as its own app behind the shared `kamal-proxy` (host-based routing + automatic
-Let's Encrypt TLS). MySQL runs as a Kamal **accessory** on the same host.
+Let's Encrypt TLS). MariaDB (a lighter, wire-compatible MySQL drop-in) runs as a
+Kamal **accessory** on the same host, tuned for a small (1 GB) box.
 
 | Service  | Config file                      | Image (ghcr.io)              | Domain (example)        | Port |
 |----------|----------------------------------|------------------------------|-------------------------|------|
@@ -65,12 +66,12 @@ The only thing still hardcoded in the configs is the GHCR image namespace
 ## 4. First deploy
 
 `kamal setup --skip-push` bootstraps the host (installs kamal-proxy, logs into
-the registry), boots the MySQL accessory, then **pulls** the CI-built image and
-deploys it. Run it for admin first so MySQL comes up and migrations run:
+the registry), boots the MariaDB accessory, then **pulls** the CI-built image and
+deploys it. Run it for admin first so MariaDB comes up and migrations run:
 
 ```bash
 kamal setup --skip-push                                   # admin: host + proxy +
-                                                          # registry login + MySQL
+                                                          # registry login + MariaDB
 kamal deploy -c config/deploy.streamer.yml --skip-push    # streamer
 kamal deploy -c config/deploy.viewer.yml   --skip-push    # viewer (reads admin's DB)
 ```
@@ -123,10 +124,12 @@ job fills those from the GitHub secrets above, exactly like `.env` does locally.
 
 ## Notes & gotchas
 
-- **MySQL hostname.** Apps reach MySQL at `phimtor2-admin-mysql` over Kamal's
-  shared `kamal` Docker network (this is `<service>-<accessory>` for the admin
-  config). If you rename the admin `service:`, update `DB_HOST` in both the admin
-  and viewer configs. Verify the actual name with `kamal accessory details mysql`.
+- **Database hostname.** Apps reach MariaDB at `phimtor2-admin-mysql` over Kamal's
+  shared `kamal` Docker network (this is `<service>-<accessory>`, and Kamal attaches
+  accessories to that network automatically — do **not** re-add it via
+  `options.network` or `docker run` errors with a duplicate `--network`). If you
+  rename the admin `service:`, update `DB_HOST` in both the admin and viewer
+  configs. Verify the actual name with `kamal accessory details mysql`.
 - **Streamer reachability.** `$STREAMER_HOST` must be reachable from end
   users' **browsers** — the admin/viewer watch pages call its stats/stream API
   cross-origin (the streamer already sends permissive CORS headers). The viewer
@@ -134,7 +137,7 @@ job fills those from the GitHub secrets above, exactly like `.env` does locally.
   kamal network.
 - **Health checks.** Each service exposes an unauthenticated `GET /up` (admin's is
   exempt from Basic auth) that kamal-proxy uses before cutting traffic over.
-- **Persistence.** MySQL data, the subtitle store, and the streamer's torrent
+- **Persistence.** MariaDB data, the subtitle store, and the streamer's torrent
   cache live in host volumes/directories and survive redeploys. The streamer's
   cache tier is intentionally wiped on container startup (by design).
 - **Logs / status:** `kamal app logs -f`, `kamal app details`, `kamal proxy logs`

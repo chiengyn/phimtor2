@@ -85,9 +85,9 @@ accessories:
   mysql:
     image: mariadb:11.4
     host: <%= ENV["SERVER_IP"] %>
-    # Attach to Kamal's shared app network so admin/viewer resolve it by name.
-    options:
-      network: "kamal"
+    # Kamal already attaches accessories to its shared "kamal" network, so
+    # admin/viewer resolve this container by name (phimtor2-admin-mysql). Do NOT
+    # re-add it via options.network — that duplicates --network and docker errors.
     # Bind to loopback only (host-side) for debugging; apps reach it over the
     # kamal network, not this port.
     port: "127.0.0.1:3306:3306"
