@@ -134,7 +134,17 @@ job fills those from the GitHub secrets above, exactly like `.env` does locally.
   users' **browsers** — the admin/viewer watch pages call its stats/stream API
   cross-origin (the streamer already sends permissive CORS headers). The viewer
   *adds* torrents server-to-server at `http://phimtor2-streamer:8080` over the
-  kamal network.
+  kamal network. That hostname only resolves because the streamer config gives
+  its container the **`network-alias: phimtor2-streamer`** (under
+  `servers.web.options`) — kamal app containers are named
+  `phimtor2-streamer-web-<version>`, which changes every deploy, so the alias is
+  what makes the name stable.
+- **Streamer redeploys need the old container stopped first.** The streamer holds
+  an **exclusive lock** on its prefix-completion store, so it can't run two
+  instances at once. Kamal's rolling deploy (start new → health-check → stop old)
+  therefore fails with `open prefix completion: timeout`. Before redeploying the
+  streamer, stop the running one (`docker stop <phimtor2-streamer-web-...>`) — this
+  means a few seconds of streaming downtime. (admin/viewer redeploy normally.)
 - **Health checks.** Each service exposes an unauthenticated `GET /up` (admin's is
   exempt from Basic auth) that kamal-proxy uses before cutting traffic over.
 - **Persistence.** MariaDB data, the subtitle store, and the streamer's torrent
