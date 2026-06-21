@@ -33,6 +33,7 @@ func main() {
 	}
 
 	tmdb := NewTMDBClient(cfg.TMDBAPIKey, cfg.TMDBLanguage, cfg.TMDBFallbackLang)
+	yts := NewYTSClient(cfg.YTSBaseURL)
 
 	osc := NewOpenSubtitlesClient(
 		cfg.OpenSubtitlesAPIKey,
@@ -47,7 +48,7 @@ func main() {
 		log.Fatalf("subtitle storage: %v", err)
 	}
 
-	server := NewServer(store, tmdb, providers, blobs, blobPrimary, cfg.StreamerURL, cfg.AdminUser, cfg.AdminPassword)
+	server := NewServer(store, tmdb, yts, providers, blobs, blobPrimary, cfg.StreamerURL, cfg.AdminUser, cfg.AdminPassword)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -29,6 +30,55 @@ func NewTMDBClient(apiKey, lang, fallbackLang string) *TMDBClient {
 		fallbackLang: fallbackLang,
 		http:         &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// FindMovieByIMDbID resolves a TMDB movie id from an IMDb id (e.g.
+// "tt1234567"). Used by the crawl jobs (crawl.go) to match a YTS movie back
+// to its TMDB metadata.
+func (c *TMDBClient) FindMovieByIMDbID(ctx context.Context, imdbID string) (int, error) {
+	var res struct {
+		MovieResults []struct {
+			ID int `json:"id"`
+		} `json:"movie_results"`
+	}
+	if err := c.get(ctx, "/find/"+url.PathEscape(imdbID)+"?external_source=imdb_id", c.lang, &res); err != nil {
+		return 0, fmt.Errorf("find by imdb id: %w", err)
+	}
+	if len(res.MovieResults) == 0 {
+		return 0, fmt.Errorf("no TMDB movie found for IMDb id %s", imdbID)
+	}
+	return res.MovieResults[0].ID, nil
+}
+
+// ListTopRatedMovieIDs returns the TMDB movie ids on one page (20 per page)
+// of the top-rated list, used by the top-rated backfill crawl.
+func (c *TMDBClient) ListTopRatedMovieIDs(ctx context.Context, page int) ([]int, error) {
+	var res struct {
+		Results []struct {
+			ID int `json:"id"`
+		} `json:"results"`
+	}
+	if err := c.get(ctx, "/movie/top_rated?page="+strconv.Itoa(page), c.lang, &res); err != nil {
+		return nil, fmt.Errorf("list top rated: %w", err)
+	}
+	ids := make([]int, len(res.Results))
+	for i, r := range res.Results {
+		ids[i] = r.ID
+	}
+	return ids, nil
+}
+
+// movieImdbID fetches just the IMDb id for a TMDB movie id. Used by the
+// top-rated backfill to look up a matching YTS torrent. Kept separate from
+// fetchMovie/Title since imdb_id isn't a stored column.
+func (c *TMDBClient) movieImdbID(ctx context.Context, id int) (string, error) {
+	var res struct {
+		ImdbID string `json:"imdb_id"`
+	}
+	if err := c.get(ctx, "/movie/"+strconv.Itoa(id), c.lang, &res); err != nil {
+		return "", fmt.Errorf("get imdb id: %w", err)
+	}
+	return res.ImdbID, nil
 }
 
 // FetchTitle retrieves a full Title for the given media type and TMDB id.
@@ -229,8 +279,12 @@ func (c *TMDBClient) fetchSeason(ctx context.Context, tvID, seasonNumber int) (*
 }
 
 func (c *TMDBClient) get(ctx context.Context, path, language string, out any) error {
-	u := fmt.Sprintf("%s%s?api_key=%s&language=%s",
-		tmdbBaseURL, path, url.QueryEscape(c.apiKey), url.QueryEscape(language))
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	u := fmt.Sprintf("%s%s%sapi_key=%s&language=%s",
+		tmdbBaseURL, path, sep, url.QueryEscape(c.apiKey), url.QueryEscape(language))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

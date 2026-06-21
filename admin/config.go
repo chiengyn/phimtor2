@@ -23,6 +23,12 @@ type Config struct {
 	TMDBLanguage     string
 	TMDBFallbackLang string
 
+	// YTSBaseURL is the base of YTS's movie API, used by the manually
+	// triggered crawl jobs (crawl.go) to discover movies/torrents. yts.mx
+	// itself is dead (NXDOMAIN); the default points at a working mirror, but
+	// this rotates over time, so check it if crawling starts failing.
+	YTSBaseURL string
+
 	// HTTP Basic auth. Password is env-only (a secret) and required.
 	AdminUser     string
 	AdminPassword string
@@ -70,6 +76,8 @@ func loadConfig() Config {
 		TMDBLanguage:     envStr("TMDB_LANGUAGE", "vi-VN"),
 		TMDBFallbackLang: envStr("TMDB_FALLBACK_LANGUAGE", "en-US"),
 
+		YTSBaseURL: envStr("YTS_BASE_URL", "https://movies-api.accel.li/api/v2"),
+
 		AdminUser:     envStr("ADMIN_USER", "admin"),
 		AdminPassword: envStr("ADMIN_PASSWORD", ""),
 
@@ -98,6 +106,7 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.DBName, "db-name", cfg.DBName, "MySQL database name")
 	flag.StringVar(&cfg.TMDBLanguage, "tmdb-language", cfg.TMDBLanguage, "Primary TMDB language")
 	flag.StringVar(&cfg.TMDBFallbackLang, "tmdb-fallback", cfg.TMDBFallbackLang, "Fallback TMDB language")
+	flag.StringVar(&cfg.YTSBaseURL, "yts-base-url", cfg.YTSBaseURL, "Base URL of YTS's movie API (used by the crawl jobs)")
 	flag.StringVar(&cfg.AdminUser, "admin-user", cfg.AdminUser, "HTTP Basic auth user")
 	flag.StringVar(&cfg.StreamerURL, "streamer-url", cfg.StreamerURL, "Base URL of the streamer service (used by the watch page)")
 	flag.StringVar(&cfg.SubtitleStorageBackend, "subtitle-storage", cfg.SubtitleStorageBackend, "Subtitle storage backend: local | s3")

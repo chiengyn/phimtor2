@@ -419,6 +419,36 @@ func (s *Store) DeleteTitle(ctx context.Context, id int64) (bool, error) {
 	return n > 0, err
 }
 
+// TorrentSourceExists reports whether a torrent_sources row already exists
+// for infoHash. Used by the crawl jobs (crawl.go) to skip a torrent they've
+// already imported on a previous run.
+func (s *Store) TorrentSourceExists(ctx context.Context, infoHash string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM torrent_sources WHERE info_hash = ? LIMIT 1`, infoHash).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// TitleExistsByTMDBID reports whether a title with the given TMDB id and
+// type already exists. Used by the top-rated backfill crawl to skip a movie
+// already in the catalog before spending a YTS lookup on it.
+func (s *Store) TitleExistsByTMDBID(ctx context.Context, tmdbID int, mediaType string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM titles WHERE tmdb_id = ? AND type = ? LIMIT 1`, tmdbID, mediaType).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // --- videos & torrent sources ---
 
 // execQuerier is the subset of *sql.DB / *sql.Tx that upsertTorrentSource needs,

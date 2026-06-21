@@ -26,6 +26,41 @@
 
 {{ define "msg" }}<div id="msg" class="{{ .Kind }}">{{ .Text }}</div>{{ end }}
 
+{{/* crawl_status: status of the two crawl jobs (crawl.go), polled by
+     templates/crawl.html. Keeps polling itself (via its own hx-trigger)
+     only while a job is still running. */}}
+{{ define "crawl_status" }}
+<div id="crawl-status"
+     {{ if or .NewMovies.Running .TopRated.Running }}
+       hx-get="/api/crawl/status" hx-trigger="every 3s" hx-swap="outerHTML"
+     {{ end }}>
+  <div class="crawl-job">
+    <strong>Phim mới từ YTS:</strong>
+    {{ if .NewMovies.Running }}
+      <span class="muted">Đang chạy… (bắt đầu {{ .NewMovies.StartedAt.Format "15:04:05" }})</span>
+    {{ else if .NewMovies.Err }}
+      <span class="err">Lỗi: {{ .NewMovies.Err }}</span>
+    {{ else if .NewMovies.Summary }}
+      <span class="ok">{{ .NewMovies.Summary }} (lúc {{ .NewMovies.FinishedAt.Format "15:04:05" }})</span>
+    {{ else }}
+      <span class="muted">Chưa chạy lần nào.</span>
+    {{ end }}
+  </div>
+  <div class="crawl-job">
+    <strong>Top rated TMDB:</strong>
+    {{ if .TopRated.Running }}
+      <span class="muted">Đang chạy… (bắt đầu {{ .TopRated.StartedAt.Format "15:04:05" }})</span>
+    {{ else if .TopRated.Err }}
+      <span class="err">Lỗi: {{ .TopRated.Err }}</span>
+    {{ else if .TopRated.Summary }}
+      <span class="ok">{{ .TopRated.Summary }} (lúc {{ .TopRated.FinishedAt.Format "15:04:05" }})</span>
+    {{ else }}
+      <span class="muted">Chưa chạy lần nào.</span>
+    {{ end }}
+  </div>
+</div>
+{{ end }}
+
 {{/* video-region: the htmx-refreshed list of videos for a *Title. */}}
 {{ define "video-region" }}
 <div id="video-region"

@@ -67,6 +67,7 @@ const defaultSubtitleProvider = "opensubtitles"
 type Server struct {
 	store       *Store
 	tmdb        *TMDBClient
+	crawler     *crawler
 	providers   map[string]SubtitleProvider // keyed by provider name
 	blobs       map[string]BlobStore        // keyed by backend name ("local"/"s3")
 	blobPrimary string                      // backend new subtitles are written to
@@ -76,9 +77,10 @@ type Server struct {
 	router      chi.Router
 }
 
-func NewServer(store *Store, tmdb *TMDBClient, providers map[string]SubtitleProvider, blobs map[string]BlobStore, blobPrimary, streamerURL, user, pass string) *Server {
+func NewServer(store *Store, tmdb *TMDBClient, yts *YTSClient, providers map[string]SubtitleProvider, blobs map[string]BlobStore, blobPrimary, streamerURL, user, pass string) *Server {
 	s := &Server{
-		store: store, tmdb: tmdb, providers: providers, blobs: blobs, blobPrimary: blobPrimary,
+		store: store, tmdb: tmdb, crawler: newCrawler(store, tmdb, yts),
+		providers: providers, blobs: blobs, blobPrimary: blobPrimary,
 		streamerURL: streamerURL, user: user, pass: pass,
 	}
 	s.setupRouter()
@@ -120,9 +122,16 @@ func (s *Server) setupRouter() {
 
 	r.Get("/", s.handleIndex)
 	r.Get("/watch", s.handleWatch)
+	r.Get("/crawl", s.handleCrawlPage)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
 	r.Get("/videos/{id}/play", s.handlePlayVideo)
+
+	r.Route("/api/crawl", func(r chi.Router) {
+		r.Get("/status", s.handleCrawlStatus)
+		r.Post("/yts", s.handleCrawlYTS)
+		r.Post("/top-rated", s.handleCrawlTopRated)
+	})
 
 	r.Route("/api/titles", func(r chi.Router) {
 		r.Get("/", s.handleListTitles)
@@ -210,6 +219,52 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("HX-Trigger", "titlesChanged")
 	renderMsg(w, "ok", msg)
+}
+
+// handleCrawlPage renders the crawl page with both jobs' current status.
+func (s *Server) handleCrawlPage(w http.ResponseWriter, r *http.Request) {
+	render(w, "crawl.html", map[string]any{
+		"NewMovies": s.crawler.NewMoviesStatus(),
+		"TopRated":  s.crawler.TopRatedStatus(),
+	})
+}
+
+// handleCrawlYTS starts the YTS new-movies crawl (crawl.go) in the
+// background — or leaves the already-running one alone — then returns the
+// status fragment.
+func (s *Server) handleCrawlYTS(w http.ResponseWriter, r *http.Request) {
+	limit, err := strconv.Atoi(r.FormValue("limit"))
+	if err != nil || limit <= 0 {
+		limit = 20
+	}
+	s.crawler.StartNewMoviesCrawl(limit)
+	s.renderCrawlStatus(w)
+}
+
+// handleCrawlTopRated starts the TMDB top-rated backfill crawl in the
+// background, for the given page range.
+func (s *Server) handleCrawlTopRated(w http.ResponseWriter, r *http.Request) {
+	startPage, err1 := strconv.Atoi(r.FormValue("start_page"))
+	endPage, err2 := strconv.Atoi(r.FormValue("end_page"))
+	if err1 != nil || err2 != nil || startPage <= 0 || endPage < startPage {
+		renderMsg(w, "err", "khoảng trang không hợp lệ")
+		return
+	}
+	s.crawler.StartTopRatedCrawl(startPage, endPage)
+	s.renderCrawlStatus(w)
+}
+
+// handleCrawlStatus returns the status fragment, polled by the crawl page
+// (every 3s, driven by the fragment's own hx-trigger) while a job runs.
+func (s *Server) handleCrawlStatus(w http.ResponseWriter, r *http.Request) {
+	s.renderCrawlStatus(w)
+}
+
+func (s *Server) renderCrawlStatus(w http.ResponseWriter) {
+	render(w, "crawl_status", map[string]any{
+		"NewMovies": s.crawler.NewMoviesStatus(),
+		"TopRated":  s.crawler.TopRatedStatus(),
+	})
 }
 
 // handleWatch renders the torrent watch page. The page talks to the streamer
