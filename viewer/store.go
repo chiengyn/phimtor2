@@ -52,7 +52,7 @@ type TitleSummary struct {
 
 // TitleFilter narrows the discovery list. Zero values mean "no constraint".
 type TitleFilter struct {
-	Query   string // free-text match against the (localized) title
+	Query   string // free-text match against the (localized) title or original title
 	GenreID int    // TMDB genre id; 0 = any
 	Type    string // "movie" | "tv"; anything else = any
 }
@@ -63,8 +63,8 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]TitleSummary, 
 	var args []any
 
 	if q := strings.TrimSpace(f.Query); q != "" {
-		where = append(where, "title LIKE ?")
-		args = append(args, "%"+q+"%")
+		where = append(where, "(title LIKE ? OR original_title LIKE ?)")
+		args = append(args, "%"+q+"%", "%"+q+"%")
 	}
 	if f.GenreID > 0 {
 		where = append(where, "id IN (SELECT title_id FROM title_genres WHERE genre_id = ?)")
