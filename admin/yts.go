@@ -52,6 +52,7 @@ type YTSMovie struct {
 	ID       int64
 	ImdbCode string
 	Title    string
+	Language string // ISO 639-1, e.g. "en"
 	Torrents []YTSTorrent
 }
 
@@ -119,6 +120,7 @@ func (c *YTSClient) ListMovies(ctx context.Context, params YTSListParams) ([]YTS
 				ID       int64  `json:"id"`
 				ImdbCode string `json:"imdb_code"`
 				Title    string `json:"title"`
+				Language string `json:"language"`
 				Torrents []struct {
 					URL       string `json:"url"`
 					Hash      string `json:"hash"`
@@ -137,7 +139,7 @@ func (c *YTSClient) ListMovies(ctx context.Context, params YTSListParams) ([]YTS
 
 	movies := make([]YTSMovie, 0, len(body.Data.Movies))
 	for _, m := range body.Data.Movies {
-		movie := YTSMovie{ID: m.ID, ImdbCode: m.ImdbCode, Title: m.Title}
+		movie := YTSMovie{ID: m.ID, ImdbCode: m.ImdbCode, Title: m.Title, Language: m.Language}
 		for _, t := range m.Torrents {
 			res := ytsQualityToResolution(t.Quality)
 			if res == "" {

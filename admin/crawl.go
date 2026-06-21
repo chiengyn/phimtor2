@@ -132,7 +132,9 @@ func (s importStats) String() string {
 }
 
 // runYTSNewMoviesCrawl fetches the most recently added movies from YTS and
-// imports any with a torrent not already in the catalog.
+// imports any English-language ones with a torrent not already in the
+// catalog (YTS carries other languages too, but this admin only targets
+// English releases).
 func (c *crawler) runYTSNewMoviesCrawl(ctx context.Context, limit int) (string, error) {
 	movies, err := c.yts.ListMovies(ctx, YTSListParams{SortBy: "date_added", OrderBy: "desc", Limit: limit})
 	if err != nil {
@@ -142,6 +144,10 @@ func (c *crawler) runYTSNewMoviesCrawl(ctx context.Context, limit int) (string, 
 	var stats importStats
 	for _, movie := range movies {
 		if movie.ImdbCode == "" || len(movie.Torrents) == 0 {
+			stats.skipped++
+			continue
+		}
+		if movie.Language != "en" {
 			stats.skipped++
 			continue
 		}
