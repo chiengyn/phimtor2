@@ -1,7 +1,6 @@
 package main
 
 import (
-	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -22,9 +21,19 @@ import (
 //   - Prefix tier: pieces overlapping the first PrefixBytes of each video file are
 //     stored persistently and never evicted, so playback starts instantly and
 //     survives restarts.
-//   - Cache tier: every other piece lives in a bounded LRU cache that evicts the
-//     least-recently-read piece once the byte budget is exceeded, keeping disk use
-//     bounded. Cache data is treated as ephemeral and wiped on startup.
+//   - Cache tier: every other piece lives in a bounded cache that evicts pieces
+//     once the byte budget is exceeded, keeping disk use bounded. Cache data is
+//     treated as ephemeral and wiped on startup.
+//
+// Eviction is read-position aware, not plain LRU. For streaming the useful data
+// is the window just *ahead* of where each reader is playing, but the torrent
+// client downloads ahead opportunistically, so plain LRU would evict
+// soon-to-be-played pieces and the reader would hit "no such file" / stall. So we
+// track each torrent's latest read index and, when over budget, evict in this
+// order: pieces of torrents with no active reader, then pieces furthest *behind*
+// the read head (already played), then pieces furthest *ahead* (downloaded too
+// eagerly) — always keeping the near-ahead playback window resident. This lets
+// CACHE_MB be small without stalling playback.
 //
 // One blob file is written per piece (<dir>/<infohash>/<index>) so the cache can
 // reclaim a single piece by deleting its file. A Capacity is reported so the
@@ -44,16 +53,11 @@ type prefixCacheStorage struct {
 	capFunc func() (int64, bool)
 
 	mu             sync.Mutex
-	lru            *list.List // front = most recently used; values are *cacheEntry
-	lruIndex       map[metainfo.PieceKey]*list.Element
+	cache          map[metainfo.PieceKey]int64 // resident cache pieces -> size
 	cacheBytes     int64
+	readPos        map[metainfo.Hash]int       // latest read piece index per torrent
 	prefixKeys     map[metainfo.PieceKey]int64 // resident complete prefix pieces -> size
 	prefixResident int64
-}
-
-type cacheEntry struct {
-	key  metainfo.PieceKey
-	size int64
 }
 
 func newPrefixCacheStorage(cfg StorageConfig) (storage.ClientImplCloser, error) {
@@ -97,8 +101,8 @@ func newPrefixCacheStorage(cfg StorageConfig) (storage.ClientImplCloser, error) 
 		cacheCap:         cfg.CacheBytes,
 		prefixCompletion: prefixCompletion,
 		cacheCompletion:  storage.NewMapPieceCompletion(),
-		lru:              list.New(),
-		lruIndex:         make(map[metainfo.PieceKey]*list.Element),
+		cache:            make(map[metainfo.PieceKey]int64),
+		readPos:          make(map[metainfo.Hash]int),
 		prefixKeys:       make(map[metainfo.PieceKey]int64),
 	}
 	s.capFunc = func() (int64, bool) {
@@ -225,8 +229,11 @@ func (p *prefixCachePiece) ReadAt(b []byte, off int64) (int, error) {
 	}
 	defer f.Close()
 	n, err := f.ReadAt(b, off)
-	if !p.isPrefix && n > 0 {
-		p.s.touch(p.key)
+	if n > 0 {
+		// Track where each reader is (prefix reads count too — the read head
+		// starts in the prefix region) so cache eviction can protect the window
+		// just ahead of it.
+		p.s.noteRead(p.key)
 	}
 	return n, err
 }
@@ -291,11 +298,11 @@ func (s *prefixCacheStorage) removePrefixResident(key metainfo.PieceKey) {
 	s.mu.Unlock()
 }
 
-func (s *prefixCacheStorage) touch(key metainfo.PieceKey) {
+// noteRead records that infoHash is currently being read at piece index, so
+// eviction knows where the playback head is.
+func (s *prefixCacheStorage) noteRead(key metainfo.PieceKey) {
 	s.mu.Lock()
-	if el, ok := s.lruIndex[key]; ok {
-		s.lru.MoveToFront(el)
-	}
+	s.readPos[key.InfoHash] = key.Index
 	s.mu.Unlock()
 }
 
@@ -303,24 +310,20 @@ func (s *prefixCacheStorage) addCachePiece(key metainfo.PieceKey, size int64) {
 	var evicted []metainfo.PieceKey
 
 	s.mu.Lock()
-	if el, ok := s.lruIndex[key]; ok {
-		s.lru.MoveToFront(el)
+	if _, ok := s.cache[key]; ok {
 		s.mu.Unlock()
 		return
 	}
-	added := s.lru.PushFront(&cacheEntry{key: key, size: size})
-	s.lruIndex[key] = added
+	s.cache[key] = size
 	s.cacheBytes += size
 	for s.cacheBytes > s.cacheCap {
-		back := s.lru.Back()
-		if back == nil || back == added {
-			break // never evict the piece we just inserted
+		victim, ok := s.pickVictim(key)
+		if !ok {
+			break // nothing else evictable; never evict the piece just inserted
 		}
-		ent := back.Value.(*cacheEntry)
-		s.lru.Remove(back)
-		delete(s.lruIndex, ent.key)
-		s.cacheBytes -= ent.size
-		evicted = append(evicted, ent.key)
+		s.cacheBytes -= s.cache[victim]
+		delete(s.cache, victim)
+		evicted = append(evicted, victim)
 	}
 	s.mu.Unlock()
 
@@ -333,13 +336,47 @@ func (s *prefixCacheStorage) addCachePiece(key metainfo.PieceKey, size int64) {
 	}
 }
 
+// pickVictim chooses the least useful resident cache piece to evict, excluding
+// the just-added piece. Higher score = evict sooner: pieces of torrents with no
+// active reader first, then pieces furthest behind the read head (already
+// played), then pieces furthest ahead (downloaded too eagerly) — so the
+// near-ahead playback window is kept. Caller must hold s.mu.
+func (s *prefixCacheStorage) pickVictim(exclude metainfo.PieceKey) (metainfo.PieceKey, bool) {
+	var best metainfo.PieceKey
+	bestScore := -1
+	found := false
+	for k := range s.cache {
+		if k == exclude {
+			continue
+		}
+		if score := s.evictionScore(k); score > bestScore {
+			best, bestScore, found = k, score, true
+		}
+	}
+	return best, found
+}
+
+const (
+	scoreInactiveBase = 1 << 30 // torrent has no active reader
+	scoreBehindBase   = 1 << 20 // already played, behind the read head
+)
+
+func (s *prefixCacheStorage) evictionScore(k metainfo.PieceKey) int {
+	r, ok := s.readPos[k.InfoHash]
+	if !ok {
+		return scoreInactiveBase + k.Index // no reader: most evictable
+	}
+	if k.Index < r {
+		return scoreBehindBase + (r - k.Index) // behind: furthest-behind first
+	}
+	return k.Index - r // ahead: furthest-ahead first, kept until behind exhausted
+}
+
 func (s *prefixCacheStorage) removeCacheEntry(key metainfo.PieceKey) {
 	s.mu.Lock()
-	if el, ok := s.lruIndex[key]; ok {
-		ent := el.Value.(*cacheEntry)
-		s.lru.Remove(el)
-		delete(s.lruIndex, key)
-		s.cacheBytes -= ent.size
+	if size, ok := s.cache[key]; ok {
+		delete(s.cache, key)
+		s.cacheBytes -= size
 	}
 	s.mu.Unlock()
 }

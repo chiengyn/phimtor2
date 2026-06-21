@@ -57,10 +57,11 @@ env:
     STORAGE_MODE: prefix-cache
     PREFIX_MB: 32
     # CACHE_MB is a DISK budget for the cache tier (blob files under /data/cache),
-    # not RAM. It must be large enough that the torrent can download ahead of the
-    # player without evicting upcoming pieces (too small => "open /data/cache/...:
-    # no such file" read errors and stalled playback). 2 GB fits the 21 GB disk.
-    CACHE_MB: 2048
+    # not RAM. Eviction is read-position aware (it keeps the window just ahead of
+    # each reader), so this no longer has to be huge to avoid stalls — size it for
+    # how many concurrent streams' working sets you want to keep on disk. 512 MB is
+    # comfortable here; it can go lower (e.g. 256) if disk is tight.
+    CACHE_MB: 512
 
 # Torrent cache (prefix tier persisted, cache tier wiped on startup).
 volumes:
