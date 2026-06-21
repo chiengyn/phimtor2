@@ -234,20 +234,36 @@ type TitleSummary struct {
 	PosterPath string `json:"poster_path"`
 }
 
-// CountTitles returns the total number of titles, for computing the number of
-// catalogue-list pages.
-func (s *Store) CountTitles(ctx context.Context) (int, error) {
+// titleSearchWhere builds the WHERE clause (and its args) that filters titles by
+// a free-text query against the localized and original titles. An empty query
+// matches everything. Shared by CountTitles and ListTitles so the count and the
+// page stay in sync.
+func titleSearchWhere(q string) (string, []any) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return "", nil
+	}
+	like := "%" + q + "%"
+	return " WHERE title LIKE ? OR original_title LIKE ?", []any{like, like}
+}
+
+// CountTitles returns the number of titles matching the (optional) search query,
+// for computing the number of catalogue-list pages.
+func (s *Store) CountTitles(ctx context.Context, q string) (int, error) {
+	where, args := titleSearchWhere(q)
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM titles`).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM titles`+where, args...).Scan(&n)
 	return n, err
 }
 
-// ListTitles returns one page of title summaries, newest first; offset skips
-// earlier pages.
-func (s *Store) ListTitles(ctx context.Context, limit, offset int) ([]TitleSummary, error) {
+// ListTitles returns one page of title summaries matching the (optional) search
+// query, newest first; offset skips earlier pages.
+func (s *Store) ListTitles(ctx context.Context, q string, limit, offset int) ([]TitleSummary, error) {
+	where, args := titleSearchWhere(q)
+	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tmdb_id, type, title, air_date, poster_path
-		FROM titles ORDER BY updated_at DESC LIMIT ? OFFSET ?`, limit, offset)
+		FROM titles`+where+` ORDER BY updated_at DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}

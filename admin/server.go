@@ -186,26 +186,29 @@ const adminPageSize = 24
 // titleListPage is one page of catalogue cards plus its pagination controls.
 type titleListPage struct {
 	Titles []TitleSummary
+	Query  string
 	Pager  pager
 }
 
-// loadTitleListPage fetches one page of titles (clamping the requested page to
-// the valid range) and builds its pagination controls.
-func (s *Server) loadTitleListPage(ctx context.Context, page int) (titleListPage, error) {
-	total, err := s.store.CountTitles(ctx)
+// loadTitleListPage fetches one page of titles matching q (clamping the
+// requested page to the valid range) and builds its pagination controls; the
+// pager links carry q so navigation stays within the search results.
+func (s *Server) loadTitleListPage(ctx context.Context, q string, page int) (titleListPage, error) {
+	total, err := s.store.CountTitles(ctx, q)
 	if err != nil {
 		return titleListPage{}, err
 	}
 	pages := totalPages(total, adminPageSize)
 	page = clampPage(page, pages)
-	titles, err := s.store.ListTitles(ctx, adminPageSize, (page-1)*adminPageSize)
+	titles, err := s.store.ListTitles(ctx, q, adminPageSize, (page-1)*adminPageSize)
 	if err != nil {
 		return titleListPage{}, err
 	}
 	return titleListPage{
 		Titles: titles,
+		Query:  q,
 		Pager: buildPager(page, pages, func(n int) template.URL {
-			return template.URL(fmt.Sprintf("/api/titles?page=%d", n))
+			return template.URL(fmt.Sprintf("/api/titles?page=%d&q=%s", n, url.QueryEscape(q)))
 		}),
 	}, nil
 }
@@ -214,7 +217,7 @@ func (s *Server) loadTitleListPage(ctx context.Context, page int) (titleListPage
 // is present on first paint (htmx refreshes it afterwards via the
 // "titlesChanged" event).
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	list, err := s.loadTitleListPage(r.Context(), pageFromQuery(r))
+	list, err := s.loadTitleListPage(r.Context(), r.URL.Query().Get("q"), pageFromQuery(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -510,7 +513,7 @@ func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) 
 // handleListTitles renders the titles list fragment (cards + pager) for htmx to
 // swap into #list, both for the titlesChanged reload and for page navigation.
 func (s *Server) handleListTitles(w http.ResponseWriter, r *http.Request) {
-	list, err := s.loadTitleListPage(r.Context(), pageFromQuery(r))
+	list, err := s.loadTitleListPage(r.Context(), r.URL.Query().Get("q"), pageFromQuery(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

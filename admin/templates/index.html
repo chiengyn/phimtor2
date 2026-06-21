@@ -86,6 +86,14 @@
     <div id="msg"></div>
 
     <h2>Đã nhập</h2>
+    <input type="search" name="q" value="{{ .List.Query }}"
+           style="width: 100%; margin-bottom: .25rem;"
+           placeholder="Tìm theo tên phim…"
+           hx-get="/api/titles"
+           hx-target="#list"
+           hx-swap="innerHTML"
+           hx-trigger="input changed delay:300ms, search">
+
     <div id="list" hx-get="/api/titles" hx-trigger="titlesChanged from:body">
       {{ template "list" .List }}
     </div>
