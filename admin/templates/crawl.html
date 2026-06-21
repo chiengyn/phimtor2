@@ -17,6 +17,11 @@
     main { max-width: 700px; margin: 0 auto; padding: 1.5rem; }
     .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
     .row.actions { margin-top: .75rem; }
+    .subsection {
+      margin-top: .75rem; padding: .75rem; border-radius: 8px;
+      border: 1px solid #222b36; background: #0e1116;
+    }
+    .subsection h3 { margin: 0 0 .5rem; font-size: .85rem; color: #8b98a5; font-weight: 600; }
     input, button {
       font: inherit; padding: .55rem .7rem; border-radius: 8px;
       border: 1px solid #303b48; background: #161b22; color: #e6edf3;
@@ -62,12 +67,17 @@
       <form hx-post="/api/crawl/yts" hx-target="#crawl-status" hx-swap="outerHTML">
         <div class="row">
           <label class="row">Số phim mới nhất <input type="number" name="limit" value="20" min="1" max="50"></label>
-          <label class="row">
-            <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
-            Tải phụ đề từ OpenSubtitles
-          </label>
-          <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
-          {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
+        </div>
+        <div class="subsection">
+          <h3>Phụ đề</h3>
+          <div class="row">
+            <label class="row">
+              <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
+              Tải phụ đề từ OpenSubtitles
+            </label>
+            <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
+            {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
+          </div>
         </div>
         <div class="row actions">
           <button type="submit">Chạy</button>
@@ -83,12 +93,17 @@
         <div class="row">
           <label class="row">Từ trang <input type="number" name="start_page" value="1" min="1"></label>
           <label class="row">đến trang <input type="number" name="end_page" value="1" min="1"></label>
-          <label class="row">
-            <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
-            Tải phụ đề từ OpenSubtitles
-          </label>
-          <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
-          {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
+        </div>
+        <div class="subsection">
+          <h3>Phụ đề</h3>
+          <div class="row">
+            <label class="row">
+              <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
+              Tải phụ đề từ OpenSubtitles
+            </label>
+            <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
+            {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
+          </div>
         </div>
         <div class="row actions">
           <button type="submit">Chạy</button>
