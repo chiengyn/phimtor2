@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -28,17 +30,27 @@ type CrawlStatus struct {
 // crawler holds the dependencies and run state for both crawl jobs. Only
 // one instance of each job may run at a time.
 type crawler struct {
-	store *Store
-	tmdb  *TMDBClient
-	yts   *YTSClient
+	store           *Store
+	tmdb            *TMDBClient
+	yts             *YTSClient
+	subtitles       SubtitleProvider     // may be nil/disabled; subtitle fetch is then a no-op
+	blobs           map[string]BlobStore // keyed by backend name, mirrors Server.blobs
+	subtitleStorage string               // backend new subtitles are written to
 
 	mu        sync.Mutex
 	newMovies CrawlStatus
 	topRated  CrawlStatus
 }
 
-func newCrawler(store *Store, tmdb *TMDBClient, yts *YTSClient) *crawler {
-	return &crawler{store: store, tmdb: tmdb, yts: yts}
+func newCrawler(store *Store, tmdb *TMDBClient, yts *YTSClient, subtitles SubtitleProvider, blobs map[string]BlobStore, subtitleStorage string) *crawler {
+	return &crawler{store: store, tmdb: tmdb, yts: yts, subtitles: subtitles, blobs: blobs, subtitleStorage: subtitleStorage}
+}
+
+// subtitleOptions configures whether and how many subtitles to fetch per
+// movie imported by a crawl run, set from the crawl page's form.
+type subtitleOptions struct {
+	Enabled  bool
+	MaxCount int // top N by download count; ignored when Enabled is false
 }
 
 func (c *crawler) NewMoviesStatus() CrawlStatus {
@@ -67,7 +79,7 @@ func (c *crawler) SetYTSBaseURL(baseURL string) {
 
 // StartNewMoviesCrawl launches runYTSNewMoviesCrawl in the background.
 // Returns false without starting anything if one is already running.
-func (c *crawler) StartNewMoviesCrawl(limit int) bool {
+func (c *crawler) StartNewMoviesCrawl(limit int, subOpts subtitleOptions) bool {
 	c.mu.Lock()
 	if c.newMovies.Running {
 		c.mu.Unlock()
@@ -79,7 +91,7 @@ func (c *crawler) StartNewMoviesCrawl(limit int) bool {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
-		summary, err := c.runYTSNewMoviesCrawl(ctx, limit)
+		summary, err := c.runYTSNewMoviesCrawl(ctx, limit, subOpts)
 		c.finish(&c.newMovies, summary, err)
 	}()
 	return true
@@ -87,7 +99,7 @@ func (c *crawler) StartNewMoviesCrawl(limit int) bool {
 
 // StartTopRatedCrawl launches runTopRatedCrawl in the background. Returns
 // false without starting anything if one is already running.
-func (c *crawler) StartTopRatedCrawl(startPage, endPage int) bool {
+func (c *crawler) StartTopRatedCrawl(startPage, endPage int, subOpts subtitleOptions) bool {
 	c.mu.Lock()
 	if c.topRated.Running {
 		c.mu.Unlock()
@@ -99,7 +111,7 @@ func (c *crawler) StartTopRatedCrawl(startPage, endPage int) bool {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 		defer cancel()
-		summary, err := c.runTopRatedCrawl(ctx, startPage, endPage)
+		summary, err := c.runTopRatedCrawl(ctx, startPage, endPage, subOpts)
 		c.finish(&c.topRated, summary, err)
 	}()
 	return true
@@ -122,20 +134,21 @@ func (c *crawler) finish(status *CrawlStatus, summary string, err error) {
 type importStats struct {
 	titlesImported int
 	videosAdded    int
+	subtitlesAdded int
 	skipped        int
 	errors         int
 }
 
 func (s importStats) String() string {
-	return fmt.Sprintf("%d phim, %d video mới, %d bỏ qua, %d lỗi",
-		s.titlesImported, s.videosAdded, s.skipped, s.errors)
+	return fmt.Sprintf("%d phim, %d video mới, %d phụ đề mới, %d bỏ qua, %d lỗi",
+		s.titlesImported, s.videosAdded, s.subtitlesAdded, s.skipped, s.errors)
 }
 
 // runYTSNewMoviesCrawl fetches the most recently added movies from YTS and
 // imports any English-language ones with a torrent not already in the
 // catalog (YTS carries other languages too, but this admin only targets
 // English releases).
-func (c *crawler) runYTSNewMoviesCrawl(ctx context.Context, limit int) (string, error) {
+func (c *crawler) runYTSNewMoviesCrawl(ctx context.Context, limit int, subOpts subtitleOptions) (string, error) {
 	movies, err := c.yts.ListMovies(ctx, YTSListParams{SortBy: "date_added", OrderBy: "desc", Limit: limit})
 	if err != nil {
 		return "", fmt.Errorf("list yts movies: %w", err)
@@ -170,13 +183,14 @@ func (c *crawler) runYTSNewMoviesCrawl(ctx context.Context, limit int) (string, 
 			continue
 		}
 
-		videos, err := c.importMovie(ctx, tmdbID, movie)
+		videos, subs, err := c.importMovie(ctx, tmdbID, movie, subOpts)
 		if err != nil {
 			stats.errors++
 			continue
 		}
 		stats.titlesImported++
 		stats.videosAdded += videos
+		stats.subtitlesAdded += subs
 	}
 	return stats.String(), nil
 }
@@ -184,7 +198,7 @@ func (c *crawler) runYTSNewMoviesCrawl(ctx context.Context, limit int) (string, 
 // runTopRatedCrawl backfills TMDB's top-rated movie list, importing only
 // movies that also have a YTS torrent (a title with no playable source
 // isn't created, mirroring the old project's rule).
-func (c *crawler) runTopRatedCrawl(ctx context.Context, startPage, endPage int) (string, error) {
+func (c *crawler) runTopRatedCrawl(ctx context.Context, startPage, endPage int, subOpts subtitleOptions) (string, error) {
 	var stats importStats
 	for page := startPage; page <= endPage; page++ {
 		ids, err := c.tmdb.ListTopRatedMovieIDs(ctx, page)
@@ -215,13 +229,14 @@ func (c *crawler) runTopRatedCrawl(ctx context.Context, startPage, endPage int) 
 				continue
 			}
 
-			videos, err := c.importMovie(ctx, tmdbID, ytsMovies[0])
+			videos, subs, err := c.importMovie(ctx, tmdbID, ytsMovies[0], subOpts)
 			if err != nil {
 				stats.errors++
 				continue
 			}
 			stats.titlesImported++
 			stats.videosAdded += videos
+			stats.subtitlesAdded += subs
 		}
 	}
 	return stats.String(), nil
@@ -243,20 +258,23 @@ func (c *crawler) hasNewTorrent(ctx context.Context, torrents []YTSTorrent) (boo
 
 // importMovie upserts the TMDB title for tmdbID and imports every torrent in
 // ytsMovie that isn't already stored, as a video on that title. It is the
-// shared core used by both crawl jobs.
-func (c *crawler) importMovie(ctx context.Context, tmdbID int, ytsMovie YTSMovie) (videosAdded int, err error) {
+// shared core used by both crawl jobs. When subOpts.Enabled and at least one
+// video was added, it also fetches subtitles for the title (see
+// downloadSubtitlesForMovie).
+func (c *crawler) importMovie(ctx context.Context, tmdbID int, ytsMovie YTSMovie, subOpts subtitleOptions) (videosAdded, subtitlesAdded int, err error) {
 	title, err := c.tmdb.FetchTitle(ctx, "movie", tmdbID)
 	if err != nil {
-		return 0, fmt.Errorf("fetch tmdb title %d: %w", tmdbID, err)
+		return 0, 0, fmt.Errorf("fetch tmdb title %d: %w", tmdbID, err)
 	}
 	if err := c.store.UpsertTitle(ctx, title); err != nil {
-		return 0, fmt.Errorf("upsert title: %w", err)
+		return 0, 0, fmt.Errorf("upsert title: %w", err)
 	}
 
+	var lastFilePath string
 	for _, t := range ytsMovie.Torrents {
 		exists, err := c.store.TorrentSourceExists(ctx, t.Hash)
 		if err != nil {
-			return videosAdded, fmt.Errorf("check torrent source: %w", err)
+			return videosAdded, subtitlesAdded, fmt.Errorf("check torrent source: %w", err)
 		}
 		if exists {
 			continue
@@ -290,7 +308,86 @@ func (c *crawler) importMovie(ctx context.Context, tmdbID int, ytsMovie YTSMovie
 			continue
 		}
 		videosAdded++
+		lastFilePath = videoFile.Path
 	}
 
-	return videosAdded, nil
+	if videosAdded > 0 {
+		subtitlesAdded = c.downloadSubtitlesForMovie(ctx, title, lastFilePath, subOpts)
+	}
+
+	return videosAdded, subtitlesAdded, nil
+}
+
+// downloadSubtitlesForMovie fetches up to subOpts.MaxCount subtitles for
+// title from OpenSubtitles (the highest download-count results first) and
+// stores them, unless the title already has subtitles saved from a previous
+// run. It searches by the title's original name first, falling back to a
+// query parsed from the imported video's file name if that finds nothing.
+// Failures are non-fatal — a movie still counts as imported without its
+// subtitles, so any error here is swallowed (returns 0).
+func (c *crawler) downloadSubtitlesForMovie(ctx context.Context, title *Title, fileName string, subOpts subtitleOptions) int {
+	if !subOpts.Enabled || c.subtitles == nil || !c.subtitles.Enabled() {
+		return 0
+	}
+	blobStore := c.blobs[c.subtitleStorage]
+	if blobStore == nil {
+		return 0
+	}
+
+	existing, err := c.store.SubtitlesForTitle(ctx, title.ID)
+	if err != nil || len(existing) > 0 {
+		return 0
+	}
+
+	query := title.OriginalTitle
+	if query == "" {
+		query = title.Title
+	}
+	results, err := c.subtitles.Search(ctx, SearchParams{Query: query, Languages: "vi"})
+	if (err != nil || len(results) == 0) && fileName != "" {
+		if altQuery, _, _ := parseSubtitleQuery(fileName); altQuery != "" {
+			results, err = c.subtitles.Search(ctx, SearchParams{Query: altQuery, Languages: "vi"})
+		}
+	}
+	if err != nil || len(results) == 0 {
+		return 0
+	}
+
+	sort.Slice(results, func(i, j int) bool { return results[i].DownloadCount > results[j].DownloadCount })
+	max := subOpts.MaxCount
+	if max <= 0 {
+		max = 1
+	}
+	if max < len(results) {
+		results = results[:max]
+	}
+
+	titleID := title.ID
+	added := 0
+	for _, r := range results {
+		fileID := strconv.Itoa(r.FileID)
+		data, format, err := c.subtitles.Download(ctx, fileID)
+		if err != nil {
+			continue
+		}
+		lang := r.Language
+		if lang == "" {
+			lang = "sub"
+		}
+		key := subtitleStorageKey(&titleID, nil, c.subtitles.Name(), fileID, lang, format)
+		if err := blobStore.Put(ctx, key, data, subtitleContentType(format)); err != nil {
+			continue
+		}
+		sub := &Subtitle{
+			TitleID: &titleID, Provider: c.subtitles.Name(), ProviderFileID: fileID,
+			Language: lang, Name: r.Release, DownloadCount: r.DownloadCount, Format: format,
+			StorageBackend: blobStore.Name(), StorageKey: key,
+		}
+		if err := c.store.AddSubtitle(ctx, sub); err != nil {
+			_ = blobStore.Delete(ctx, key)
+			continue
+		}
+		added++
+	}
+	return added
 }

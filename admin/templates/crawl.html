@@ -62,6 +62,12 @@
         <label class="row">Số phim mới nhất <input type="number" name="limit" value="20" min="1" max="50"></label>
         <button type="submit">Chạy</button>
         <span class="htmx-indicator muted">Đang chạy…</span>
+        <label class="row">
+          <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
+          Tải phụ đề từ OpenSubtitles
+        </label>
+        <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
+        {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
       </form>
     </div>
 
@@ -73,6 +79,12 @@
         <label class="row">đến trang <input type="number" name="end_page" value="1" min="1"></label>
         <button type="submit">Chạy</button>
         <span class="htmx-indicator muted">Đang chạy…</span>
+        <label class="row">
+          <input type="checkbox" name="download_subtitles" {{ if not .SubtitlesEnabled }}disabled{{ end }}>
+          Tải phụ đề từ OpenSubtitles
+        </label>
+        <label class="row">Số phụ đề tối đa <input type="number" name="max_subtitles" value="1" min="1" max="10" {{ if not .SubtitlesEnabled }}disabled{{ end }}></label>
+        {{ if not .SubtitlesEnabled }}<span class="muted">(chưa cấu hình OPENSUBTITLES_API_KEY)</span>{{ end }}
       </form>
     </div>
 

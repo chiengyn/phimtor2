@@ -79,7 +79,8 @@ type Server struct {
 
 func NewServer(store *Store, tmdb *TMDBClient, yts *YTSClient, providers map[string]SubtitleProvider, blobs map[string]BlobStore, blobPrimary, streamerURL, user, pass string) *Server {
 	s := &Server{
-		store: store, tmdb: tmdb, crawler: newCrawler(store, tmdb, yts),
+		store: store, tmdb: tmdb,
+		crawler:   newCrawler(store, tmdb, yts, providers[defaultSubtitleProvider], blobs, blobPrimary),
 		providers: providers, blobs: blobs, blobPrimary: blobPrimary,
 		streamerURL: streamerURL, user: user, pass: pass,
 	}
@@ -225,10 +226,24 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 // handleCrawlPage renders the crawl page with both jobs' current status.
 func (s *Server) handleCrawlPage(w http.ResponseWriter, r *http.Request) {
 	render(w, "crawl.html", map[string]any{
-		"NewMovies":  s.crawler.NewMoviesStatus(),
-		"TopRated":   s.crawler.TopRatedStatus(),
-		"YTSBaseURL": s.crawler.YTSBaseURL(),
+		"NewMovies":        s.crawler.NewMoviesStatus(),
+		"TopRated":         s.crawler.TopRatedStatus(),
+		"YTSBaseURL":       s.crawler.YTSBaseURL(),
+		"SubtitlesEnabled": s.subtitlesEnabled(),
 	})
+}
+
+// parseSubtitleOptionsForm reads the "download_subtitles" checkbox and
+// "max_subtitles" count shared by both crawl forms (crawl.html).
+func parseSubtitleOptionsForm(r *http.Request) subtitleOptions {
+	max, err := strconv.Atoi(r.FormValue("max_subtitles"))
+	if err != nil || max <= 0 {
+		max = 1
+	}
+	if max > 10 {
+		max = 10
+	}
+	return subtitleOptions{Enabled: r.FormValue("download_subtitles") != "", MaxCount: max}
 }
 
 // handleSetYTSBaseURL updates the YTS client's base URL (e.g. when YTS's
@@ -257,7 +272,7 @@ func (s *Server) handleCrawlYTS(w http.ResponseWriter, r *http.Request) {
 	if err != nil || limit <= 0 {
 		limit = 20
 	}
-	s.crawler.StartNewMoviesCrawl(limit)
+	s.crawler.StartNewMoviesCrawl(limit, parseSubtitleOptionsForm(r))
 	s.renderCrawlStatus(w)
 }
 
@@ -270,7 +285,7 @@ func (s *Server) handleCrawlTopRated(w http.ResponseWriter, r *http.Request) {
 		renderMsg(w, "err", "khoảng trang không hợp lệ")
 		return
 	}
-	s.crawler.StartTopRatedCrawl(startPage, endPage)
+	s.crawler.StartTopRatedCrawl(startPage, endPage, parseSubtitleOptionsForm(r))
 	s.renderCrawlStatus(w)
 }
 
