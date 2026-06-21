@@ -46,6 +46,16 @@
     <p class="muted">Tự động nhập phim từ YTS/TMDB. Chỉ phim có torrent trên YTS mới được thêm vào — phim không có nguồn xem sẽ bị bỏ qua.</p>
 
     <div class="card">
+      <h2>YTS base URL</h2>
+      <p class="muted">yts.mx hay đổi domain/sập định kỳ — sửa ở đây nếu các lần chạy crawl báo lỗi kết nối. Không lưu lại, mất khi khởi động lại server.</p>
+      <form class="row" hx-post="/api/crawl/yts-base-url" hx-target="#yts-base-url-msg" hx-swap="innerHTML">
+        <input type="text" name="yts_base_url" value="{{ .YTSBaseURL }}" placeholder="https://yts.mx/api/v2" style="flex:1; min-width: 280px;">
+        <button type="submit">Lưu</button>
+      </form>
+      <div id="yts-base-url-msg"></div>
+    </div>
+
+    <div class="card">
       <h2>Phim mới từ YTS</h2>
       <p class="muted">Lấy các phim YTS thêm gần đây nhất, khớp với TMDB qua IMDb id.</p>
       <form class="row" hx-post="/api/crawl/yts" hx-target="#crawl-status" hx-swap="outerHTML">

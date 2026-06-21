@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,8 +17,12 @@ import (
 // movies and their torrents. Unlike the streamer, this client never adds a
 // torrent to a swarm — it only reads YTS's catalog metadata.
 
-// YTSClient talks to YTS's list_movies.json endpoint.
+// YTSClient talks to YTS's list_movies.json endpoint. The base URL is
+// mutable at runtime (settable from the admin UI, see crawl.html) since
+// YTS's official domain has gone down before and mirrors rotate — not
+// persisted, so a restart falls back to YTS_BASE_URL.
 type YTSClient struct {
+	mu      sync.RWMutex
 	baseURL string
 	http    *http.Client
 }
@@ -25,6 +30,20 @@ type YTSClient struct {
 // NewYTSClient builds a client against baseURL (e.g. https://yts.mx/api/v2).
 func NewYTSClient(baseURL string) *YTSClient {
 	return &YTSClient{baseURL: strings.TrimSuffix(baseURL, "/"), http: &http.Client{Timeout: 30 * time.Second}}
+}
+
+// BaseURL returns the current base URL.
+func (c *YTSClient) BaseURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.baseURL
+}
+
+// SetBaseURL changes the base URL used by subsequent ListMovies calls.
+func (c *YTSClient) SetBaseURL(baseURL string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.baseURL = strings.TrimSuffix(baseURL, "/")
 }
 
 // YTSMovie is one result from list_movies.json, with its torrents already
@@ -57,7 +76,7 @@ type YTSListParams struct {
 
 // ListMovies calls list_movies.json and maps results into YTSMovie/YTSTorrent.
 func (c *YTSClient) ListMovies(ctx context.Context, params YTSListParams) ([]YTSMovie, error) {
-	u, err := url.Parse(c.baseURL + "/list_movies.json")
+	u, err := url.Parse(c.BaseURL() + "/list_movies.json")
 	if err != nil {
 		return nil, err
 	}

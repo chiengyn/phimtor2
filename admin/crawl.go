@@ -53,6 +53,18 @@ func (c *crawler) TopRatedStatus() CrawlStatus {
 	return c.topRated
 }
 
+// YTSBaseURL returns the base URL the YTS client currently queries.
+func (c *crawler) YTSBaseURL() string {
+	return c.yts.BaseURL()
+}
+
+// SetYTSBaseURL changes the base URL the YTS client queries, effective for
+// any crawl started after this call. Not persisted — a restart falls back
+// to the YTS_BASE_URL env/flag.
+func (c *crawler) SetYTSBaseURL(baseURL string) {
+	c.yts.SetBaseURL(baseURL)
+}
+
 // StartNewMoviesCrawl launches runYTSNewMoviesCrawl in the background.
 // Returns false without starting anything if one is already running.
 func (c *crawler) StartNewMoviesCrawl(limit int) bool {

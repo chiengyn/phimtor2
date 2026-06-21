@@ -131,6 +131,7 @@ func (s *Server) setupRouter() {
 		r.Get("/status", s.handleCrawlStatus)
 		r.Post("/yts", s.handleCrawlYTS)
 		r.Post("/top-rated", s.handleCrawlTopRated)
+		r.Post("/yts-base-url", s.handleSetYTSBaseURL)
 	})
 
 	r.Route("/api/titles", func(r chi.Router) {
@@ -224,9 +225,28 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 // handleCrawlPage renders the crawl page with both jobs' current status.
 func (s *Server) handleCrawlPage(w http.ResponseWriter, r *http.Request) {
 	render(w, "crawl.html", map[string]any{
-		"NewMovies": s.crawler.NewMoviesStatus(),
-		"TopRated":  s.crawler.TopRatedStatus(),
+		"NewMovies":  s.crawler.NewMoviesStatus(),
+		"TopRated":   s.crawler.TopRatedStatus(),
+		"YTSBaseURL": s.crawler.YTSBaseURL(),
 	})
+}
+
+// handleSetYTSBaseURL updates the YTS client's base URL (e.g. when YTS's
+// domain changes or a mirror is needed), effective for crawls started after
+// this call. Not persisted — a restart falls back to YTS_BASE_URL.
+func (s *Server) handleSetYTSBaseURL(w http.ResponseWriter, r *http.Request) {
+	baseURL := strings.TrimSpace(r.FormValue("yts_base_url"))
+	if baseURL == "" {
+		renderMsg(w, "err", "URL không được để trống")
+		return
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		renderMsg(w, "err", "URL không hợp lệ")
+		return
+	}
+	s.crawler.SetYTSBaseURL(baseURL)
+	renderMsg(w, "ok", "Đã lưu YTS base URL: "+baseURL)
 }
 
 // handleCrawlYTS starts the YTS new-movies crawl (crawl.go) in the
