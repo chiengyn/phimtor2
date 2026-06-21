@@ -5,6 +5,13 @@
 	.watch .plyr { --plyr-color-main: var(--accent); border-radius: var(--radius); }
 	.watch .plyr video { max-height: 78vh; }
 
+	/* In fullscreen, drop the inline height cap and let the video fill the
+	   whole screen (otherwise a 1080p video stays letterboxed on a 4K display). */
+	.watch .plyr--fullscreen-active,
+	.watch .plyr:fullscreen { border-radius: 0; }
+	.watch .plyr--fullscreen-active video,
+	.watch .plyr:fullscreen video { max-height: 100vh; width: 100%; height: 100%; object-fit: contain; }
+
 	.watch-meta-top h1 { margin: 0 0 6px; font-size: 1.8rem; font-weight: 800; }
 
 	.ctrl-group { margin-top: 20px; }
@@ -200,9 +207,27 @@ function buildPlayer(streamURL) {
 	source.src = streamURL;
 	video.appendChild(source);
 	player = new Plyr('#player', { captions: { active: true, update: true }, autoplay: true });
+	// On phones, rotate to landscape when going fullscreen (and release on exit).
+	player.on('enterfullscreen', lockLandscape);
+	player.on('exitfullscreen', unlockOrientation);
 	video.play().catch(() => {});
 	// Subtitles are owner-level, so re-apply the active one after a source switch.
 	if (activeVtt) applyVtt(activeVtt, activeVttLabel);
+}
+
+// --- Fullscreen orientation (mobile) --------------------------------------
+
+// lockLandscape rotates the device to landscape while fullscreen. Only works on
+// devices/browsers that support the Screen Orientation lock API (Android Chrome,
+// etc.); iOS Safari rejects it, so we swallow the error.
+function lockLandscape() {
+	const o = screen.orientation;
+	if (o && typeof o.lock === 'function') o.lock('landscape').catch(() => {});
+}
+
+function unlockOrientation() {
+	const o = screen.orientation;
+	if (o && typeof o.unlock === 'function') { try { o.unlock(); } catch(e) {} }
 }
 
 // --- Stats / progress (debug only) ----------------------------------------
