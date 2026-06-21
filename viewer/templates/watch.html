@@ -287,20 +287,86 @@ async function playSource(videoID) {
 	currentInfoHash = data.infoHash;
 	activeVideoID = videoID;
 	renderSourceChips();
+	startStatsPolling();
+	// The streamer adds magnets lazily: until it has fetched the torrent metadata
+	// the stream endpoint 404s, and attaching the <video> to it then raises a fatal
+	// MediaError that kills the player. So wait until the streamer can actually
+	// serve the file before pointing the player at it.
+	setStatus('Đang tải thông tin torrent…');
+	const ready = await waitForStreamReady(data.infoHash, videoID);
+	if (!ready) return; // timed out, or the user switched sources mid-wait
 	const src = `${API}/${data.infoHash}/files/${data.fileIndex}/stream`;
 	buildPlayer(src);
 	setStatus('');
-	startStatsPolling();
 }
+
+// waitForStreamReady polls the streamer's stats until it has fetched the torrent
+// metadata (totalBytes>0) — the point at which the stream endpoint stops 404-ing.
+// It bails if the user switches to another source mid-wait, and gives up (with a
+// user-facing error) after STREAM_READY_TIMEOUT_MS.
+const STREAM_READY_TIMEOUT_MS = 60000;
+async function waitForStreamReady(infoHash, videoID) {
+	const start = Date.now();
+	while (Date.now() - start < STREAM_READY_TIMEOUT_MS) {
+		if (activeVideoID !== videoID) return false; // superseded by another source
+		try {
+			const res = await fetch(`${API}/${infoHash}/stats`);
+			if (res.ok) {
+				const s = await res.json();
+				if (s.totalBytes > 0) return true; // metadata ready — file is servable
+			}
+		} catch(e) { /* transient network blip — keep polling */ }
+		document.getElementById('progress-text').textContent =
+			`Đang tải thông tin torrent… (${Math.round((Date.now() - start) / 1000)}s)`;
+		await sleep(1000);
+	}
+	if (activeVideoID === videoID) {
+		setStatus('Nguồn phát đang tải chậm hoặc không có seeder. Vui lòng thử lại hoặc chọn nguồn khác.', true);
+	}
+	return false;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+const MAX_STREAM_RETRIES = 3;
+let bufferWatchdog = null;
 
 function buildPlayer(streamURL) {
 	const wrap = document.getElementById('player-wrap');
 	if (player) { try { player.destroy(); } catch(e) {} player = null; }
+	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
 	wrap.innerHTML = '<video id="player" controls playsinline></video>';
 	const video = document.getElementById('player');
 	const source = document.createElement('source');
 	source.src = streamURL;
 	video.appendChild(source);
+
+	// The streamer can still 404 in the brief window right after metadata lands;
+	// retry the load a few times before giving up rather than dying on first error.
+	let retries = 0;
+	video.addEventListener('error', () => {
+		if (retries++ >= MAX_STREAM_RETRIES) {
+			setStatus('Không phát được nguồn này. Vui lòng thử lại hoặc chọn nguồn khác.', true);
+			return;
+		}
+		setTimeout(() => { try { video.load(); video.play().catch(() => {}); } catch(e) {} }, 1500);
+	});
+
+	// Buffering watchdog: if the stream stalls for too long (slow/missing seeders),
+	// surface a hint instead of leaving a silent spinner. Cleared once playback runs.
+	const armWatchdog = () => {
+		if (bufferWatchdog) clearTimeout(bufferWatchdog);
+		bufferWatchdog = setTimeout(() => {
+			setStatus('Đang tải dữ liệu… nguồn có thể đang thiếu seeder.');
+		}, 20000);
+	};
+	video.addEventListener('waiting', armWatchdog);
+	video.addEventListener('stalled', armWatchdog);
+	video.addEventListener('playing', () => {
+		if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
+		setStatus('');
+	});
+
 	player = new Plyr('#player', { captions: { active: true, update: true }, autoplay: true });
 	// On phones, rotate to landscape when going fullscreen (and release on exit).
 	player.on('enterfullscreen', lockLandscape);
