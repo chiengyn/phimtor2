@@ -74,6 +74,35 @@
 	.status-msg { margin-top: 14px; color: var(--muted); font-size: 0.88rem; }
 	.status-msg.err { color: var(--accent); }
 	.no-source { margin: 28px 0; color: var(--muted); }
+
+	/* --- Subtitle appearance (applied to Plyr's caption cues) --------------- */
+	.watch .plyr__captions { font-size: var(--sub-font-size, 18px) !important; }
+	.watch .plyr--fullscreen-active .plyr__captions,
+	.watch .plyr:fullscreen .plyr__captions { font-size: calc(var(--sub-font-size, 18px) * 1.7) !important; }
+	.watch .plyr__caption {
+		color: var(--sub-color, #ffffff) !important;
+		background: var(--sub-bg, rgba(0,0,0,0.8)) !important;
+		text-shadow: var(--sub-shadow, none) !important;
+		line-height: 1.35;
+	}
+
+	/* Subtitle appearance panel. */
+	.sub-style { margin-top: 18px; max-width: 720px; }
+	.sub-style[hidden] { display: none; }
+	.sub-style-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 22px; }
+	.sub-field { display: flex; flex-direction: column; gap: 6px; }
+	.sub-field > label { color: var(--muted); font-size: 0.78rem; }
+	.sub-field .val { color: var(--text); font-weight: 600; }
+	.sub-field input[type=range] { width: 100%; accent-color: var(--accent); }
+	.sub-field input[type=color] {
+		width: 100%; height: 34px; padding: 0; border: 1px solid #3a3a3a;
+		border-radius: var(--radius); background: var(--surface); cursor: pointer;
+	}
+	.sub-field select {
+		background: var(--surface); color: var(--text); border: 1px solid #3a3a3a;
+		border-radius: var(--radius); padding: 7px 10px; font-size: 0.85rem;
+	}
+	.sub-style-actions { margin-top: 14px; }
 </style>
 <section class="watch"
 	data-streamer="{{.StreamerURL}}"
@@ -102,8 +131,42 @@
 			<span class="ctrl-label">Phụ đề</span>
 			<label class="btn btn-sm" for="subtitle-input">＋ Tải tệp .srt/.vtt</label>
 			<input type="file" id="subtitle-input" accept=".srt,.vtt" hidden onchange="loadSubtitleFile(this.files[0]); this.value=''">
+			<button class="btn btn-sm btn-clear" id="sub-style-btn" onclick="toggleSubStyle()">🅰 Tùy chỉnh hiển thị</button>
 			<button class="btn btn-sm btn-clear" id="sub-off-btn" onclick="clearSubtitle()" hidden>Tắt phụ đề</button>
 		</div>
+
+		<div class="sub-style" id="sub-style" hidden>
+			<div class="sub-style-grid">
+				<div class="sub-field">
+					<label>Cỡ chữ <span class="val" id="ss-size-val"></span></label>
+					<input type="range" id="ss-size" min="12" max="44" step="1">
+				</div>
+				<div class="sub-field">
+					<label for="ss-color">Màu chữ</label>
+					<input type="color" id="ss-color">
+				</div>
+				<div class="sub-field">
+					<label for="ss-bg-color">Màu nền</label>
+					<input type="color" id="ss-bg-color">
+				</div>
+				<div class="sub-field">
+					<label>Độ mờ nền <span class="val" id="ss-bg-opacity-val"></span></label>
+					<input type="range" id="ss-bg-opacity" min="0" max="100" step="5">
+				</div>
+				<div class="sub-field">
+					<label for="ss-edge">Viền chữ</label>
+					<select id="ss-edge">
+						<option value="none">Không</option>
+						<option value="shadow">Bóng đổ</option>
+						<option value="outline">Viền đen</option>
+					</select>
+				</div>
+			</div>
+			<div class="sub-style-actions">
+				<button class="btn btn-sm btn-clear" onclick="resetSubStyle()">Đặt lại mặc định</button>
+			</div>
+		</div>
+
 		<div class="sub-list" id="sub-list"></div>
 		<span id="subtitle-status" class="subtitle-status"></span>
 	</div>
@@ -389,9 +452,98 @@ function escHtml(s) {
 	return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// --- Subtitle appearance --------------------------------------------------
+
+const SUB_STYLE_KEY = 'phimnet.subStyle';
+const SUB_STYLE_DEFAULTS = { size: 18, color: '#ffffff', bgColor: '#000000', bgOpacity: 80, edge: 'none' };
+let subStyle = Object.assign({}, SUB_STYLE_DEFAULTS);
+
+function loadSubStyle() {
+	try {
+		const saved = JSON.parse(localStorage.getItem(SUB_STYLE_KEY) || '{}');
+		subStyle = Object.assign({}, SUB_STYLE_DEFAULTS, saved);
+	} catch(e) { subStyle = Object.assign({}, SUB_STYLE_DEFAULTS); }
+}
+
+function hexToRgba(hex, alphaPct) {
+	const h = String(hex).replace('#', '');
+	const r = parseInt(h.substring(0, 2), 16) || 0;
+	const g = parseInt(h.substring(2, 4), 16) || 0;
+	const b = parseInt(h.substring(4, 6), 16) || 0;
+	return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(100, alphaPct)) / 100})`;
+}
+
+const SUB_EDGE_SHADOW = {
+	none: 'none',
+	shadow: '1px 1px 2px rgba(0,0,0,0.9)',
+	outline: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+};
+
+// applySubStyle writes the current settings to CSS variables on the player
+// container so Plyr's caption cues pick them up, and persists them.
+function applySubStyle() {
+	ROOT.style.setProperty('--sub-font-size', subStyle.size + 'px');
+	ROOT.style.setProperty('--sub-color', subStyle.color);
+	ROOT.style.setProperty('--sub-bg', hexToRgba(subStyle.bgColor, subStyle.bgOpacity));
+	ROOT.style.setProperty('--sub-shadow', SUB_EDGE_SHADOW[subStyle.edge] || 'none');
+	try { localStorage.setItem(SUB_STYLE_KEY, JSON.stringify(subStyle)); } catch(e) {}
+}
+
+// syncSubStyleControls reflects the current settings back into the panel inputs.
+function syncSubStyleControls() {
+	const size = document.getElementById('ss-size');
+	const sizeVal = document.getElementById('ss-size-val');
+	const color = document.getElementById('ss-color');
+	const bgColor = document.getElementById('ss-bg-color');
+	const bgOp = document.getElementById('ss-bg-opacity');
+	const bgOpVal = document.getElementById('ss-bg-opacity-val');
+	const edge = document.getElementById('ss-edge');
+	if (size) { size.value = subStyle.size; sizeVal.textContent = subStyle.size + 'px'; }
+	if (color) color.value = subStyle.color;
+	if (bgColor) bgColor.value = subStyle.bgColor;
+	if (bgOp) { bgOp.value = subStyle.bgOpacity; bgOpVal.textContent = subStyle.bgOpacity + '%'; }
+	if (edge) edge.value = subStyle.edge;
+}
+
+function initSubStyleControls() {
+	const size = document.getElementById('ss-size');
+	const color = document.getElementById('ss-color');
+	const bgColor = document.getElementById('ss-bg-color');
+	const bgOp = document.getElementById('ss-bg-opacity');
+	const edge = document.getElementById('ss-edge');
+	size.addEventListener('input', () => {
+		subStyle.size = parseInt(size.value, 10);
+		document.getElementById('ss-size-val').textContent = subStyle.size + 'px';
+		applySubStyle();
+	});
+	color.addEventListener('input', () => { subStyle.color = color.value; applySubStyle(); });
+	bgColor.addEventListener('input', () => { subStyle.bgColor = bgColor.value; applySubStyle(); });
+	bgOp.addEventListener('input', () => {
+		subStyle.bgOpacity = parseInt(bgOp.value, 10);
+		document.getElementById('ss-bg-opacity-val').textContent = subStyle.bgOpacity + '%';
+		applySubStyle();
+	});
+	edge.addEventListener('change', () => { subStyle.edge = edge.value; applySubStyle(); });
+}
+
+function toggleSubStyle() {
+	const panel = document.getElementById('sub-style');
+	panel.hidden = !panel.hidden;
+}
+
+function resetSubStyle() {
+	subStyle = Object.assign({}, SUB_STYLE_DEFAULTS);
+	syncSubStyleControls();
+	applySubStyle();
+}
+
 // --- Init -----------------------------------------------------------------
 
 (async function init() {
+	loadSubStyle();
+	initSubStyleControls();
+	syncSubStyleControls();
+	applySubStyle();
 	renderSourceChips();
 	renderSubList();
 	console.info('phimnet: nhập streamDebug() vào console để xem tiến trình tải & số liệu gỡ lỗi.');
