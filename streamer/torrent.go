@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -92,11 +93,18 @@ type TorrentManager struct {
 	// used to scale per-reader readahead down under load (readaheadFor).
 	activeReaders atomic.Int64
 
+	// activity tracks per-torrent streaming usage so idle torrents can be reaped
+	// (dropped) to free disk and peer connections. See reaper.go.
+	idleTTL    time.Duration
+	activityMu sync.Mutex
+	activity   map[string]*torrentActivity
+	reaperDone chan struct{}
+
 	rateMu  sync.Mutex
 	samples map[string]rateSample
 }
 
-func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns int) (*TorrentManager, error) {
+func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns int, idleTTL time.Duration) (*TorrentManager, error) {
 	storageImpl, err := newStorage(storageCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create storage: %w", err)
@@ -130,11 +138,18 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 		torrents:    make(map[string]*torrent.Torrent),
 		readahead:   readaheadBytes,
 		prefixBytes: storageCfg.PrefixBytes,
+		idleTTL:     idleTTL,
+		activity:    make(map[string]*torrentActivity),
 		samples:     make(map[string]rateSample),
 	}
 	// Only the prefix-cache backend tracks reader positions; capped-sqlite does not.
 	if rt, ok := storageImpl.(readerTracker); ok {
 		m.tracker = rt
+	}
+	// Reap torrents that go unstreamed for idleTTL, freeing disk and peer slots.
+	if idleTTL > 0 {
+		m.reaperDone = make(chan struct{})
+		go m.runReaper()
 	}
 	return m, nil
 }
@@ -164,6 +179,7 @@ func (m *TorrentManager) AddMagnet(magnetURI string) (string, error) {
 	m.mu.Lock()
 	m.torrents[infoHash] = t
 	m.mu.Unlock()
+	m.touchActivity(infoHash) // start the idle clock from when it was added
 
 	go func() {
 		<-t.GotInfo()
@@ -189,6 +205,7 @@ func (m *TorrentManager) AddTorrentFile(r io.Reader) (string, error) {
 	m.mu.Lock()
 	m.torrents[infoHash] = t
 	m.mu.Unlock()
+	m.touchActivity(infoHash) // start the idle clock from when it was added
 
 	go func() {
 		<-t.GotInfo()
@@ -348,6 +365,9 @@ func (m *TorrentManager) GetFileReader(infoHash string, fileIndex int) (io.ReadS
 	count := m.activeReaders.Add(1)
 	reader.SetReadahead(m.readaheadFor(count))
 
+	// Mark the torrent in use so the idle reaper won't drop it while it streams.
+	m.markReaderOpened(infoHash)
+
 	fi := &FileInfo{
 		Index:          fileIndex,
 		Path:           f.Path(),
@@ -358,10 +378,13 @@ func (m *TorrentManager) GetFileReader(infoHash string, fileIndex int) (io.ReadS
 
 	tr := &trackedReader{
 		ReadSeekCloser: reader,
-		onDone:         func() { m.activeReaders.Add(-1) },
-		pieceLength:    t.Info().PieceLength,
-		fileOffset:     f.Offset(),
-		ih:             t.InfoHash(),
+		onDone: func() {
+			m.activeReaders.Add(-1)
+			m.markReaderClosed(infoHash)
+		},
+		pieceLength: t.Info().PieceLength,
+		fileOffset:  f.Offset(),
+		ih:          t.InfoHash(),
 	}
 	// Register the reader's playhead with the storage so eviction protects this
 	// viewer's window (no-op when the backend doesn't track readers).
@@ -392,23 +415,38 @@ func (m *TorrentManager) readaheadFor(active int64) int64 {
 
 func (m *TorrentManager) RemoveTorrent(infoHash string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	t, ok := m.torrents[infoHash]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("torrent not found")
 	}
-
-	t.Drop()
+	ih := t.InfoHash()
+	t.Drop() // stops the torrent and closes its peer connections
 	delete(m.torrents, infoHash)
+	m.mu.Unlock()
 
 	m.rateMu.Lock()
 	delete(m.samples, infoHash)
 	m.rateMu.Unlock()
+
+	m.activityMu.Lock()
+	delete(m.activity, infoHash)
+	m.activityMu.Unlock()
+
+	// Free the torrent's on-disk blobs once it's detached from the client. Done
+	// outside m.mu since it touches the filesystem.
+	if d, ok := m.storageImpl.(torrentDropper); ok {
+		if err := d.DropTorrent(ih); err != nil {
+			log.Printf("free storage for %s: %v", infoHash, err)
+		}
+	}
 	return nil
 }
 
 func (m *TorrentManager) Close() {
+	if m.reaperDone != nil {
+		close(m.reaperDone)
+	}
 	m.client.Close()
 	if m.storageImpl != nil {
 		_ = m.storageImpl.Close()

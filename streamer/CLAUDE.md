@@ -48,9 +48,10 @@ transcoding and a writable `DATA_DIR`. The Docker image handles the cwd by
 
 Configuration is via env vars or matching CLI flags (see `config.go`):
 `PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`,
-`MAX_CONNS` (peer connections per torrent, default 200), and `RETAIN_HOT`
+`MAX_CONNS` (peer connections per torrent, default 200), `RETAIN_HOT`
 (default off; keep every piece of a torrent that has a viewer — trades disk for
-concurrent capacity).
+concurrent capacity), and `IDLE_TTL_MIN` (default 30; drop torrents unstreamed
+for this many minutes, 0 disables).
 
 ## Architecture
 
@@ -61,6 +62,16 @@ Flat single `main` package. The pieces that only make sense read together:
   goroutine that waits for `GotInfo()` then calls `pinPrefixPieces` to raise the
   priority of the pieces holding the first `PREFIX_MB` of each video file — so
   playback starts instantly.
+
+- **Idle reaper** (`reaper.go`). The manager tracks per-torrent streaming usage
+  (`activity map[infoHash]*torrentActivity`: open-reader count + `lastUsed`,
+  updated when a `trackedReader` opens/closes and seeded on add). A background
+  goroutine drops any torrent with no open readers that has gone unstreamed for
+  `IDLE_TTL_MIN`, freeing both peer connections (`t.Drop()`) and disk: the
+  storage's optional `DropTorrent` (a `torrentDropper`, implemented by
+  prefix-cache) removes the torrent's prefix + cache dirs, clears its bolt
+  completion entries, and releases cached fds. `RemoveTorrent` (the API delete
+  path) runs the same cleanup. Set `IDLE_TTL_MIN=0` to disable.
 
 - **Pluggable storage** is the core design. `newStorage` (`storage.go`) selects a
   backend by `STORAGE_MODE`:

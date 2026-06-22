@@ -26,6 +26,14 @@ type StorageConfig struct {
 	RetainHot   bool  // keep every piece of a torrent that has an active reader
 }
 
+// torrentDropper is the optional contract a storage backend implements to free a
+// torrent's on-disk data when it is removed or reaped for being idle, so disk
+// isn't held by torrents nobody streams. Backends that don't implement it leave
+// their data in place (e.g. capped-sqlite reclaims space on its own).
+type torrentDropper interface {
+	DropTorrent(ih metainfo.Hash) error
+}
+
 // readerTracker is the optional contract a storage backend implements so the
 // manager can tell it where each active viewer is reading. The prefix-cache
 // backend uses these positions to protect every reader's near-ahead window from
