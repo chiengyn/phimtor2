@@ -21,6 +21,7 @@
     .hero { display: flex; gap: 1.25rem; align-items: flex-start; margin-bottom: 1.5rem; }
     .hero img { width: 120px; height: 180px; object-fit: cover; border-radius: 8px; background: #222b36; flex: none; }
     .hero h2 { margin: 0 0 .25rem; font-size: 1.4rem; }
+    .hero .original-title { font-size: .95rem; font-style: italic; color: #8b949e; margin: 0 0 .25rem; }
     .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; vertical-align: middle; }
     .badge.tv { background: #db61a233; color: #ff9bce; }
     .badge.res { background: #14532d; color: #86efac; font-weight: 700; flex: none; }
@@ -80,6 +81,7 @@
         <h2>{{ .Title.Title }}
           {{ if eq .Title.Type "tv" }}<span class="badge tv">Phim bộ</span>{{ else }}<span class="badge">Phim lẻ</span>{{ end }}
         </h2>
+        {{ if and .Title.OriginalTitle (ne .Title.OriginalTitle .Title.Title) }}<div class="original-title">{{ .Title.OriginalTitle }}</div>{{ end }}
         <div class="muted">{{ year .Title.AirDate }} · TMDB #{{ .Title.TMDBID }} · db #{{ .Title.ID }}</div>
         {{ if .Title.Overview }}<p class="muted">{{ .Title.Overview }}</p>{{ end }}
       </div>

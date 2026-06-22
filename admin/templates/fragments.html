@@ -22,6 +22,7 @@
     <div>
       <a class="title-name" href="/titles/{{ .ID }}">{{ .Title }}</a>
       {{ if eq .Type "tv" }}<span class="badge tv">Phim bộ</span>{{ else }}<span class="badge">Phim lẻ</span>{{ end }}
+      {{ if and .OriginalTitle (ne .OriginalTitle .Title) }}<div class="original-title">{{ .OriginalTitle }}</div>{{ end }}
     </div>
     <div class="muted">{{ year .AirDate }} · TMDB #{{ .TMDBID }} · db #{{ .ID }}</div>
   </div>

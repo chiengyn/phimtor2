@@ -226,12 +226,13 @@ func (s *Store) UpsertTitle(ctx context.Context, t *Title) error {
 
 // TitleSummary is the lightweight row returned by ListTitles.
 type TitleSummary struct {
-	ID         int64  `json:"id"`
-	TMDBID     int    `json:"tmdb_id"`
-	Type       string `json:"type"`
-	Title      string `json:"title"`
-	AirDate    string `json:"air_date"`
-	PosterPath string `json:"poster_path"`
+	ID            int64  `json:"id"`
+	TMDBID        int    `json:"tmdb_id"`
+	Type          string `json:"type"`
+	Title         string `json:"title"`
+	OriginalTitle string `json:"original_title"`
+	AirDate       string `json:"air_date"`
+	PosterPath    string `json:"poster_path"`
 }
 
 // titleSearchWhere builds the WHERE clause (and its args) that filters titles by
@@ -262,7 +263,7 @@ func (s *Store) ListTitles(ctx context.Context, q string, limit, offset int) ([]
 	where, args := titleSearchWhere(q)
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, tmdb_id, type, title, air_date, poster_path
+		SELECT id, tmdb_id, type, title, original_title, air_date, poster_path
 		FROM titles`+where+` ORDER BY updated_at DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
@@ -273,10 +274,11 @@ func (s *Store) ListTitles(ctx context.Context, q string, limit, offset int) ([]
 	for rows.Next() {
 		var t TitleSummary
 		var air sql.NullTime
-		var poster sql.NullString
-		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &air, &poster); err != nil {
+		var poster, orig sql.NullString
+		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &orig, &air, &poster); err != nil {
 			return nil, err
 		}
+		t.OriginalTitle = orig.String
 		t.AirDate = dateStr(air)
 		t.PosterPath = poster.String
 		out = append(out, t)
