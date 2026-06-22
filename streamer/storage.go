@@ -23,6 +23,18 @@ type StorageConfig struct {
 	DataDir     string
 	PrefixBytes int64 // bytes pinned at the start of each video file
 	CacheBytes  int64 // LRU budget for the bulk (cache / sqlite cap)
+	RetainHot   bool  // keep every piece of a torrent that has an active reader
+}
+
+// readerTracker is the optional contract a storage backend implements so the
+// manager can tell it where each active viewer is reading. The prefix-cache
+// backend uses these positions to protect every reader's near-ahead window from
+// eviction; backends that don't implement it (capped-sqlite) simply aren't
+// tracked.
+type readerTracker interface {
+	RegisterReader(ih metainfo.Hash) uint64
+	NoteReaderPos(ih metainfo.Hash, id uint64, pieceIndex int)
+	UnregisterReader(ih metainfo.Hash, id uint64)
 }
 
 // newStorage builds the storage backend selected by cfg.Mode.

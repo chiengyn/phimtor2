@@ -6,12 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 )
+
+// minReadaheadBytes is the floor for per-reader readahead. Readahead is scaled
+// down as the number of concurrent readers rises (see readaheadFor) to bound
+// total memory under load, but never below this so playback stays smooth.
+const minReadaheadBytes = 4 << 20
 
 type TorrentInfo struct {
 	InfoHash       string     `json:"infoHash"`
@@ -76,16 +82,21 @@ type rateSample struct {
 type TorrentManager struct {
 	client      *torrent.Client
 	storageImpl storage.ClientImplCloser
+	tracker     readerTracker // nil if the storage backend doesn't track readers
 	mu          sync.RWMutex
 	torrents    map[string]*torrent.Torrent
 	readahead   int64
 	prefixBytes int64
 
+	// activeReaders counts streaming readers currently open across all torrents,
+	// used to scale per-reader readahead down under load (readaheadFor).
+	activeReaders atomic.Int64
+
 	rateMu  sync.Mutex
 	samples map[string]rateSample
 }
 
-func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64) (*TorrentManager, error) {
+func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns int) (*TorrentManager, error) {
 	storageImpl, err := newStorage(storageCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create storage: %w", err)
@@ -96,20 +107,36 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64) (*Torrent
 	cfg.NoUpload = false
 	cfg.DefaultStorage = storageImpl
 
+	// Raise peer-connection limits above the library defaults (50/25/100/500) so a
+	// hot torrent fills its cache from the swarm fast enough to feed many viewers.
+	if maxConns > 0 {
+		cfg.EstablishedConnsPerTorrent = maxConns
+		cfg.HalfOpenConnsPerTorrent = maxConns / 2
+		cfg.TotalHalfOpenConns = maxConns
+		if hw := maxConns * 4; cfg.TorrentPeersHighWater < hw {
+			cfg.TorrentPeersHighWater = hw
+		}
+	}
+
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
 		_ = storageImpl.Close()
 		return nil, fmt.Errorf("create torrent client: %w", err)
 	}
 
-	return &TorrentManager{
+	m := &TorrentManager{
 		client:      client,
 		storageImpl: storageImpl,
 		torrents:    make(map[string]*torrent.Torrent),
 		readahead:   readaheadBytes,
 		prefixBytes: storageCfg.PrefixBytes,
 		samples:     make(map[string]rateSample),
-	}, nil
+	}
+	// Only the prefix-cache backend tracks reader positions; capped-sqlite does not.
+	if rt, ok := storageImpl.(readerTracker); ok {
+		m.tracker = rt
+	}
+	return m, nil
 }
 
 // pinPrefixPieces raises the priority of the pieces that hold the first
@@ -315,7 +342,11 @@ func (m *TorrentManager) GetFileReader(infoHash string, fileIndex int) (io.ReadS
 	f := files[fileIndex]
 	reader := f.NewReader()
 	reader.SetResponsive()
-	reader.SetReadahead(m.readahead)
+
+	// Scale readahead down as concurrent readers rise so N viewers don't each
+	// reserve the full READAHEAD_MB (16 MB × N would be unbounded memory).
+	count := m.activeReaders.Add(1)
+	reader.SetReadahead(m.readaheadFor(count))
 
 	fi := &FileInfo{
 		Index:          fileIndex,
@@ -325,7 +356,38 @@ func (m *TorrentManager) GetFileReader(infoHash string, fileIndex int) (io.ReadS
 		IsVideo:        isVideoFile(f.Path()),
 	}
 
-	return reader, fi, nil
+	tr := &trackedReader{
+		ReadSeekCloser: reader,
+		onDone:         func() { m.activeReaders.Add(-1) },
+		pieceLength:    t.Info().PieceLength,
+		fileOffset:     f.Offset(),
+		ih:             t.InfoHash(),
+	}
+	// Register the reader's playhead with the storage so eviction protects this
+	// viewer's window (no-op when the backend doesn't track readers).
+	if m.tracker != nil {
+		tr.tracker = m.tracker
+		tr.id = m.tracker.RegisterReader(tr.ih)
+	}
+	return tr, fi, nil
+}
+
+// readaheadFor returns the readahead to give a reader when active is the current
+// number of open readers. It divides the configured budget across readers but
+// never drops below minReadaheadBytes (or the configured value, if smaller).
+func (m *TorrentManager) readaheadFor(active int64) int64 {
+	ra := m.readahead
+	if active > 1 {
+		ra = m.readahead / active
+	}
+	floor := int64(minReadaheadBytes)
+	if floor > m.readahead {
+		floor = m.readahead
+	}
+	if ra < floor {
+		ra = floor
+	}
+	return ra
 }
 
 func (m *TorrentManager) RemoveTorrent(infoHash string) error {
@@ -351,4 +413,58 @@ func (m *TorrentManager) Close() {
 	if m.storageImpl != nil {
 		_ = m.storageImpl.Close()
 	}
+}
+
+// trackedReader wraps a torrent file reader so the manager and storage learn
+// where the viewer is playing. ReadAt-level reads can't tell readers apart, so
+// position is reported here: each Read/Seek maps the file-relative offset to a
+// global piece index and notes it; Close releases the reader's slot. tracker may
+// be nil (storage backend that doesn't track) — onDone always runs to keep the
+// active-reader count accurate.
+type trackedReader struct {
+	io.ReadSeekCloser
+	tracker     readerTracker // may be nil
+	onDone      func()        // decrements the manager's active-reader count
+	ih          metainfo.Hash
+	id          uint64
+	fileOffset  int64 // torrent-wide byte offset of this file's first byte
+	pieceLength int64
+	pos         int64 // current read offset within the file
+	closed      bool
+}
+
+func (tr *trackedReader) note() {
+	if tr.tracker == nil || tr.pieceLength <= 0 {
+		return
+	}
+	tr.tracker.NoteReaderPos(tr.ih, tr.id, int((tr.fileOffset+tr.pos)/tr.pieceLength))
+}
+
+func (tr *trackedReader) Read(p []byte) (int, error) {
+	tr.note() // note the piece we're about to consume before advancing
+	n, err := tr.ReadSeekCloser.Read(p)
+	tr.pos += int64(n)
+	return n, err
+}
+
+func (tr *trackedReader) Seek(offset int64, whence int) (int64, error) {
+	newPos, err := tr.ReadSeekCloser.Seek(offset, whence)
+	if err == nil {
+		tr.pos = newPos
+		tr.note()
+	}
+	return newPos, err
+}
+
+func (tr *trackedReader) Close() error {
+	if !tr.closed {
+		tr.closed = true
+		if tr.tracker != nil {
+			tr.tracker.UnregisterReader(tr.ih, tr.id)
+		}
+		if tr.onDone != nil {
+			tr.onDone()
+		}
+	}
+	return tr.ReadSeekCloser.Close()
 }

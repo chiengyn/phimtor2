@@ -28,12 +28,21 @@ import (
 // Eviction is read-position aware, not plain LRU. For streaming the useful data
 // is the window just *ahead* of where each reader is playing, but the torrent
 // client downloads ahead opportunistically, so plain LRU would evict
-// soon-to-be-played pieces and the reader would hit "no such file" / stall. So we
-// track each torrent's latest read index and, when over budget, evict in this
-// order: pieces of torrents with no active reader, then pieces furthest *behind*
-// the read head (already played), then pieces furthest *ahead* (downloaded too
-// eagerly) — always keeping the near-ahead playback window resident. This lets
-// CACHE_MB be small without stalling playback.
+// soon-to-be-played pieces and the reader would hit "no such file" / stall.
+//
+// Crucially this tracks *every* active reader's playhead, not a single one, so
+// that many viewers watching the same file at different positions don't evict
+// each other's windows — each piece is downloaded from the swarm once and served
+// to all of them from disk. When over budget we evict in this order: pieces of
+// torrents with no active reader, then pieces behind *every* reader (played by
+// all), then pieces ahead of *every* reader (downloaded too eagerly) — always
+// keeping the near-ahead window of any reader resident. This lets CACHE_MB be
+// small without stalling playback.
+//
+// With retainHot set, pieces of any torrent that currently has a reader are
+// exempt from eviction entirely (the cache may grow past CACHE_MB for hot
+// titles), so late joiners never re-hit the swarm. Disk is reclaimed once the
+// last reader leaves and normal bounded eviction resumes.
 //
 // One blob file is written per piece (<dir>/<infohash>/<index>) so the cache can
 // reclaim a single piece by deleting its file. A Capacity is reported so the
@@ -44,18 +53,27 @@ type prefixCacheStorage struct {
 	cacheDir    string
 	prefixBytes int64
 	cacheCap    int64
+	retainHot   bool
 
 	prefixCompletion storage.PieceCompletion // persistent (bolt)
 	cacheCompletion  storage.PieceCompletion // ephemeral (in-memory)
+
+	// fds caches open read handles to per-piece blobs so repeat reads under heavy
+	// concurrency skip the open/close syscalls (see fdCache).
+	fds *fdCache
 
 	// capFunc is shared (by pointer) across all torrents so they share one global
 	// request-order budget.
 	capFunc func() (int64, bool)
 
-	mu             sync.Mutex
-	cache          map[metainfo.PieceKey]int64 // resident cache pieces -> size
-	cacheBytes     int64
-	readPos        map[metainfo.Hash]int       // latest read piece index per torrent
+	mu           sync.Mutex
+	cache        map[metainfo.PieceKey]int64 // resident cache pieces -> size
+	cacheBytes   int64
+	nextReaderID uint64
+	// readers tracks every active reader's latest read piece index per torrent, so
+	// eviction can protect the near-ahead window of each (see evictionScore). A
+	// torrent with an entry here is "hot": it has at least one viewer.
+	readers        map[metainfo.Hash]map[uint64]int
 	prefixKeys     map[metainfo.PieceKey]int64 // resident complete prefix pieces -> size
 	prefixResident int64
 }
@@ -99,19 +117,34 @@ func newPrefixCacheStorage(cfg StorageConfig) (storage.ClientImplCloser, error) 
 		cacheDir:         cacheDir,
 		prefixBytes:      cfg.PrefixBytes,
 		cacheCap:         cfg.CacheBytes,
+		retainHot:        cfg.RetainHot,
 		prefixCompletion: prefixCompletion,
 		cacheCompletion:  storage.NewMapPieceCompletion(),
 		cache:            make(map[metainfo.PieceKey]int64),
-		readPos:          make(map[metainfo.Hash]int),
+		readers:          make(map[metainfo.Hash]map[uint64]int),
 		prefixKeys:       make(map[metainfo.PieceKey]int64),
+		// Kept well under a typical 1024 RLIMIT_NOFILE, leaving room for peer
+		// sockets and the bolt DB.
+		fds: newFDCache(256),
 	}
 	s.capFunc = func() (int64, bool) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		// Prefix pieces are highest priority and scanned first by the request
-		// order, so including their resident size guarantees they always fit,
-		// leaving cacheCap for the bulk windows of active readers.
-		return s.cacheCap + s.prefixResident, true
+		// Capacity is the shared download budget: the client stops requesting once
+		// resident + highest-priority pieces exhaust it. Prefix pieces are highest
+		// priority and scanned first, so including their resident size guarantees
+		// they always fit, leaving cacheCap for the bulk windows of active readers.
+		//
+		// Under retainHot the cache may hold far more than cacheCap (we refuse to
+		// evict hot torrents' pieces), so we must add what we're actually holding —
+		// otherwise those retained complete pieces would eat the whole budget and
+		// the client could never request the active playback window. cacheCap then
+		// remains as headroom for that window on top of everything retained.
+		retained := int64(0)
+		if s.retainHot {
+			retained = s.cacheBytes
+		}
+		return s.cacheCap + s.prefixResident + retained, true
 	}
 	return s, nil
 }
@@ -133,6 +166,7 @@ func removeAllWithRetry(dir string) error {
 }
 
 func (s *prefixCacheStorage) Close() error {
+	s.fds.closeAll()
 	err := s.prefixCompletion.Close()
 	if cerr := s.cacheCompletion.Close(); cerr != nil && err == nil {
 		err = cerr
@@ -223,19 +257,7 @@ func (p *prefixCachePiece) WriteAt(b []byte, off int64) (int, error) {
 }
 
 func (p *prefixCachePiece) ReadAt(b []byte, off int64) (int, error) {
-	f, err := os.Open(p.path())
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	n, err := f.ReadAt(b, off)
-	if n > 0 {
-		// Track where each reader is (prefix reads count too — the read head
-		// starts in the prefix region) so cache eviction can protect the window
-		// just ahead of it.
-		p.s.noteRead(p.key)
-	}
-	return n, err
+	return p.s.fds.readAt(p.path(), b, off)
 }
 
 func (p *prefixCachePiece) Completion() storage.Completion {
@@ -259,6 +281,7 @@ func (p *prefixCachePiece) MarkComplete() error {
 }
 
 func (p *prefixCachePiece) MarkNotComplete() error {
+	p.s.fds.drop(p.path()) // blob is about to be removed/rewritten
 	if err := os.Remove(p.path()); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -298,11 +321,46 @@ func (s *prefixCacheStorage) removePrefixResident(key metainfo.PieceKey) {
 	s.mu.Unlock()
 }
 
-// noteRead records that infoHash is currently being read at piece index, so
-// eviction knows where the playback head is.
-func (s *prefixCacheStorage) noteRead(key metainfo.PieceKey) {
+// RegisterReader records a new active reader for a torrent and returns its id.
+// The manager calls this when it hands out a streaming reader (see
+// trackedReader) so eviction can protect that viewer's window. The returned id
+// must be passed back to NoteReaderPos / UnregisterReader.
+func (s *prefixCacheStorage) RegisterReader(ih metainfo.Hash) uint64 {
 	s.mu.Lock()
-	s.readPos[key.InfoHash] = key.Index
+	defer s.mu.Unlock()
+	s.nextReaderID++
+	id := s.nextReaderID
+	m := s.readers[ih]
+	if m == nil {
+		m = make(map[uint64]int)
+		s.readers[ih] = m
+	}
+	m[id] = 0 // assume playback starts at the file's first piece until first read
+	return id
+}
+
+// NoteReaderPos records that reader id of torrent ih is now reading pieceIndex,
+// so eviction knows where that viewer's playhead is.
+func (s *prefixCacheStorage) NoteReaderPos(ih metainfo.Hash, id uint64, pieceIndex int) {
+	s.mu.Lock()
+	if m := s.readers[ih]; m != nil {
+		if _, ok := m[id]; ok {
+			m[id] = pieceIndex
+		}
+	}
+	s.mu.Unlock()
+}
+
+// UnregisterReader drops a finished reader so eviction stops protecting its
+// window (and the torrent goes "cold" once its last reader leaves).
+func (s *prefixCacheStorage) UnregisterReader(ih metainfo.Hash, id uint64) {
+	s.mu.Lock()
+	if m := s.readers[ih]; m != nil {
+		delete(m, id)
+		if len(m) == 0 {
+			delete(s.readers, ih)
+		}
+	}
 	s.mu.Unlock()
 }
 
@@ -328,7 +386,9 @@ func (s *prefixCacheStorage) addCachePiece(key metainfo.PieceKey, size int64) {
 	s.mu.Unlock()
 
 	for _, k := range evicted {
-		if err := os.Remove(s.cacheBlobPath(k)); err != nil && !os.IsNotExist(err) {
+		path := s.cacheBlobPath(k)
+		s.fds.drop(path)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			// Best effort: the blob may already be gone.
 			_ = err
 		}
@@ -338,9 +398,10 @@ func (s *prefixCacheStorage) addCachePiece(key metainfo.PieceKey, size int64) {
 
 // pickVictim chooses the least useful resident cache piece to evict, excluding
 // the just-added piece. Higher score = evict sooner: pieces of torrents with no
-// active reader first, then pieces furthest behind the read head (already
-// played), then pieces furthest ahead (downloaded too eagerly) — so the
-// near-ahead playback window is kept. Caller must hold s.mu.
+// active reader first, then pieces behind every reader (already played by all),
+// then pieces furthest ahead of every reader (downloaded too eagerly) — so the
+// near-ahead window of any reader is kept. Under retainHot, pieces of a torrent
+// that still has a reader are not evictable at all. Caller must hold s.mu.
 func (s *prefixCacheStorage) pickVictim(exclude metainfo.PieceKey) (metainfo.PieceKey, bool) {
 	var best metainfo.PieceKey
 	bestScore := -1
@@ -348,6 +409,9 @@ func (s *prefixCacheStorage) pickVictim(exclude metainfo.PieceKey) (metainfo.Pie
 	for k := range s.cache {
 		if k == exclude {
 			continue
+		}
+		if s.retainHot && len(s.readers[k.InfoHash]) > 0 {
+			continue // hot torrent: pinned while it has a viewer
 		}
 		if score := s.evictionScore(k); score > bestScore {
 			best, bestScore, found = k, score, true
@@ -358,18 +422,33 @@ func (s *prefixCacheStorage) pickVictim(exclude metainfo.PieceKey) (metainfo.Pie
 
 const (
 	scoreInactiveBase = 1 << 30 // torrent has no active reader
-	scoreBehindBase   = 1 << 20 // already played, behind the read head
+	scoreBehindBase   = 1 << 20 // already played, behind every read head
 )
 
+// evictionScore rates how evictable a resident cache piece is across all of its
+// torrent's active readers. The piece is scored against each reader's playhead
+// and we keep the most protective verdict (the minimum): a piece in the
+// near-ahead window of *any* reader is protected even if it is behind or far
+// ahead of the others. So many viewers at different positions in the same file
+// never evict each other's windows. Caller must hold s.mu.
 func (s *prefixCacheStorage) evictionScore(k metainfo.PieceKey) int {
-	r, ok := s.readPos[k.InfoHash]
-	if !ok {
+	readers := s.readers[k.InfoHash]
+	if len(readers) == 0 {
 		return scoreInactiveBase + k.Index // no reader: most evictable
 	}
-	if k.Index < r {
-		return scoreBehindBase + (r - k.Index) // behind: furthest-behind first
+	best := -1
+	for _, r := range readers {
+		var score int
+		if k.Index < r {
+			score = scoreBehindBase + (r - k.Index) // behind this reader
+		} else {
+			score = k.Index - r // ahead: near-ahead is small (most protected)
+		}
+		if best == -1 || score < best {
+			best = score
+		}
 	}
-	return k.Index - r // ahead: furthest-ahead first, kept until behind exhausted
+	return best
 }
 
 func (s *prefixCacheStorage) removeCacheEntry(key metainfo.PieceKey) {
