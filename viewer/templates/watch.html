@@ -329,11 +329,18 @@ async function playSource(videoID) {
 	setStatus('');
 }
 
-// waitForStreamReady polls the streamer's stats until it has fetched the torrent
-// metadata (totalBytes>0) — the point at which the stream endpoint stops 404-ing.
+// waitForStreamReady polls the streamer's stats until the torrent has fetched
+// metadata (totalBytes>0) AND buffered the first chunk (bytesCompleted ≥
+// STREAM_READY_MIN_BYTES). The streamer pins the first PREFIX_MB of each video
+// file to high priority on add, so this prefix downloads on its own — the
+// browser doesn't need to hit the stream endpoint first — which is why gating on
+// downloaded bytes here doesn't deadlock. Waiting for real data (not just
+// metadata) avoids attaching the <video> the instant the file is "servable" but
+// still empty, which would stall on the first read.
 // It bails if the user switches to another source mid-wait, and gives up (with a
 // user-facing error) after STREAM_READY_TIMEOUT_MS.
 const STREAM_READY_TIMEOUT_MS = 60000;
+const STREAM_READY_MIN_BYTES = 1024 * 1024; // 1 MB
 async function waitForStreamReady(infoHash, videoID) {
 	const start = Date.now();
 	while (Date.now() - start < STREAM_READY_TIMEOUT_MS) {
@@ -342,7 +349,8 @@ async function waitForStreamReady(infoHash, videoID) {
 			const res = await fetch(`${API}/${infoHash}/stats`);
 			if (res.ok) {
 				const s = await res.json();
-				if (s.totalBytes > 0) return true; // metadata ready — file is servable
+				// totalBytes>0 ⇒ metadata in; bytesCompleted ⇒ first chunk buffered.
+				if (s.totalBytes > 0 && s.bytesCompleted >= STREAM_READY_MIN_BYTES) return true;
 			}
 		} catch(e) { /* transient network blip — keep polling */ }
 		const secs = Math.round((Date.now() - start) / 1000);
