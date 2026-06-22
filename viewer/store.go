@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"sort"
 	"strings"
 	"time"
 
@@ -170,6 +171,10 @@ type Row struct {
 	Key    string // query string that re-filters to this row, e.g. "type=movie"
 	Label  string
 	Titles []TitleSummary
+	// Ranked marks the "Top 10" strip: a true rating-ordered ranking the browse
+	// page renders with oversized rank numerals (and no "see all" link, since the
+	// ranking — not a filter — is what the row is about).
+	Ranked bool
 }
 
 // Href is the browse link for this row. It returns a template.URL so
@@ -193,7 +198,7 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 
 	var order []int64 // title ids in newest-first order
 	byID := map[int64]TitleSummary{}
-	var movies, tv []TitleSummary
+	var all, movies, tv []TitleSummary
 	for rows.Next() {
 		var t TitleSummary
 		var origTitle, poster sql.NullString
@@ -208,6 +213,7 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 		t.VoteAverage = vote.Float64
 		byID[t.ID] = t
 		order = append(order, t.ID)
+		all = append(all, t)
 		switch t.Type {
 		case "movie":
 			movies = append(movies, t)
@@ -259,6 +265,23 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 	}
 
 	var out []Row
+	// Top 10: a genuine ranking by rating (not a filter), so the numbered strip
+	// means something. Only titles that actually carry a vote qualify, and the row
+	// is dropped unless enough of them do — a "Top 10" of unrated titles would be
+	// numbering noise.
+	top := make([]TitleSummary, 0, len(all))
+	for _, t := range all {
+		if t.VoteAverage > 0 {
+			top = append(top, t)
+		}
+	}
+	sort.SliceStable(top, func(i, j int) bool { return top[i].VoteAverage > top[j].VoteAverage })
+	if len(top) >= 3 {
+		if len(top) > 10 {
+			top = top[:10]
+		}
+		out = append(out, Row{Label: "Top 10 nổi bật hôm nay", Titles: top, Ranked: true})
+	}
 	if len(movies) > 0 {
 		out = append(out, Row{Key: "type=movie", Label: "Phim lẻ", Titles: capRow(movies)})
 	}

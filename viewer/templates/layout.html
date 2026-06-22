@@ -21,12 +21,26 @@
 	<meta name="description" content="phimnet – Xem phim lẻ và phim bộ online miễn phí, phụ đề tiếng Việt, chất lượng cao.">
 	<meta name="robots" content="index, follow">
 	{{end}}
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 	<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 	<header class="site-header">
 		<a href="/" class="brand">phimnet</a>
+		<nav class="site-nav">
+			<a href="/">Trang chủ</a>
+			<a href="/?type=movie">Phim lẻ</a>
+			<a href="/?type=tv">Phim bộ</a>
+		</nav>
 	</header>
 	<main>{{block "content" .}}{{end}}</main>
+	<footer class="site-footer">
+		<div class="wrap">
+			<span class="footer-brand">phimnet</span>
+			<p>Xem phim lẻ &amp; phim bộ online, phụ đề tiếng Việt. Nội dung phát trực tuyến từ nguồn ngang hàng.</p>
+		</div>
+	</footer>
 </body>
 </html>{{end}}

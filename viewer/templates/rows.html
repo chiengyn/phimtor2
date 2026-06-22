@@ -1,8 +1,22 @@
 {{define "rows"}}{{range .}}
-<section class="row">
-	<h2 class="row-title"><a href="{{.Href}}">{{.Label}} <span class="row-chevron">›</span></a></h2>
+<section class="row{{if .Ranked}} row-ranked{{end}}">
+	<h2 class="row-title">
+		{{if .Ranked}}<span>{{.Label}}</span>{{else}}<a href="{{.Href}}">{{.Label}} <span class="row-chevron">›</span></a>{{end}}
+	</h2>
 	<div class="row-track">
-		{{range .Titles}}{{template "card" .}}{{end}}
+		{{if .Ranked}}
+			{{range $i, $t := .Titles}}
+			<a class="rank-card" href="/titles/{{$t.ID}}" aria-label="Hạng {{inc $i}}: {{$t.Title}}">
+				<span class="rank-num" aria-hidden="true">{{inc $i}}</span>
+				<div class="rank-poster">
+					{{$p := img "w342" $t.PosterPath}}
+					{{if $p}}<img src="{{$p}}" alt="{{$t.Title}}" loading="lazy">{{else}}<div class="poster-empty">{{$t.Title}}</div>{{end}}
+				</div>
+			</a>
+			{{end}}
+		{{else}}
+			{{range .Titles}}{{template "card" .}}{{end}}
+		{{end}}
 	</div>
 </section>
 {{else}}

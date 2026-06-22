@@ -77,6 +77,9 @@ var baseFuncMap = template.FuncMap{
 	// truncate shortens text to at most n runes (word-aware), appending an
 	// ellipsis — used to keep meta descriptions within search-snippet length.
 	"truncate": truncate,
+	// inc returns i+1, used to turn a 0-based range index into a 1-based rank
+	// numeral on the Top 10 row.
+	"inc": func(i int) int { return i + 1 },
 }
 
 // funcMap returns the template helpers for this server: the pure baseFuncMap
@@ -366,6 +369,7 @@ func buildPager(page, pages int, urlFor func(int) template.URL) pager {
 
 type homeData struct {
 	Rows     []Row    // browse view (no active filter)
+	Featured *Title   // browse-view hero billboard (top-ranked title); nil when filtered or empty
 	Grid     gridPage // flat results (filter active)
 	Genres   []Genre
 	Query    string
@@ -420,6 +424,14 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		if data.Rows, err = s.store.ListRows(r.Context()); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		// Hero billboard: the first row's first title (the #1 Top-10 pick when
+		// present, else the newest). Reload it in full so the hero can show its
+		// backdrop and overview, which the lightweight row summaries omit.
+		if len(data.Rows) > 0 && len(data.Rows[0].Titles) > 0 {
+			if t, err := s.store.GetTitle(r.Context(), data.Rows[0].Titles[0].ID); err == nil {
+				data.Featured = t
+			}
 		}
 	}
 	s.render(w, s.home, "layout", data)

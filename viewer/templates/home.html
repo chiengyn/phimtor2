@@ -11,20 +11,51 @@
 {{end}}
 {{define "content"}}
 <h1 class="sr-only">phimnet – Xem phim lẻ và phim bộ online phụ đề tiếng Việt</h1>
-<form class="filters" method="get" action="/" role="search">
-	<input class="search" type="search" name="q" placeholder="Tìm phim..." value="{{.Query}}" aria-label="Tìm phim">
-	<select name="genre" aria-label="Thể loại" onchange="this.form.submit()">
-		<option value="">Tất cả thể loại</option>
-		{{range .Genres}}
-		<option value="{{.ID}}" {{if eq .ID $.GenreID}}selected{{end}}>{{.Name}}</option>
-		{{end}}
-	</select>
-	<select name="type" aria-label="Loại phim" onchange="this.form.submit()">
-		<option value="">Tất cả</option>
-		<option value="movie" {{if eq .Type "movie"}}selected{{end}}>Phim lẻ</option>
-		<option value="tv" {{if eq .Type "tv"}}selected{{end}}>Phim bộ</option>
-	</select>
-	<button class="filter-btn" type="submit">Tìm</button>
-</form>
-<div id="results">{{if .Filtered}}{{template "grid" .Grid}}{{else}}{{template "rows" .Rows}}{{end}}</div>
+
+{{if and (not .Filtered) .Featured}}{{with .Featured}}
+<section class="hero" aria-label="Phim nổi bật">
+	{{$bd := img "w1280" .BackdropPath}}
+	{{if $bd}}<div class="hero-bg" style="background-image:url('{{$bd}}')"></div>{{end}}
+	<div class="hero-scrim"></div>
+	<div class="hero-inner wrap">
+		<div class="hero-body">
+			<span class="hero-eyebrow">{{if eq .Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}} nổi bật</span>
+			<h2 class="hero-title">{{.Title}}</h2>
+			<div class="hero-meta">
+				{{with year .AirDate}}<span>{{.}}</span>{{end}}
+				{{if gt .VoteAverage 0.0}}<span class="hero-score">{{rating .VoteAverage}}</span>{{end}}
+				{{with .Runtime}}<span>{{.}} phút</span>{{end}}
+			</div>
+			{{if .Overview}}<p class="hero-overview">{{truncate 220 .Overview}}</p>{{end}}
+			<div class="hero-actions">
+				{{if eq .Type "tv"}}
+				<a class="btn-play" href="/titles/{{.ID}}"><span class="ico">▶</span> Xem ngay</a>
+				{{else}}
+				<a class="btn-play" href="/watch/movie/{{.ID}}"><span class="ico">▶</span> Phát</a>
+				{{end}}
+				<a class="btn-info" href="/titles/{{.ID}}"><span class="ico">ⓘ</span> Thông tin</a>
+			</div>
+		</div>
+	</div>
+</section>
+{{end}}{{end}}
+
+<div class="wrap browse">
+	<form class="filters" method="get" action="/" role="search">
+		<input class="search" type="search" name="q" placeholder="Tìm phim, chương trình..." value="{{.Query}}" aria-label="Tìm phim">
+		<select name="genre" aria-label="Thể loại" onchange="this.form.submit()">
+			<option value="">Tất cả thể loại</option>
+			{{range .Genres}}
+			<option value="{{.ID}}" {{if eq .ID $.GenreID}}selected{{end}}>{{.Name}}</option>
+			{{end}}
+		</select>
+		<select name="type" aria-label="Loại phim" onchange="this.form.submit()">
+			<option value="">Tất cả</option>
+			<option value="movie" {{if eq .Type "movie"}}selected{{end}}>Phim lẻ</option>
+			<option value="tv" {{if eq .Type "tv"}}selected{{end}}>Phim bộ</option>
+		</select>
+		<button class="filter-btn" type="submit">Tìm</button>
+	</form>
+	<div id="results">{{if .Filtered}}{{template "grid" .Grid}}{{else}}{{template "rows" .Rows}}{{end}}</div>
+</div>
 {{end}}

@@ -11,7 +11,7 @@
 <script type="application/ld+json">{{jsonLD .}}</script>
 {{end}}
 {{define "content"}}
-<article class="detail">
+<article class="detail wrap">
 	{{$bd := img "w1280" .BackdropPath}}
 	{{if $bd}}<div class="backdrop" style="background-image:url('{{$bd}}')"></div>{{end}}
 	<div class="detail-main">
@@ -24,7 +24,7 @@
 			{{if and .OriginalTitle (ne .OriginalTitle .Title)}}<p class="original-title">{{.OriginalTitle}}</p>{{end}}
 			<div class="meta-row">
 				<span class="badge">{{if eq .Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}}</span>
-				{{if gt .VoteAverage 0.0}}<span class="rating">★ {{rating .VoteAverage}}</span>{{end}}
+				{{if gt .VoteAverage 0.0}}<span class="rating">{{rating .VoteAverage}}</span>{{end}}
 				{{with .Runtime}}<span>{{.}} phút</span>{{end}}
 			</div>
 			{{if .Genres}}<div class="genres">{{range .Genres}}<span class="genre-chip">{{.Name}}</span>{{end}}</div>{{end}}
