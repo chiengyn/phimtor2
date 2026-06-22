@@ -10,6 +10,15 @@
 	.watch .plyr { --plyr-color-main: var(--accent); border-radius: var(--radius); }
 	.watch .plyr video { max-height: 78vh; }
 
+	/* Placeholder shown in the player slot while the stream is being prepared,
+	   so the loading status sits where the video will appear (not below it). */
+	.player-placeholder {
+		display: flex; align-items: center; justify-content: center; text-align: center;
+		min-height: 320px; max-height: 78vh; aspect-ratio: 16 / 9;
+		padding: 24px; color: var(--muted); font-size: 0.92rem; line-height: 1.5;
+	}
+	.player-placeholder.err { color: var(--accent); }
+
 	/* In fullscreen, drop the inline height cap and let the video fill the
 	   whole screen (otherwise a 1080p video stays letterboxed on a 4K display). */
 	.watch .plyr--fullscreen-active,
@@ -140,7 +149,7 @@
 
 	{{if .HasVideo}}
 	<div class="player" id="player-wrap">
-		<video id="player" controls playsinline></video>
+		<div class="player-placeholder" id="player-placeholder"></div>
 	</div>
 
 	<div class="ctrl-group">
@@ -237,6 +246,25 @@ function setStatus(text, isErr) {
 	el.className = 'status-msg' + (isErr ? ' err' : '');
 }
 
+// showPlayerStatus puts a status message in the player slot (replacing any
+// current player) so loading/error text appears where the video will be, rather
+// than below it. buildPlayer later swaps this out for the real <video>.
+function showPlayerStatus(text, isErr) {
+	const wrap = document.getElementById('player-wrap');
+	if (player) { try { player.destroy(); } catch(e) {} player = null; }
+	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
+	wrap.innerHTML = '<div class="player-placeholder" id="player-placeholder"></div>';
+	setPlayerStatus(text, isErr);
+}
+
+// setPlayerStatus updates the placeholder text if it is currently showing.
+function setPlayerStatus(text, isErr) {
+	const ph = document.getElementById('player-placeholder');
+	if (!ph) return;
+	ph.textContent = text || '';
+	ph.className = 'player-placeholder' + (isErr ? ' err' : '');
+}
+
 // --- Sources --------------------------------------------------------------
 
 function videoLabel(v) {
@@ -273,7 +301,8 @@ async function playSource(videoID) {
 	if (videoID === activeVideoID && player) return;
 	const v = VIDEOS.find(x => x.id === videoID);
 	if (v && v.available === false) return; // gated source — not playable yet
-	setStatus('Đang chuẩn bị nguồn phát…');
+	setStatus('');
+	showPlayerStatus('Đang chuẩn bị nguồn phát…');
 	document.getElementById('progress-text').textContent = 'Đang chuẩn bị…';
 	let data;
 	try {
@@ -281,7 +310,7 @@ async function playSource(videoID) {
 		if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
 		data = await res.json();
 	} catch(e) {
-		setStatus('Không thể chuẩn bị nguồn phát: ' + e.message, true);
+		showPlayerStatus('Không thể chuẩn bị nguồn phát: ' + e.message, true);
 		return;
 	}
 	currentInfoHash = data.infoHash;
@@ -292,7 +321,7 @@ async function playSource(videoID) {
 	// the stream endpoint 404s, and attaching the <video> to it then raises a fatal
 	// MediaError that kills the player. So wait until the streamer can actually
 	// serve the file before pointing the player at it.
-	setStatus('Đang tải thông tin torrent…');
+	setPlayerStatus('Đang tải thông tin…');
 	const ready = await waitForStreamReady(data.infoHash, videoID);
 	if (!ready) return; // timed out, or the user switched sources mid-wait
 	const src = `${API}/${data.infoHash}/files/${data.fileIndex}/stream`;
@@ -316,12 +345,13 @@ async function waitForStreamReady(infoHash, videoID) {
 				if (s.totalBytes > 0) return true; // metadata ready — file is servable
 			}
 		} catch(e) { /* transient network blip — keep polling */ }
-		document.getElementById('progress-text').textContent =
-			`Đang tải thông tin torrent… (${Math.round((Date.now() - start) / 1000)}s)`;
+		const secs = Math.round((Date.now() - start) / 1000);
+		document.getElementById('progress-text').textContent = `Đang tải thông tin… (${secs}s)`;
+		setPlayerStatus(`Đang tải thông tin… (${secs}s)`);
 		await sleep(1000);
 	}
 	if (activeVideoID === videoID) {
-		setStatus('Nguồn phát đang tải chậm hoặc không có seeder. Vui lòng thử lại hoặc chọn nguồn khác.', true);
+		showPlayerStatus('Nguồn phát đang tải chậm hoặc không có seeder. Vui lòng thử lại hoặc chọn nguồn khác.', true);
 	}
 	return false;
 }
@@ -652,7 +682,7 @@ function resetSubStyle() {
 		await playSource(defaultVideo.id);
 		if (SAVED_SUBS.length) applySavedSubtitle(SAVED_SUBS[0].id);
 	} else if (VIDEOS.length) {
-		setStatus('Các nguồn 4K hiện chưa khả dụng.', true);
+		showPlayerStatus('Các nguồn 4K hiện chưa khả dụng.', true);
 	}
 })();
 </script>
