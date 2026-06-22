@@ -141,6 +141,7 @@ func (s *Server) setupRouter() {
 		r.Get("/{id}/videos", s.handleListTitleVideos)
 		r.Get("/{id}/subtitles", s.handleListTitleSubtitles)
 		r.Post("/{id}/yts-torrents", s.handleFetchYTSTorrents)
+		r.Post("/{id}/tmdb-refresh", s.handleRefreshTMDB)
 		r.Delete("/{id}", s.handleDeleteTitle)
 	})
 	r.Post("/api/import", s.handleImport)
@@ -573,6 +574,28 @@ func (s *Server) handleTitleDetail(w http.ResponseWriter, r *http.Request) {
 		"SubtitlesEnabled": s.subtitlesEnabled(),
 		"YTSBaseURL":       s.crawler.YTSBaseURL(),
 	})
+}
+
+// handleRefreshTMDB re-fetches the title's metadata from TMDB and overwrites the
+// stored copy — for TV its seasons and episodes too — leaving attached videos and
+// subtitles intact (UpsertTitle upserts episodes in place). On success it tells
+// htmx to reload the page so the hero and regions show the new data.
+func (s *Server) handleRefreshTMDB(w http.ResponseWriter, r *http.Request) {
+	title := s.lookupTitle(w, r)
+	if title == nil {
+		return
+	}
+	fresh, err := s.tmdb.FetchTitle(r.Context(), title.Type, title.TMDBID)
+	if err != nil {
+		renderMsg(w, "err", "Lỗi TMDB: "+err.Error())
+		return
+	}
+	if err := s.store.UpsertTitle(r.Context(), fresh); err != nil {
+		renderMsg(w, "err", "Lỗi lưu: "+err.Error())
+		return
+	}
+	w.Header().Set("HX-Refresh", "true")
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleFetchYTSTorrents fetches the title's torrents from YTS by IMDb id and

@@ -80,6 +80,14 @@
     .yts-fetch .err { color: #ff8b94; }
     .yts-fetch .htmx-indicator { display: none; }
     .yts-fetch .htmx-request.htmx-indicator, .yts-fetch .htmx-request .htmx-indicator { display: inline; }
+    /* refresh-from-TMDB action under the hero */
+    .title-actions { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: .6rem; }
+    .btn-refresh { font: inherit; padding: .4rem .7rem; border-radius: 8px; border: 1px solid #303b48; background: #21262d; color: #e6edf3; cursor: pointer; }
+    .btn-refresh:hover { background: #2d333b; }
+    .btn-refresh:disabled { opacity: .6; cursor: default; }
+    .title-actions .htmx-indicator { display: none; }
+    .title-actions .htmx-request.htmx-indicator { display: inline; }
+    .title-actions .err { color: #ff8b94; font-size: .85rem; }
   </style>
 </head>
 <body class="{{ if .SubtitlesEnabled }}subs-enabled{{ end }}" data-title-name="{{ if .Title.OriginalTitle }}{{ .Title.OriginalTitle }}{{ else }}{{ .Title.Title }}{{ end }}">
@@ -97,6 +105,15 @@
         {{ if and .Title.OriginalTitle (ne .Title.OriginalTitle .Title.Title) }}<div class="original-title">{{ .Title.OriginalTitle }}</div>{{ end }}
         <div class="muted">{{ year .Title.AirDate }} · TMDB #{{ .Title.TMDBID }} · db #{{ .Title.ID }}</div>
         {{ if .Title.Overview }}<p class="muted">{{ .Title.Overview }}</p>{{ end }}
+        <div class="title-actions">
+          <button type="button" class="btn-refresh"
+                  hx-post="/api/titles/{{ .Title.ID }}/tmdb-refresh"
+                  hx-target="#tmdb-refresh-msg" hx-swap="innerHTML"
+                  hx-confirm="Cập nhật dữ liệu từ TMDB và ghi đè dữ liệu hiện tại?{{ if eq .Title.Type "tv" }} (Cả mùa và tập sẽ được cập nhật, torrent/phụ đề đã thêm vẫn được giữ.){{ end }}"
+                  hx-disabled-elt="this" hx-indicator="#tmdb-refresh-ind">↻ Cập nhật từ TMDB</button>
+          <span id="tmdb-refresh-ind" class="htmx-indicator muted">Đang cập nhật…</span>
+          <div id="tmdb-refresh-msg"></div>
+        </div>
       </div>
     </div>
 

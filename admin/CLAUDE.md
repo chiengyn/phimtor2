@@ -118,7 +118,9 @@ Flat single `main` package. Layers, in request order:
   - `UpsertTitle` is one transaction: upserts the title (`ON DUPLICATE KEY UPDATE`
     keyed on `uniq_tmdb (tmdb_id, type)`, using `id = LAST_INSERT_ID(id)` to get
     the existing id back), replaces its genre links wholesale, then upserts
-    seasons and re-inserts episodes. Deletes cascade via FKs.
+    seasons and episodes in place (keyed on `uniq_episode (season_id,
+    episode_number)`, preserving episode ids so a metadata refresh keeps the
+    videos/subtitles attached to them). Deletes cascade via FKs.
   - Empty strings/dates are stored as SQL `NULL` (`nullStr`/`dateArg`).
 
 ## Migrations (`store.go` + `migrations/`)

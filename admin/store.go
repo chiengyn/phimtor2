@@ -130,7 +130,10 @@ func (s *Store) applyMigration(ctx context.Context, name string) error {
 }
 
 // UpsertTitle inserts or refreshes a title and all of its genres, and (for TV)
-// its seasons and episodes, atomically. On return t.ID holds the internal id.
+// its seasons and episodes, atomically. Seasons and episodes are upserted in
+// place (not delete-and-reinsert), so refreshing a title's metadata preserves
+// the videos/subtitles attached to its episodes. On return t.ID holds the
+// internal id.
 func (s *Store) UpsertTitle(ctx context.Context, t *Title) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -207,16 +210,29 @@ func (s *Store) UpsertTitle(ctx context.Context, t *Title) error {
 		}
 		se.ID = seasonID
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM episodes WHERE season_id = ?`, seasonID); err != nil {
-			return fmt.Errorf("clear episodes: %w", err)
-		}
-		for _, ep := range se.Episodes {
-			if _, err := tx.ExecContext(ctx, `
+		// Upsert episodes keyed on uniq_episode (season_id, episode_number) rather
+		// than delete-and-reinsert, so an existing episode keeps its id — and thus
+		// any videos/subtitles attached to it (which cascade-delete with the row).
+		// This makes a metadata refresh non-destructive to attached media.
+		for i := range se.Episodes {
+			ep := &se.Episodes[i]
+			eres, err := tx.ExecContext(ctx, `
 				INSERT INTO episodes (season_id, episode_number, name, overview, air_date, runtime, still_path)
-				VALUES (?,?,?,?,?,?,?)`,
+				VALUES (?,?,?,?,?,?,?)
+				ON DUPLICATE KEY UPDATE
+					id = LAST_INSERT_ID(id),
+					name = VALUES(name),
+					overview = VALUES(overview),
+					air_date = VALUES(air_date),
+					runtime = VALUES(runtime),
+					still_path = VALUES(still_path)`,
 				seasonID, ep.EpisodeNumber, ep.Name, nullStr(ep.Overview),
-				dateArg(ep.AirDate), ep.Runtime, nullStr(ep.StillPath)); err != nil {
-				return fmt.Errorf("insert episode: %w", err)
+				dateArg(ep.AirDate), ep.Runtime, nullStr(ep.StillPath))
+			if err != nil {
+				return fmt.Errorf("upsert episode: %w", err)
+			}
+			if epID, err := eres.LastInsertId(); err == nil {
+				ep.ID = epID
 			}
 		}
 	}
