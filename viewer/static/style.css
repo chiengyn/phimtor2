@@ -260,7 +260,8 @@ main { width: 100%; }
 }
 .row-title a:hover .row-chevron { opacity: 1; transform: translateX(0); }
 
-/* The track scrolls horizontally; a right-edge fade hints at more content. */
+/* The rail holds the scrolling track plus the edge arrow buttons. */
+.row-rail { position: relative; }
 .row-track {
 	display: flex;
 	gap: 12px;
@@ -269,15 +270,27 @@ main { width: 100%; }
 	padding: 16px 0;
 	margin: -16px 0;
 	scroll-snap-type: x proximity;
-	scrollbar-width: thin;
-	scrollbar-color: #4d4d4d transparent;
-	-webkit-mask-image: linear-gradient(90deg, #000 0, #000 96%, transparent 100%);
-	mask-image: linear-gradient(90deg, #000 0, #000 96%, transparent 100%);
+	scrollbar-width: none;
+	-ms-overflow-style: none;
 }
-.row-track::-webkit-scrollbar { height: 8px; }
-.row-track::-webkit-scrollbar-thumb { background: #4d4d4d; border-radius: 999px; }
-.row-track::-webkit-scrollbar-thumb:hover { background: #6f6f6f; }
+.row-track::-webkit-scrollbar { display: none; }
 .row-track .card { flex: 0 0 168px; scroll-snap-align: start; }
+
+/* Hover arrows replace the scrollbar; each hides at the end it reaches. */
+.row-arrow {
+	position: absolute; top: 16px; bottom: 16px; z-index: 7;
+	width: 46px; border: none; cursor: pointer;
+	display: flex; align-items: center; justify-content: center;
+	background: rgba(0,0,0,0.55); color: #fff;
+	font-size: 2rem; line-height: 1; font-family: inherit;
+	opacity: 0; transition: opacity 0.2s var(--ease), background 0.2s var(--ease);
+}
+.row-rail:hover .row-arrow { opacity: 1; }
+.row-arrow:hover { background: rgba(0,0,0,0.82); }
+.row-arrow:focus-visible { opacity: 1; }
+.row-arrow[hidden] { display: none; }
+.row-arrow-prev { left: 0; border-radius: 0 var(--radius) var(--radius) 0; }
+.row-arrow-next { right: 0; border-radius: var(--radius) 0 0 var(--radius); }
 
 /* --- Ranked "Top 10" row ------------------------------------------------ */
 .row-ranked .row-track .rank-card { scroll-snap-align: start; }
@@ -443,6 +456,7 @@ main { width: 100%; }
 	.rank-card:hover .rank-num { -webkit-text-stroke-color: #565656; }
 	.row-chevron { opacity: 1; transform: none; }
 	.card-play { display: none; }
+	.row-arrow { display: none; }
 }
 
 /* Tablets / small laptops. */

@@ -164,7 +164,7 @@ func (s *Store) SitemapTitles(ctx context.Context) ([]SitemapEntry, error) {
 // rowLimit caps how many titles each browse row carries. Rows are horizontal
 // carousels, so there is no point loading the whole catalog into one; the row
 // heading links to the filtered grid (which paginates) for the full list.
-const rowLimit = 24
+const rowLimit = 10
 
 // Row is a labelled horizontal strip of titles on the browse home page.
 type Row struct {

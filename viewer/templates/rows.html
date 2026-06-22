@@ -3,22 +3,50 @@
 	<h2 class="row-title">
 		{{if .Ranked}}<span>{{.Label}}</span>{{else}}<a href="{{.Href}}">{{.Label}} <span class="row-chevron">›</span></a>{{end}}
 	</h2>
-	<div class="row-track">
-		{{if .Ranked}}
-			{{range $i, $t := .Titles}}
-			<a class="rank-card" href="/titles/{{$t.ID}}" aria-label="Hạng {{inc $i}}: {{$t.Title}}">
-				<span class="rank-num" aria-hidden="true">{{inc $i}}</span>
-				<div class="rank-poster">
-					{{$p := img "w342" $t.PosterPath}}
-					{{if $p}}<img src="{{$p}}" alt="{{$t.Title}}" loading="lazy">{{else}}<div class="poster-empty">{{$t.Title}}</div>{{end}}
-				</div>
-			</a>
+	<div class="row-rail">
+		<button class="row-arrow row-arrow-prev" type="button" aria-label="Cuộn về trước" hidden>‹</button>
+		<div class="row-track">
+			{{if .Ranked}}
+				{{range $i, $t := .Titles}}
+				<a class="rank-card" href="/titles/{{$t.ID}}" aria-label="Hạng {{inc $i}}: {{$t.Title}}">
+					<span class="rank-num" aria-hidden="true">{{inc $i}}</span>
+					<div class="rank-poster">
+						{{$p := img "w342" $t.PosterPath}}
+						{{if $p}}<img src="{{$p}}" alt="{{$t.Title}}" loading="lazy">{{else}}<div class="poster-empty">{{$t.Title}}</div>{{end}}
+					</div>
+				</a>
+				{{end}}
+			{{else}}
+				{{range .Titles}}{{template "card" .}}{{end}}
 			{{end}}
-		{{else}}
-			{{range .Titles}}{{template "card" .}}{{end}}
-		{{end}}
+		</div>
+		<button class="row-arrow row-arrow-next" type="button" aria-label="Cuộn tiếp">›</button>
 	</div>
 </section>
 {{else}}
 <p class="empty">Chưa có phim nào.</p>
-{{end}}{{end}}
+{{end}}
+<script>
+// Carousel arrows: scroll each row by ~one viewport of cards and hide the arrow
+// at whichever end is reached (so rows that fit on screen show no arrows).
+(function () {
+	function update(track, prev, next) {
+		var max = track.scrollWidth - track.clientWidth - 1;
+		prev.hidden = track.scrollLeft <= 0;
+		next.hidden = track.scrollLeft >= max;
+	}
+	document.querySelectorAll('.row-rail').forEach(function (rail) {
+		var track = rail.querySelector('.row-track');
+		var prev = rail.querySelector('.row-arrow-prev');
+		var next = rail.querySelector('.row-arrow-next');
+		if (!track || !prev || !next) return;
+		function step(dir) { track.scrollBy({ left: dir * track.clientWidth * 0.9, behavior: 'smooth' }); }
+		prev.addEventListener('click', function () { step(-1); });
+		next.addEventListener('click', function () { step(1); });
+		track.addEventListener('scroll', function () { update(track, prev, next); }, { passive: true });
+		window.addEventListener('resize', function () { update(track, prev, next); });
+		update(track, prev, next);
+	});
+})();
+</script>
+{{end}}
