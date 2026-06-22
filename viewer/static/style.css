@@ -261,14 +261,18 @@ main { width: 100%; }
 .row-title a:hover .row-chevron { opacity: 1; transform: translateX(0); }
 
 /* The rail holds the scrolling track plus the edge arrow buttons. */
-.row-rail { position: relative; }
+/* The rail breaks out by the hover-room inset on each side so the edge arrows
+   (positioned to the rail) line up with the track's visible edges, while the
+   track's own padding keeps the cards aligned with the row title. */
+.row-rail { position: relative; margin: 0 -16px; }
 .row-track {
 	display: flex;
 	gap: 12px;
 	overflow-x: auto;
 	overflow-y: hidden;
-	padding: 16px 0;
+	padding: 16px;
 	margin: -16px 0;
+	scroll-padding: 0 16px;
 	scroll-snap-type: x proximity;
 	scrollbar-width: none;
 	-ms-overflow-style: none;
@@ -457,6 +461,10 @@ main { width: 100%; }
 	.row-chevron { opacity: 1; transform: none; }
 	.card-play { display: none; }
 	.row-arrow { display: none; }
+	/* No hover-zoom here, so drop the breakout/inset (also avoids a sliver of
+	   horizontal overflow when the page gutter is narrower than the inset). */
+	.row-rail { margin: 0; }
+	.row-track { padding-inline: 0; scroll-padding-inline: 0; }
 }
 
 /* Tablets / small laptops. */
