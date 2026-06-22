@@ -24,7 +24,8 @@ func main() {
 		DataDir:     cfg.DataDir,
 		PrefixBytes: int64(cfg.PrefixMB) << 20,
 		CacheBytes:  int64(cfg.CacheMB) << 20,
-	}, int64(cfg.ReadaheadMB)<<20)
+		RetainHot:   cfg.RetainHot,
+	}, int64(cfg.ReadaheadMB)<<20, cfg.MaxConns)
 	if err != nil {
 		log.Fatalf("create torrent manager: %v", err)
 	}
@@ -36,6 +37,11 @@ func main() {
 	httpServer := &http.Server{
 		Addr:    addr,
 		Handler: server,
+		// Bound slow/idle clients so many concurrent connections can't exhaust
+		// resources. No WriteTimeout: stream responses are deliberately long-lived
+		// and a write deadline would cut playback off mid-file.
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

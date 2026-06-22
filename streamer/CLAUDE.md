@@ -31,6 +31,13 @@ The API: `GET /api/torrents` (list),
 go build -o phimtor2 .      # build (default CGO; prefix-cache mode only needs CGO_ENABLED=0)
 go run .                    # run with defaults (listens on :8080, data in ./data)
 go vet ./...                # vet
+
+# Concurrent-viewer load test (loadtest/). -scatter starts each viewer at a
+# different offset in the same file — the realistic many-users pattern the
+# multi-reader cache is built for. Reports served vs swarm download (cache
+# reuse), stalls, and failures.
+go run ./loadtest -magnet 'magnet:?...' -n 30 -scatter
+go run ./loadtest -infohash <hex> -n 50 -bitrate 1.5 -duration 60s -scatter
 ```
 
 The test UI (`static/index.html`) is served via a **cwd-relative path**, so the
@@ -40,7 +47,10 @@ transcoding and a writable `DATA_DIR`. The Docker image handles the cwd by
 `WORKDIR /app` with `static/` copied alongside the binary.
 
 Configuration is via env vars or matching CLI flags (see `config.go`):
-`PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`.
+`PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`,
+`MAX_CONNS` (peer connections per torrent, default 200), and `RETAIN_HOT`
+(default off; keep every piece of a torrent that has a viewer — trades disk for
+concurrent capacity).
 
 ## Architecture
 
@@ -61,6 +71,16 @@ Flat single `main` package. The pieces that only make sense read together:
     (`CACHE_MB`) in `<DATA_DIR>/cache`, treated as ephemeral and **wiped on
     startup**. It reports a `Capacity` to the client so evicted pieces are
     gracefully re-downloaded on later reads.
+
+    Eviction is **multi-reader aware**: the storage tracks *every* active
+    viewer's playhead (`readers map[Hash]map[readerID]int`, fed by the
+    `trackedReader` the manager wraps around each stream) and protects the
+    near-ahead window of *each* reader, so many viewers watching the same file at
+    different positions don't evict each other's pieces. Open blob handles are
+    pooled (`storage_fdcache.go`) to cut open/close syscalls under concurrency.
+    With `RETAIN_HOT` set, pieces of any torrent that still has a viewer are
+    pinned (cache may exceed `CACHE_MB`), and `capFunc` grows the reported
+    `Capacity` to match so the client can still request the active window.
   - `capped-sqlite` — the library's built-in capped sqlite storage. **Requires
     CGO.** Selected via a build-tag pair: `storage_sqlite.go` (`//go:build cgo`)
     vs `storage_sqlite_stub.go` (`//go:build !cgo`, returns an error). A non-CGO
@@ -75,7 +95,11 @@ Flat single `main` package. The pieces that only make sense read together:
   browser-native containers (`.mp4/.webm/.ogg`) are served directly via
   `http.ServeContent` (range/seek support). Anything else is piped through an
   **`ffmpeg` subprocess** (codec copy + AAC, fragmented MP4) — so transcoding
-  requires `ffmpeg` on PATH at runtime (the Docker image bundles it).
+  requires `ffmpeg` on PATH at runtime (the Docker image bundles it). Each stream
+  reader is wrapped in a `trackedReader` (`torrent.go`) that reports its playhead
+  to the storage and gets **adaptive readahead** — the per-reader readahead is
+  divided down as more readers open (floor `minReadaheadBytes`) so N concurrent
+  viewers don't each reserve the full `READAHEAD_MB`.
 
 **Subtitles** are *not* handled here anymore. The watch UI and the
 OpenSubtitles proxy moved to [`admin/`](../admin/CLAUDE.md); the admin matches
