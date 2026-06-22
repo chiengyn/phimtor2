@@ -174,6 +174,54 @@ func (s *prefixCacheStorage) Close() error {
 	return err
 }
 
+// DropTorrent frees all on-disk and in-memory state for a torrent: it forgets
+// its resident pieces, clears the persistent prefix-completion entries (so a
+// later re-add re-downloads instead of trusting completion for files we delete),
+// closes any cached blob handles, and removes the torrent's prefix and cache
+// directories. Safe to call after the torrent has been dropped from the client
+// (no concurrent reads/writes for it).
+func (s *prefixCacheStorage) DropTorrent(ih metainfo.Hash) error {
+	hex := ih.HexString()
+
+	s.mu.Lock()
+	for key := range s.cache {
+		if key.InfoHash == ih {
+			s.cacheBytes -= s.cache[key]
+			delete(s.cache, key)
+		}
+	}
+	// prefixKeys mirrors the bolt-complete prefix pieces, so collecting from it
+	// covers every entry we must clear from the persistent completion DB.
+	var prefixPieces []metainfo.PieceKey
+	for key := range s.prefixKeys {
+		if key.InfoHash == ih {
+			s.prefixResident -= s.prefixKeys[key]
+			delete(s.prefixKeys, key)
+			prefixPieces = append(prefixPieces, key)
+		}
+	}
+	delete(s.readers, ih)
+	s.mu.Unlock()
+
+	prefixDir := filepath.Join(s.prefixDir, hex)
+	cacheDir := filepath.Join(s.cacheDir, hex)
+	s.fds.dropPrefix(prefixDir + string(os.PathSeparator))
+	s.fds.dropPrefix(cacheDir + string(os.PathSeparator))
+
+	for _, key := range prefixPieces {
+		_ = s.prefixCompletion.Set(key, false)
+	}
+
+	var err error
+	if rerr := os.RemoveAll(prefixDir); rerr != nil {
+		err = rerr
+	}
+	if rerr := os.RemoveAll(cacheDir); rerr != nil && err == nil {
+		err = rerr
+	}
+	return err
+}
+
 func (s *prefixCacheStorage) OpenTorrent(
 	_ context.Context,
 	info *metainfo.Info,

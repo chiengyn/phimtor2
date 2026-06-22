@@ -15,6 +15,7 @@ type Config struct {
 	CacheMB     int
 	MaxConns    int
 	RetainHot   bool
+	IdleTTLMin  int
 }
 
 func loadConfig() Config {
@@ -29,6 +30,9 @@ func loadConfig() Config {
 		CacheMB:   envInt("CACHE_MB", 2048),
 		MaxConns:  envInt("MAX_CONNS", 200),
 		RetainHot: envBool("RETAIN_HOT", false),
+		// Drop torrents that go unstreamed this long, freeing disk and peer
+		// connections. 0 disables reaping (torrents stay until explicitly removed).
+		IdleTTLMin: envInt("IDLE_TTL_MIN", 30),
 	}
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
@@ -41,6 +45,8 @@ func loadConfig() Config {
 	flag.IntVar(&cfg.MaxConns, "max-conns", cfg.MaxConns, "Peer connections per torrent (higher fills the cache faster)")
 	flag.BoolVar(&cfg.RetainHot, "retain-hot", cfg.RetainHot,
 		"Keep every piece of a torrent that has an active viewer (trades disk for concurrent capacity)")
+	flag.IntVar(&cfg.IdleTTLMin, "idle-ttl", cfg.IdleTTLMin,
+		"Drop torrents unstreamed for this many minutes to free disk and peers (0 disables)")
 	flag.Parse()
 
 	return cfg

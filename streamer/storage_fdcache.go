@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -60,6 +61,20 @@ func (c *fdCache) drop(path string) {
 	if e := c.m[path]; e != nil {
 		delete(c.m, path)
 		_ = e.f.Close()
+	}
+	c.mu.Unlock()
+}
+
+// dropPrefix closes and forgets every handle whose path starts with prefix (call
+// before deleting a torrent's blob directory so its fds are released, not just
+// left dangling on unlinked files).
+func (c *fdCache) dropPrefix(prefix string) {
+	c.mu.Lock()
+	for path, e := range c.m {
+		if strings.HasPrefix(path, prefix) {
+			_ = e.f.Close()
+			delete(c.m, path)
+		}
 	}
 	c.mu.Unlock()
 }
