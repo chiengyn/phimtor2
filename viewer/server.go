@@ -369,7 +369,7 @@ func buildPager(page, pages int, urlFor func(int) template.URL) pager {
 
 type homeData struct {
 	Rows     []Row    // browse view (no active filter)
-	Featured *Title   // browse-view hero billboard (top-ranked title); nil when filtered or empty
+	Featured []*Title // browse-view hero billboard carousel (top-ranked titles); empty when filtered or empty
 	Grid     gridPage // flat results (filter active)
 	Genres   []Genre
 	Query    string
@@ -425,12 +425,18 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Hero billboard: the first row's first title (the #1 Top-10 pick when
-		// present, else the newest). Reload it in full so the hero can show its
-		// backdrop and overview, which the lightweight row summaries omit.
-		if len(data.Rows) > 0 && len(data.Rows[0].Titles) > 0 {
-			if t, err := s.store.GetTitle(r.Context(), data.Rows[0].Titles[0].ID); err == nil {
-				data.Featured = t
+		// Hero billboard carousel: the first row's top titles (the Top-10 picks
+		// when present, else the newest). Reload each in full so the hero can show
+		// its backdrop and overview, which the lightweight row summaries omit.
+		if len(data.Rows) > 0 {
+			const heroCount = 5
+			for i, sum := range data.Rows[0].Titles {
+				if i >= heroCount {
+					break
+				}
+				if t, err := s.store.GetTitle(r.Context(), sum.ID); err == nil {
+					data.Featured = append(data.Featured, t)
+				}
 			}
 		}
 	}

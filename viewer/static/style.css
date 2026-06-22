@@ -84,6 +84,18 @@ main { width: 100%; }
 	align-items: flex-end;
 	overflow: hidden;
 }
+/* Carousel: slides stack and cross-fade, one active at a time. */
+.hero-slides { position: absolute; inset: 0; }
+.hero-slide {
+	position: absolute; inset: 0;
+	display: flex; align-items: flex-end;
+	opacity: 0; visibility: hidden;
+	transition: opacity 0.8s var(--ease), visibility 0s linear 0.8s;
+}
+.hero-slide.is-active {
+	opacity: 1; visibility: visible; z-index: 1;
+	transition: opacity 0.8s var(--ease);
+}
 .hero-bg {
 	position: absolute; inset: 0;
 	background-size: cover;
@@ -139,14 +151,32 @@ main { width: 100%; }
 .btn-play:active, .btn-info:active { transform: scale(0.97); }
 .btn-play .ico, .btn-info .ico { font-size: 1.1em; line-height: 1; }
 
-/* Staggered load-in (suppressed under reduced motion, below). */
-.hero-eyebrow, .hero-title, .hero-meta, .hero-overview, .hero-actions {
+/* Dot navigation (only rendered when more than one slide). */
+.hero-dots {
+	position: absolute; z-index: 3; left: 0; right: 0; bottom: 22px;
+	display: flex; justify-content: center; gap: 10px;
+}
+.hero-dot {
+	width: 9px; height: 9px; padding: 0; border: none; border-radius: 50%;
+	cursor: pointer; background: rgba(255,255,255,0.4);
+	transition: background 0.2s var(--ease), transform 0.2s var(--ease);
+}
+.hero-dot:hover { background: rgba(255,255,255,0.7); }
+.hero-dot.is-active { background: var(--accent); transform: scale(1.3); }
+
+/* Staggered load-in, replayed each time a slide becomes active (suppressed
+   under reduced motion, below). */
+.hero-slide.is-active .hero-eyebrow,
+.hero-slide.is-active .hero-title,
+.hero-slide.is-active .hero-meta,
+.hero-slide.is-active .hero-overview,
+.hero-slide.is-active .hero-actions {
 	animation: heroRise 0.7s var(--ease) both;
 }
-.hero-title { animation-delay: 0.06s; }
-.hero-meta { animation-delay: 0.12s; }
-.hero-overview { animation-delay: 0.18s; }
-.hero-actions { animation-delay: 0.24s; }
+.hero-slide.is-active .hero-title { animation-delay: 0.06s; }
+.hero-slide.is-active .hero-meta { animation-delay: 0.12s; }
+.hero-slide.is-active .hero-overview { animation-delay: 0.18s; }
+.hero-slide.is-active .hero-actions { animation-delay: 0.24s; }
 @keyframes heroRise {
 	from { opacity: 0; transform: translateY(18px); }
 	to { opacity: 1; transform: translateY(0); }
@@ -520,7 +550,11 @@ main { width: 100%; }
 
 /* Respect reduced-motion: drop the hero load-in and all transitions. */
 @media (prefers-reduced-motion: reduce) {
-	.hero-eyebrow, .hero-title, .hero-meta, .hero-overview, .hero-actions {
+	.hero-slide.is-active .hero-eyebrow,
+	.hero-slide.is-active .hero-title,
+	.hero-slide.is-active .hero-meta,
+	.hero-slide.is-active .hero-overview,
+	.hero-slide.is-active .hero-actions {
 		animation: none;
 	}
 	* { transition: none !important; }

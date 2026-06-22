@@ -12,33 +12,80 @@
 {{define "content"}}
 <h1 class="sr-only">phimnet – Xem phim lẻ và phim bộ online phụ đề tiếng Việt</h1>
 
-{{if and (not .Filtered) .Featured}}{{with .Featured}}
-<section class="hero" aria-label="Phim nổi bật">
-	{{$bd := img "w1280" .BackdropPath}}
-	{{if $bd}}<div class="hero-bg" style="background-image:url('{{$bd}}')"></div>{{end}}
-	<div class="hero-scrim"></div>
-	<div class="hero-inner wrap">
-		<div class="hero-body">
-			<span class="hero-eyebrow">{{if eq .Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}} nổi bật</span>
-			<h2 class="hero-title">{{.Title}}</h2>
-			<div class="hero-meta">
-				{{with year .AirDate}}<span>{{.}}</span>{{end}}
-				{{if gt .VoteAverage 0.0}}<span class="hero-score">{{rating .VoteAverage}}</span>{{end}}
-				{{with .Runtime}}<span>{{.}} phút</span>{{end}}
-			</div>
-			{{if .Overview}}<p class="hero-overview">{{truncate 220 .Overview}}</p>{{end}}
-			<div class="hero-actions">
-				{{if eq .Type "tv"}}
-				<a class="btn-play" href="/titles/{{.ID}}"><span class="ico">▶</span> Xem ngay</a>
-				{{else}}
-				<a class="btn-play" href="/watch/movie/{{.ID}}"><span class="ico">▶</span> Phát</a>
-				{{end}}
-				<a class="btn-info" href="/titles/{{.ID}}"><span class="ico">ⓘ</span> Thông tin</a>
+{{if and (not .Filtered) .Featured}}
+<section class="hero" aria-label="Phim nổi bật" aria-roledescription="carousel" data-hero>
+	<div class="hero-slides">
+		{{range $i, $f := .Featured}}
+		<div class="hero-slide{{if eq $i 0}} is-active{{end}}" role="group" aria-roledescription="slide" aria-label="{{inc $i}} / {{len $.Featured}}"{{if ne $i 0}} aria-hidden="true"{{end}}>
+			{{$bd := img "w1280" $f.BackdropPath}}
+			{{if $bd}}<div class="hero-bg" style="background-image:url('{{$bd}}')"></div>{{end}}
+			<div class="hero-scrim"></div>
+			<div class="hero-inner wrap">
+				<div class="hero-body">
+					<span class="hero-eyebrow">{{if eq $f.Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}} nổi bật</span>
+					<h2 class="hero-title">{{$f.Title}}</h2>
+					<div class="hero-meta">
+						{{with year $f.AirDate}}<span>{{.}}</span>{{end}}
+						{{if gt $f.VoteAverage 0.0}}<span class="hero-score">{{rating $f.VoteAverage}}</span>{{end}}
+						{{with $f.Runtime}}<span>{{.}} phút</span>{{end}}
+					</div>
+					{{if $f.Overview}}<p class="hero-overview">{{truncate 220 $f.Overview}}</p>{{end}}
+					<div class="hero-actions">
+						{{if eq $f.Type "tv"}}
+						<a class="btn-play" href="/titles/{{$f.ID}}"><span class="ico">▶</span> Xem ngay</a>
+						{{else}}
+						<a class="btn-play" href="/watch/movie/{{$f.ID}}"><span class="ico">▶</span> Phát</a>
+						{{end}}
+						<a class="btn-info" href="/titles/{{$f.ID}}"><span class="ico">ⓘ</span> Thông tin</a>
+					</div>
+				</div>
 			</div>
 		</div>
+		{{end}}
 	</div>
+	{{if gt (len .Featured) 1}}
+	<div class="hero-dots" role="tablist" aria-label="Chọn phim nổi bật">
+		{{range $i, $f := .Featured}}
+		<button class="hero-dot{{if eq $i 0}} is-active{{end}}" type="button" role="tab" aria-label="{{$f.Title}}"{{if eq $i 0}} aria-selected="true"{{end}} data-hero-to="{{$i}}"></button>
+		{{end}}
+	</div>
+	{{end}}
 </section>
-{{end}}{{end}}
+<script>
+// Hero carousel: cross-fade the featured slides, auto-advance, dots to jump.
+// Pauses on hover/focus and stays put under reduced-motion.
+(function () {
+	var hero = document.querySelector('[data-hero]');
+	if (!hero) return;
+	var slides = Array.prototype.slice.call(hero.querySelectorAll('.hero-slide'));
+	var dots = Array.prototype.slice.call(hero.querySelectorAll('.hero-dot'));
+	if (slides.length < 2) return;
+	var cur = 0, timer = null, DELAY = 7000;
+	var reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+	function show(n) {
+		n = (n + slides.length) % slides.length;
+		if (n === cur) return;
+		slides[cur].classList.remove('is-active');
+		slides[cur].setAttribute('aria-hidden', 'true');
+		if (dots[cur]) { dots[cur].classList.remove('is-active'); dots[cur].removeAttribute('aria-selected'); }
+		cur = n;
+		slides[cur].classList.add('is-active');
+		slides[cur].removeAttribute('aria-hidden');
+		if (dots[cur]) { dots[cur].classList.add('is-active'); dots[cur].setAttribute('aria-selected', 'true'); }
+	}
+	function stop() { if (timer) { clearInterval(timer); timer = null; } }
+	function start() { stop(); if (!reduce.matches) timer = setInterval(function () { show(cur + 1); }, DELAY); }
+	dots.forEach(function (dot, n) {
+		dot.addEventListener('click', function () { show(n); start(); });
+	});
+	hero.addEventListener('mouseenter', stop);
+	hero.addEventListener('mouseleave', start);
+	hero.addEventListener('focusin', stop);
+	hero.addEventListener('focusout', start);
+	start();
+})();
+</script>
+{{end}}
 
 <div class="wrap browse">
 	<form class="filters" method="get" action="/" role="search">
