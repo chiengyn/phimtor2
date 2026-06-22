@@ -50,11 +50,19 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("shutting down...")
+	// Stop trapping signals so a second Ctrl-C / SIGTERM force-quits immediately
+	// instead of being swallowed while we drain.
+	stop()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Streaming responses (handleStream) stay open for the whole playback, so a
+	// graceful Shutdown blocks until they finish or the timeout fires. When that
+	// happens, force-close the remaining connections so the process can exit
+	// instead of being SIGQUIT-killed (which dumps every torrent goroutine).
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("shutdown error: %v", err)
+		log.Printf("graceful shutdown timed out (%v); forcing close", err)
+		_ = httpServer.Close()
 	}
 }
