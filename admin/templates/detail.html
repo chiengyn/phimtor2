@@ -67,6 +67,19 @@
     .sub-save:hover { background: #15803d; }
     #sub-modal-status { font-size: .85rem; margin: .5rem 0; }
     #sub-modal-status.err { color: #ff8b94; }
+    /* YTS one-click fetch section */
+    .yts-fetch { margin-top: 1.5rem; padding: 1rem; border: 1px solid #222b36; border-radius: 10px; background: #11161d; }
+    .yts-fetch h3 { margin: 0 0 .25rem; font-size: 1rem; }
+    .yts-fetch .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-top: .6rem; }
+    .yts-fetch input[type=text] { flex: 1; min-width: 240px; padding: .5rem .65rem; border-radius: 8px; border: 1px solid #303b48; background: #161b22; color: #e6edf3; font: inherit; }
+    .yts-fetch button { font: inherit; padding: .5rem .8rem; border-radius: 8px; border: 1px solid #2563eb; background: #2563eb; color: #fff; cursor: pointer; }
+    .yts-fetch button:hover { background: #1d4ed8; }
+    .yts-fetch button.fetch { border-color: #16a34a; background: #16a34a; }
+    .yts-fetch button.fetch:hover { background: #15803d; }
+    .yts-fetch .ok { color: #7ee787; }
+    .yts-fetch .err { color: #ff8b94; }
+    .yts-fetch .htmx-indicator { display: none; }
+    .yts-fetch .htmx-request.htmx-indicator, .yts-fetch .htmx-request .htmx-indicator { display: inline; }
   </style>
 </head>
 <body class="{{ if .SubtitlesEnabled }}subs-enabled{{ end }}" data-title-name="{{ if .Title.OriginalTitle }}{{ .Title.OriginalTitle }}{{ else }}{{ .Title.Title }}{{ end }}">
@@ -86,6 +99,24 @@
         {{ if .Title.Overview }}<p class="muted">{{ .Title.Overview }}</p>{{ end }}
       </div>
     </div>
+
+    {{ if eq .Title.Type "movie" }}
+    <div class="yts-fetch">
+      <h3>Lấy torrent từ YTS</h3>
+      <p class="muted">Tìm phim này trên YTS qua IMDb id và nhập các torrent chưa có vào danh sách nguồn bên dưới.</p>
+      <form class="row" hx-post="/api/titles/{{ .Title.ID }}/yts-torrents" hx-target="#yts-fetch-msg" hx-swap="innerHTML" hx-disabled-elt="find button.fetch">
+        <button type="submit" class="fetch">Lấy torrent từ YTS</button>
+        <span class="htmx-indicator muted">Đang lấy…</span>
+      </form>
+      <div class="row">
+        <input type="text" id="yts-base-url" name="yts_base_url" value="{{ .YTSBaseURL }}"
+               placeholder="https://yts.mx/api/v2">
+        <button type="button" hx-post="/api/crawl/yts-base-url" hx-include="#yts-base-url" hx-target="#yts-fetch-msg" hx-swap="innerHTML">Lưu base URL</button>
+      </div>
+      <p class="muted">yts.mx hay đổi domain/sập — sửa base URL ở đây nếu lần lấy báo lỗi kết nối. Không lưu lại, mất khi khởi động lại server.</p>
+      <div id="yts-fetch-msg"></div>
+    </div>
+    {{ end }}
 
     {{ template "video-region" .Title }}
     {{ template "subtitle-region" .Title }}

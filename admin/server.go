@@ -140,6 +140,7 @@ func (s *Server) setupRouter() {
 		r.Get("/{id}", s.handleGetTitle)
 		r.Get("/{id}/videos", s.handleListTitleVideos)
 		r.Get("/{id}/subtitles", s.handleListTitleSubtitles)
+		r.Post("/{id}/yts-torrents", s.handleFetchYTSTorrents)
 		r.Delete("/{id}", s.handleDeleteTitle)
 	})
 	r.Post("/api/import", s.handleImport)
@@ -570,7 +571,31 @@ func (s *Server) handleTitleDetail(w http.ResponseWriter, r *http.Request) {
 		"Title":            title,
 		"StreamerURL":      s.streamerURL,
 		"SubtitlesEnabled": s.subtitlesEnabled(),
+		"YTSBaseURL":       s.crawler.YTSBaseURL(),
 	})
+}
+
+// handleFetchYTSTorrents fetches the title's torrents from YTS by IMDb id and
+// imports any new ones (detail page's one-click button), then returns a status
+// message and fires torrentsChanged so the video-region reloads. Movie-only —
+// YTS has no TV.
+func (s *Server) handleFetchYTSTorrents(w http.ResponseWriter, r *http.Request) {
+	title := s.lookupTitle(w, r)
+	if title == nil {
+		return
+	}
+	added, err := s.crawler.ImportTorrentsForTitle(r.Context(), title)
+	if err != nil {
+		renderMsg(w, "err", "Lỗi: "+err.Error())
+		return
+	}
+	if added > 0 {
+		// Tell the video-region (listens on torrentsChanged from:body) to reload.
+		w.Header().Set("HX-Trigger", "torrentsChanged")
+		renderMsg(w, "ok", fmt.Sprintf("Đã thêm %d video mới từ YTS.", added))
+		return
+	}
+	renderMsg(w, "ok", "Không có torrent mới — tất cả nguồn YTS đã được nhập.")
 }
 
 // handleListTitleVideos renders the video-region fragment that the detail page

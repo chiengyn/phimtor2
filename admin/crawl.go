@@ -256,6 +256,31 @@ func (c *crawler) runTopRatedCrawl(ctx context.Context, startPage, endPage int, 
 	return stats.String(), nil
 }
 
+// ImportTorrentsForTitle fetches a single existing movie's torrents from YTS
+// (matched by its IMDb id) and imports any not already stored, attaching them
+// to the title. Unlike the crawl jobs it touches only torrent sources — the
+// title's metadata is left untouched. It is the one-click counterpart used by
+// the detail page. Only movies are supported — YTS carries no TV. Runs
+// synchronously since it touches a single title; the caller blocks on it.
+func (c *crawler) ImportTorrentsForTitle(ctx context.Context, title *Title) (int, error) {
+	if title.Type != "movie" {
+		return 0, fmt.Errorf("YTS chỉ hỗ trợ phim lẻ")
+	}
+	imdbID, err := c.tmdb.movieImdbID(ctx, title.TMDBID)
+	if err != nil || imdbID == "" {
+		return 0, fmt.Errorf("không tìm thấy IMDb id trên TMDB cho phim này")
+	}
+	movies, err := c.yts.ListMovies(ctx, YTSListParams{QueryTerm: imdbID, Limit: 1})
+	if err != nil {
+		return 0, fmt.Errorf("truy vấn YTS thất bại: %w", err)
+	}
+	if len(movies) == 0 || len(movies[0].Torrents) == 0 {
+		return 0, fmt.Errorf("YTS không có torrent cho phim này")
+	}
+	videos, _, err := c.addMovieTorrents(ctx, title, movies[0])
+	return videos, err
+}
+
 // hasNewTorrent reports whether any torrent in the list is not yet stored.
 func (c *crawler) hasNewTorrent(ctx context.Context, torrents []YTSTorrent) (bool, error) {
 	for _, t := range torrents {
@@ -284,11 +309,28 @@ func (c *crawler) importMovie(ctx context.Context, tmdbID int, ytsMovie YTSMovie
 		return 0, 0, fmt.Errorf("upsert title: %w", err)
 	}
 
-	var lastFilePath string
+	videosAdded, lastFilePath, err := c.addMovieTorrents(ctx, title, ytsMovie)
+	if err != nil {
+		return videosAdded, 0, err
+	}
+
+	if videosAdded > 0 {
+		subtitlesAdded = c.downloadSubtitlesForMovie(ctx, title, lastFilePath, subOpts)
+	}
+
+	return videosAdded, subtitlesAdded, nil
+}
+
+// addMovieTorrents imports every torrent in ytsMovie not already stored as a
+// video on the given (already-persisted) title, touching only the torrent
+// sources — never the title's metadata. Returns the number of videos added and
+// the file path of the last one (used to seed a subtitle query). Shared by
+// importMovie and ImportTorrentsForTitle.
+func (c *crawler) addMovieTorrents(ctx context.Context, title *Title, ytsMovie YTSMovie) (videosAdded int, lastFilePath string, err error) {
 	for _, t := range ytsMovie.Torrents {
 		exists, err := c.store.TorrentSourceExists(ctx, t.Hash)
 		if err != nil {
-			return videosAdded, subtitlesAdded, fmt.Errorf("check torrent source: %w", err)
+			return videosAdded, lastFilePath, fmt.Errorf("check torrent source: %w", err)
 		}
 		if exists {
 			continue
@@ -324,12 +366,7 @@ func (c *crawler) importMovie(ctx context.Context, tmdbID int, ytsMovie YTSMovie
 		videosAdded++
 		lastFilePath = videoFile.Path
 	}
-
-	if videosAdded > 0 {
-		subtitlesAdded = c.downloadSubtitlesForMovie(ctx, title, lastFilePath, subOpts)
-	}
-
-	return videosAdded, subtitlesAdded, nil
+	return videosAdded, lastFilePath, nil
 }
 
 // downloadSubtitlesForMovie tops up a title's subtitles to subOpts.MaxCount
