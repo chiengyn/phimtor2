@@ -197,7 +197,9 @@ func (c *crawler) runYTSNewMoviesCrawl(ctx context.Context, limit int, subOpts s
 
 // runTopRatedCrawl backfills TMDB's top-rated movie list, importing only
 // movies that also have a YTS torrent (a title with no playable source
-// isn't created, mirroring the old project's rule).
+// isn't created, mirroring the old project's rule). Movies already in the
+// catalog are re-imported when YTS exposes a torrent we don't have yet, so
+// importMovie can add the new sources and refresh subtitles.
 func (c *crawler) runTopRatedCrawl(ctx context.Context, startPage, endPage int, subOpts subtitleOptions) (string, error) {
 	var stats importStats
 	for page := startPage; page <= endPage; page++ {
@@ -212,10 +214,6 @@ func (c *crawler) runTopRatedCrawl(ctx context.Context, startPage, endPage int, 
 				stats.errors++
 				continue
 			}
-			if exists {
-				stats.skipped++
-				continue
-			}
 
 			imdbID, err := c.tmdb.movieImdbID(ctx, tmdbID)
 			if err != nil || imdbID == "" {
@@ -227,6 +225,22 @@ func (c *crawler) runTopRatedCrawl(ctx context.Context, startPage, endPage int, 
 			if err != nil || len(ytsMovies) == 0 {
 				stats.skipped++
 				continue
+			}
+
+			// A movie already in the catalog is only re-imported when YTS has
+			// a torrent we don't have yet, so importMovie can add the new
+			// sources (and top up subtitles); otherwise there is nothing to do.
+			// Brand-new movies are always imported.
+			if exists {
+				hasNew, err := c.hasNewTorrent(ctx, ytsMovies[0].Torrents)
+				if err != nil {
+					stats.errors++
+					continue
+				}
+				if !hasNew {
+					stats.skipped++
+					continue
+				}
 			}
 
 			videos, subs, err := c.importMovie(ctx, tmdbID, ytsMovies[0], subOpts)
@@ -318,13 +332,13 @@ func (c *crawler) importMovie(ctx context.Context, tmdbID int, ytsMovie YTSMovie
 	return videosAdded, subtitlesAdded, nil
 }
 
-// downloadSubtitlesForMovie fetches up to subOpts.MaxCount subtitles for
-// title from OpenSubtitles (the highest download-count results first) and
-// stores them, unless the title already has subtitles saved from a previous
-// run. It searches by the title's original name first, falling back to a
-// query parsed from the imported video's file name if that finds nothing.
-// Failures are non-fatal — a movie still counts as imported without its
-// subtitles, so any error here is swallowed (returns 0).
+// downloadSubtitlesForMovie tops up a title's subtitles to subOpts.MaxCount
+// from OpenSubtitles (the highest download-count results first), skipping any
+// provider file already saved so a re-crawl adds only new subtitles instead of
+// duplicating ones from a previous run. It searches by the title's original
+// name first, falling back to a query parsed from the imported video's file
+// name if that finds nothing. Failures are non-fatal — a movie still counts as
+// imported without its subtitles, so any error here is swallowed (returns 0).
 func (c *crawler) downloadSubtitlesForMovie(ctx context.Context, title *Title, fileName string, subOpts subtitleOptions) int {
 	if !subOpts.Enabled || c.subtitles == nil || !c.subtitles.Enabled() {
 		return 0
@@ -335,7 +349,23 @@ func (c *crawler) downloadSubtitlesForMovie(ctx context.Context, title *Title, f
 	}
 
 	existing, err := c.store.SubtitlesForTitle(ctx, title.ID)
-	if err != nil || len(existing) > 0 {
+	if err != nil {
+		return 0
+	}
+	// Provider files already saved for this title — skip them so a re-crawl
+	// adds only subtitles we don't have yet.
+	have := make(map[string]bool, len(existing))
+	for _, s := range existing {
+		if s.Provider == c.subtitles.Name() {
+			have[s.ProviderFileID] = true
+		}
+	}
+	max := subOpts.MaxCount
+	if max <= 0 {
+		max = 1
+	}
+	remaining := max - len(have)
+	if remaining <= 0 {
 		return 0
 	}
 
@@ -354,18 +384,17 @@ func (c *crawler) downloadSubtitlesForMovie(ctx context.Context, title *Title, f
 	}
 
 	sort.Slice(results, func(i, j int) bool { return results[i].DownloadCount > results[j].DownloadCount })
-	max := subOpts.MaxCount
-	if max <= 0 {
-		max = 1
-	}
-	if max < len(results) {
-		results = results[:max]
-	}
 
 	titleID := title.ID
 	added := 0
 	for _, r := range results {
+		if added >= remaining {
+			break
+		}
 		fileID := strconv.Itoa(r.FileID)
+		if have[fileID] {
+			continue
+		}
 		data, format, err := c.subtitles.Download(ctx, fileID)
 		if err != nil {
 			continue
