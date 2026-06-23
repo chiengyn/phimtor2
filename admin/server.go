@@ -60,9 +60,12 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	},
 }).ParseFS(templatesFS, "templates/*.html"))
 
-// defaultSubtitleProvider is used when a request does not name one. It also gates
-// the "subtitles enabled" UI flag.
+// defaultSubtitleProvider is preferred when a request does not name one (and for
+// the crawler's automatic subtitle fetch). subtitleProviderOrder is the order the
+// UI lists providers in.
 const defaultSubtitleProvider = "opensubtitles"
+
+var subtitleProviderOrder = []string{"opensubtitles", "subsource"}
 
 type Server struct {
 	store       *Store
@@ -80,7 +83,7 @@ type Server struct {
 func NewServer(store *Store, tmdb *TMDBClient, yts *YTSClient, providers map[string]SubtitleProvider, blobs map[string]BlobStore, blobPrimary, streamerURL, user, pass string) *Server {
 	s := &Server{
 		store: store, tmdb: tmdb,
-		crawler:   newCrawler(store, tmdb, yts, providers[defaultSubtitleProvider], blobs, blobPrimary),
+		crawler:   newCrawler(store, tmdb, yts, crawlSubtitleProvider(providers), blobs, blobPrimary),
 		providers: providers, blobs: blobs, blobPrimary: blobPrimary,
 		streamerURL: streamerURL, user: user, pass: pass,
 	}
@@ -88,20 +91,52 @@ func NewServer(store *Store, tmdb *TMDBClient, yts *YTSClient, providers map[str
 	return s
 }
 
-// provider returns the named subtitle provider, defaulting to OpenSubtitles when
-// name is empty. Returns nil when no such provider is registered.
+// provider returns the named subtitle provider. When name is empty it falls back
+// to the default provider if enabled, otherwise any enabled provider. Returns nil
+// when no such (enabled) provider is registered.
 func (s *Server) provider(name string) SubtitleProvider {
-	if name == "" {
-		name = defaultSubtitleProvider
+	if name != "" {
+		return s.providers[name]
 	}
-	return s.providers[name]
+	if p := s.providers[defaultSubtitleProvider]; p != nil && p.Enabled() {
+		return p
+	}
+	for _, n := range s.enabledProviderNames() {
+		return s.providers[n]
+	}
+	return nil
 }
 
-// subtitlesEnabled reports whether the default subtitle provider is usable, which
-// the templates use to show/hide the subtitle search UI.
+// enabledProviderNames lists the registered, enabled subtitle providers in a
+// stable display order; the search UIs use it to populate a provider selector.
+func (s *Server) enabledProviderNames() []string {
+	names := make([]string, 0, len(s.providers))
+	for _, n := range subtitleProviderOrder {
+		if p := s.providers[n]; p != nil && p.Enabled() {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// subtitlesEnabled reports whether any subtitle provider is usable, which the
+// templates use to show/hide the subtitle search UI.
 func (s *Server) subtitlesEnabled() bool {
-	p := s.providers[defaultSubtitleProvider]
-	return p != nil && p.Enabled()
+	return len(s.enabledProviderNames()) > 0
+}
+
+// crawlSubtitleProvider picks the provider the crawler uses for its automatic
+// subtitle fetch: the default when enabled, else the first enabled one.
+func crawlSubtitleProvider(providers map[string]SubtitleProvider) SubtitleProvider {
+	if p := providers[defaultSubtitleProvider]; p != nil && p.Enabled() {
+		return p
+	}
+	for _, n := range subtitleProviderOrder {
+		if p := providers[n]; p != nil && p.Enabled() {
+			return p
+		}
+	}
+	return providers[defaultSubtitleProvider]
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -443,8 +478,9 @@ func (s *Server) renderCrawlStatus(w http.ResponseWriter) {
 // this admin server for OpenSubtitles search/download.
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	render(w, "watch.html", map[string]any{
-		"StreamerURL":      s.streamerURL,
-		"SubtitlesEnabled": s.subtitlesEnabled(),
+		"StreamerURL":       s.streamerURL,
+		"SubtitlesEnabled":  s.subtitlesEnabled(),
+		"SubtitleProviders": strings.Join(s.enabledProviderNames(), ","),
 	})
 }
 
@@ -570,10 +606,11 @@ func (s *Server) handleTitleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "detail.html", map[string]any{
-		"Title":            title,
-		"StreamerURL":      s.streamerURL,
-		"SubtitlesEnabled": s.subtitlesEnabled(),
-		"YTSBaseURL":       s.crawler.YTSBaseURL(),
+		"Title":             title,
+		"StreamerURL":       s.streamerURL,
+		"SubtitlesEnabled":  s.subtitlesEnabled(),
+		"SubtitleProviders": strings.Join(s.enabledProviderNames(), ","),
+		"YTSBaseURL":        s.crawler.YTSBaseURL(),
 	})
 }
 
@@ -705,12 +742,13 @@ func (s *Server) handleAddTorrentPage(w http.ResponseWriter, r *http.Request) {
 	episodesJSON, _ := json.Marshal(packEpisodes)
 
 	render(w, "add_torrent.html", map[string]any{
-		"Title":            title,
-		"EpisodeID":        episodeID,
-		"SeasonID":         seasonID,
-		"ContextLabel":     contextLabel,
-		"StreamerURL":      s.streamerURL,
-		"SubtitlesEnabled": s.subtitlesEnabled(),
+		"Title":             title,
+		"EpisodeID":         episodeID,
+		"SeasonID":          seasonID,
+		"ContextLabel":      contextLabel,
+		"StreamerURL":       s.streamerURL,
+		"SubtitlesEnabled":  s.subtitlesEnabled(),
+		"SubtitleProviders": strings.Join(s.enabledProviderNames(), ","),
 		// Plain string embedded in a data- attribute (NOT inside a <script>):
 		// html/template JSON-string-encodes values in script context, which would
 		// turn this array into a quoted string and break JSON.parse on the client.

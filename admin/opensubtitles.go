@@ -65,8 +65,12 @@ func (c *OpenSubtitlesClient) Enabled() bool { return c != nil && c.apiKey != ""
 // carries the Provider so the browser can pass it back when saving (the saved
 // row in the DB is the separate Subtitle model in models.go).
 type SubtitleResult struct {
-	Provider      string `json:"provider"`
-	FileID        int    `json:"fileId"`
+	Provider string `json:"provider"`
+	// FileID is an opaque, provider-defined handle the UI round-trips back to
+	// Download. It is a string (not the numeric OpenSubtitles file id) so other
+	// providers can encode richer locators — subsource, for instance, packs a
+	// subtitle id plus episode into it.
+	FileID        string `json:"fileId"`
 	Language      string `json:"language"`
 	Release       string `json:"release"`
 	DownloadCount int    `json:"downloadCount"`
@@ -147,7 +151,7 @@ func (c *OpenSubtitlesClient) Search(ctx context.Context, p SearchParams) ([]Sub
 		}
 		subs = append(subs, SubtitleResult{
 			Provider:      c.Name(),
-			FileID:        a.Files[0].FileID,
+			FileID:        strconv.Itoa(a.Files[0].FileID),
 			Language:      a.Language,
 			Release:       a.Release,
 			DownloadCount: a.DownloadCount,

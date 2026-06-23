@@ -47,6 +47,12 @@ type Config struct {
 	OpenSubtitlesUsername  string
 	OpenSubtitlesPassword  string
 
+	// SubSource integration (env-only, since it includes a secret). When
+	// SubSourceAPIKey is empty the subsource provider is not registered. The key
+	// is sent in subsource's X-API-Key header.
+	SubSourceAPIKey    string
+	SubSourceUserAgent string
+
 	// Subtitle storage. Saved subtitle files are written to a BlobStore selected
 	// by SubtitleStorageBackend ("local" | "s3"). The local backend uses
 	// SubtitleStorageDir; the s3 backend uses the S3_* settings (and is only
@@ -87,6 +93,9 @@ func loadConfig() Config {
 		OpenSubtitlesUserAgent: envStr("OPENSUBTITLES_USER_AGENT", "phimtor2 v1.0"),
 		OpenSubtitlesUsername:  envStr("OPENSUBTITLES_USERNAME", ""),
 		OpenSubtitlesPassword:  envStr("OPENSUBTITLES_PASSWORD", ""),
+
+		SubSourceAPIKey:    envStr("SUBSOURCE_API_KEY", ""),
+		SubSourceUserAgent: envStr("SUBSOURCE_USER_AGENT", "phimtor2 v1.0"),
 
 		SubtitleStorageBackend: envStr("SUBTITLE_STORAGE_BACKEND", "local"),
 		SubtitleStorageDir:     envStr("SUBTITLE_STORAGE_DIR", "./data/subtitles"),

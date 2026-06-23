@@ -99,7 +99,7 @@
     .title-actions .err { color: #ff8b94; font-size: .85rem; }
   </style>
 </head>
-<body class="{{ if .SubtitlesEnabled }}subs-enabled{{ end }}" data-title-name="{{ if .Title.OriginalTitle }}{{ .Title.OriginalTitle }}{{ else }}{{ .Title.Title }}{{ end }}">
+<body class="{{ if .SubtitlesEnabled }}subs-enabled{{ end }}" data-title-name="{{ if .Title.OriginalTitle }}{{ .Title.OriginalTitle }}{{ else }}{{ .Title.Title }}{{ end }}" data-subtitle-providers="{{ .SubtitleProviders }}">
   <header>
     <h1>🎬 phimtor2</h1>
     <a href="/">← Danh sách</a>
@@ -170,8 +170,9 @@
       </div>
 
       <div class="modal-section sub-search-section">
-        <h4>Tìm trên OpenSubtitles</h4>
+        <h4>Tìm phụ đề trực tuyến</h4>
         <div class="modal-row">
+          <select id="sub-modal-provider" class="lang" style="display:none"></select>
           <input type="text" id="sub-modal-query" placeholder="Từ khóa tìm kiếm…" onkeydown="if(event.key==='Enter')searchSubModal()">
           <input type="text" id="sub-modal-lang" class="lang" value="vi" title="Mã ngôn ngữ, vd: en,vi">
           <button type="button" onclick="searchSubModal()">Tìm</button>
@@ -184,8 +185,22 @@
 
 <script>
 const TITLE_NAME = document.body.dataset.titleName || '';
+const SUB_PROVIDERS = (document.body.dataset.subtitleProviders || '').split(',').filter(Boolean);
+const PROVIDER_LABELS = { opensubtitles: 'OpenSubtitles', subsource: 'SubSource' };
 let subTarget = null;       // { kind:'title'|'episode', id, season, episode }
 let subModalResults = [];
+
+// Fill the provider <select>, showing it only when there's a real choice.
+function fillProviderSelect(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = SUB_PROVIDERS.map(p => `<option value="${p}">${PROVIDER_LABELS[p] || p}</option>`).join('');
+  el.style.display = SUB_PROVIDERS.length > 1 ? '' : 'none';
+}
+function chosenProvider(id) {
+  const el = document.getElementById(id);
+  return el ? el.value : (SUB_PROVIDERS[0] || '');
+}
 
 function escHtml(s) {
   return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -206,6 +221,7 @@ function openSubModal(kind, id, season, episode) {
     q += ' S' + String(subTarget.season).padStart(2, '0') + 'E' + String(subTarget.episode).padStart(2, '0');
   }
   document.getElementById('sub-modal-query').value = q;
+  fillProviderSelect('sub-modal-provider');
   document.getElementById('sub-modal').classList.remove('hidden');
   document.getElementById('sub-modal-query').focus();
 }
@@ -233,6 +249,8 @@ async function searchSubModal() {
     const params = new URLSearchParams({ query, languages: lang });
     if (subTarget.season) params.set('season', subTarget.season);
     if (subTarget.episode) params.set('episode', subTarget.episode);
+    const provider = chosenProvider('sub-modal-provider');
+    if (provider) params.set('provider', provider);
     const res = await fetch(`/api/subtitles/search?${params}`);
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
     subModalResults = await res.json();

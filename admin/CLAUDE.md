@@ -56,6 +56,15 @@ unset).
   (required to enable subtitle search/download), `OPENSUBTITLES_USER_AGENT`, and
   optional `OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD` (a login token
   raises the per-day download quota).
+- SubSource (env-only; `subsource.go`): `SUBSOURCE_API_KEY` (from a subsource.net
+  account, sent in subsource's `X-API-Key` header) registers SubSource as a second
+  `SubtitleProvider`, optional `SUBSOURCE_USER_AGENT`. When more than one provider
+  is configured the subtitle search UIs show a provider dropdown; `subtitlesEnabled`
+  is true if **any** provider is enabled. SubSource serves each subtitle as a ZIP
+  archive, so its `Download` fetches the archive and extracts a `.srt`/`.vtt` track
+  — for TV season packs the episode (folded into the result's `FileID` as
+  `subtitleId:episode`) selects the matching file. The crawler's automatic fetch
+  uses the default (OpenSubtitles) provider when enabled, else the first enabled one.
 - Subtitle storage (`blobstore.go`): saved subtitle files are written to a
   `BlobStore`. `SUBTITLE_STORAGE_BACKEND` selects `local` (default) or `s3`.
   Local uses `SUBTITLE_STORAGE_DIR` (default `./data/subtitles`, gitignored). S3

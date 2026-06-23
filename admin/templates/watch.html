@@ -84,7 +84,7 @@
   .os-dl { color: #666; white-space: nowrap; }
 </style>
 </head>
-<body data-streamer="{{ .StreamerURL }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}">
+<body data-streamer="{{ .StreamerURL }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}" data-subtitle-providers="{{ .SubtitleProviders }}">
 <header>
   <h1>Phimtor — Xem phim</h1>
   <a href="/">← Quản trị</a>
@@ -117,6 +117,19 @@
 // this admin server (same origin) for OpenSubtitles search/download.
 const STREAMER = (document.body.dataset.streamer || '').replace(/\/$/, '');
 const SUBTITLES_ENABLED = document.body.dataset.subtitlesEnabled === 'true';
+const SUB_PROVIDERS = (document.body.dataset.subtitleProviders || '').split(',').filter(Boolean);
+const PROVIDER_LABELS = { opensubtitles: 'OpenSubtitles', subsource: 'SubSource' };
+// Build a <select> of online subtitle providers, or '' when there's nothing to
+// choose between (zero or one provider).
+function providerSelectHtml(id) {
+  if (SUB_PROVIDERS.length <= 1) return '';
+  const opts = SUB_PROVIDERS.map(p => `<option value="${p}">${PROVIDER_LABELS[p] || p}</option>`).join('');
+  return `<select class="os-lang" id="${id}">${opts}</select>`;
+}
+function chosenProvider(id) {
+  const el = document.getElementById(id);
+  return el ? el.value : (SUB_PROVIDERS[0] || '');
+}
 const API = STREAMER + '/api/torrents';
 const OS_SEARCH = '/api/subtitles/search';
 const OS_DL = '/api/subtitles/download';
@@ -190,7 +203,7 @@ function playFile(infoHash, fileIndex, fileName) {
   clearSubtitle();
 
   const osButton = SUBTITLES_ENABLED
-    ? `<button class="btn btn-sm btn-sub" onclick="toggleOsPanel()">🔍 OpenSubtitles</button>`
+    ? `<button class="btn btn-sm btn-sub" onclick="toggleOsPanel()">🔍 Phụ đề online</button>`
     : '';
 
   const pane = document.getElementById('player-pane');
@@ -208,6 +221,7 @@ function playFile(infoHash, fileIndex, fileName) {
     </div>
     <div class="os-panel" id="os-panel" hidden>
       <div class="os-search-row">
+        ${providerSelectHtml('os-provider')}
         <input type="text" id="os-query" placeholder="Từ khóa tìm kiếm…" onkeydown="if(event.key==='Enter')searchOpenSubtitles()" />
         <input type="text" class="os-lang" id="os-lang" value="vi" title="Mã ngôn ngữ, vd: en,vi" />
         <button class="btn btn-sm btn-sub" onclick="searchOpenSubtitles()">Tìm</button>
@@ -322,6 +336,8 @@ async function searchOpenSubtitles() {
   try {
     const params = new URLSearchParams({ languages: lang, file: currentVideo.fileName });
     if (query) params.set('query', query);
+    const provider = chosenProvider('os-provider');
+    if (provider) params.set('provider', provider);
     const res = await fetch(`${OS_SEARCH}?${params}`);
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
     osResults = await res.json();
@@ -344,10 +360,12 @@ async function applyOsResult(i) {
   const prev = results.innerHTML;
   results.innerHTML = '<span class="loading-text">Đang tải phụ đề…</span>';
   try {
-    const res = await fetch(`${OS_DL}?file_id=${s.fileId}`);
+    const dlParams = new URLSearchParams({ file_id: s.fileId });
+    if (s.provider) dlParams.set('provider', s.provider);
+    const res = await fetch(`${OS_DL}?${dlParams}`);
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
     const vtt = await res.text();
-    setSubtitle(vtt, s.release || s.language || 'OpenSubtitles');
+    setSubtitle(vtt, s.release || s.language || 'Phụ đề');
     toggleOsPanel(false);
     results.innerHTML = prev;
   } catch(e) {

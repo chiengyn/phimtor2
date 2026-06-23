@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -428,7 +427,7 @@ func (c *crawler) downloadSubtitlesForMovie(ctx context.Context, title *Title, f
 		if added >= remaining {
 			break
 		}
-		fileID := strconv.Itoa(r.FileID)
+		fileID := r.FileID
 		if have[fileID] {
 			continue
 		}

@@ -43,6 +43,11 @@ func main() {
 	)
 	providers := map[string]SubtitleProvider{osc.Name(): osc}
 
+	if cfg.SubSourceAPIKey != "" {
+		ssc := NewSubSourceClient(cfg.SubSourceAPIKey, cfg.SubSourceUserAgent)
+		providers[ssc.Name()] = ssc
+	}
+
 	blobs, blobPrimary, err := newBlobStores(cfg)
 	if err != nil {
 		log.Fatalf("subtitle storage: %v", err)
