@@ -15,6 +15,10 @@ type Config struct {
 	// / sitemap URLs for SEO. Empty in local dev → URLs fall back to relative.
 	PublicURL string
 
+	// DiscordURL is the public invite link to the support Discord channel,
+	// surfaced in the site chrome. Empty → the link is hidden.
+	DiscordURL string
+
 	// MySQL connection. DSN, when set, overrides the individual DB_* fields.
 	DSN        string
 	DBHost     string
@@ -44,8 +48,9 @@ type Config struct {
 
 func loadConfig() Config {
 	cfg := Config{
-		Port:      envInt("VIEWER_PORT", 8082),
-		PublicURL: envStr("VIEWER_PUBLIC_URL", ""),
+		Port:       envInt("VIEWER_PORT", 8082),
+		PublicURL:  envStr("VIEWER_PUBLIC_URL", ""),
+		DiscordURL: envStr("VIEWER_DISCORD_URL", ""),
 
 		DSN:        envStr("MYSQL_DSN", ""),
 		DBHost:     envStr("DB_HOST", "127.0.0.1"),
@@ -69,6 +74,7 @@ func loadConfig() Config {
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
 	flag.StringVar(&cfg.PublicURL, "public-url", cfg.PublicURL, "Browser-facing origin of the viewer (for canonical/OG/sitemap URLs)")
+	flag.StringVar(&cfg.DiscordURL, "discord-url", cfg.DiscordURL, "Public invite link to the support Discord channel (hidden when empty)")
 	flag.StringVar(&cfg.DSN, "dsn", cfg.DSN, "MySQL DSN (overrides DB_* flags when set)")
 	flag.StringVar(&cfg.DBHost, "db-host", cfg.DBHost, "MySQL host")
 	flag.IntVar(&cfg.DBPort, "db-port", cfg.DBPort, "MySQL port")

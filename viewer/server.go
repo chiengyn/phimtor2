@@ -36,6 +36,10 @@ type Server struct {
 	// used to build absolute canonical / Open Graph / sitemap URLs. Empty in
 	// local dev, where SEO URLs fall back to site-relative.
 	publicURL string
+
+	// discordURL is the public invite link to the support Discord channel,
+	// exposed to templates via the discordURL helper. Empty → link is hidden.
+	discordURL string
 }
 
 func NewServer(store *Store, cfg Config) (*Server, error) {
@@ -49,6 +53,7 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		streamer:          newStreamerClient(cfg.StreamerInternalURL),
 		blobs:             blobs,
 		publicURL:         strings.TrimRight(cfg.PublicURL, "/"),
+		discordURL:        cfg.DiscordURL,
 	}
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
@@ -89,6 +94,9 @@ func (s *Server) funcMap() template.FuncMap {
 		"abs":        s.abs,
 		"jsonLD":     s.titleJSONLD,
 		"siteJSONLD": s.siteJSONLD,
+		// discordURL exposes the configured support-channel invite link (empty
+		// when unset, so templates can hide the link).
+		"discordURL": func() string { return s.discordURL },
 	}
 	for k, v := range baseFuncMap {
 		fm[k] = v

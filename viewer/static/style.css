@@ -74,6 +74,24 @@ main { width: 100%; }
 	transition: color 0.2s var(--ease);
 }
 .site-nav a:hover { color: var(--muted); }
+/* Discord support link: a brand-coloured pill pinned to the header's right edge.
+   Kept outside .site-nav so it survives the mobile breakpoint that hides the nav. */
+.discord-link {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 16px;
+	border-radius: 999px;
+	background: #5865f2;
+	color: #fff;
+	font-size: 0.9rem;
+	font-weight: 600;
+	white-space: nowrap;
+	transition: background 0.2s var(--ease), transform 0.2s var(--ease);
+}
+.discord-link:hover { background: #4752c4; transform: translateY(-1px); }
+.discord-icon { display: block; }
 
 /* --- Hero billboard ----------------------------------------------------- */
 .hero {

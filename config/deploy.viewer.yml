@@ -38,6 +38,8 @@ env:
     # Public origin of the viewer itself — used for canonical / Open Graph /
     # sitemap URLs (SEO). Must match the browser-facing domain.
     VIEWER_PUBLIC_URL: https://<%= ENV["VIEWER_HOST"] %>
+    # Support Discord invite link, surfaced in the site header/footer.
+    VIEWER_DISCORD_URL: https://discord.gg/PhaE6DgnC
     # Same shared MySQL accessory as admin (named on the kamal network).
     DB_HOST: phimtor2-admin-mysql
     DB_PORT: 3306
