@@ -96,9 +96,19 @@ Flat single `main` package. Layers, in request order:
     subtitlesChanged`. `GET /api/subtitles/{id}/file` serves the stored file;
     `DELETE /api/subtitles/{id}` removes row + blob. `GET
     /api/titles/{id}/subtitles` returns the `subtitle-region` fragment.
+  - `POST /api/subtitles/upload` (multipart `file`, `language`, `name`,
+    `title_id`/`episode_id`) — the **manual upload** path: the admin uploads a
+    `.srt`/`.vtt` from their computer. Unlike the search/download path it needs no
+    `SubtitleProvider` (only a `BlobStore`), so it works even when OpenSubtitles
+    is unconfigured. The **original bytes are stored verbatim** (SubRip is kept
+    as-is, not converted) with the detected `format` (`srt`/`vtt`) on the row and
+    `provider = "manual"`; the play page converts SRT to WebVTT client-side on
+    load (the saved-subtitle summary now carries `format`).
   - The subtitle search/select/save UI lives on three surfaces: the add-torrent
     page, the title detail page (a modal, with saved subtitles listed per
-    movie/episode), and the play page (which also auto-loads saved subtitles).
+    movie/episode), and the play page (which also auto-loads saved subtitles). The
+    OpenSubtitles **search** section on the first two is gated by the
+    `SubtitlesEnabled` flag; the **manual upload** section is always shown.
 
 - **Ref parsing** (`ref.go`): `parseRef` turns the admin's input into a
   `(mediaType, id)` pair. A themoviedb.org link carries its own type

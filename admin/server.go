@@ -156,6 +156,7 @@ func (s *Server) setupRouter() {
 		r.Get("/search", s.handleSearchSubtitles)
 		r.Get("/download", s.handleDownloadSubtitle)
 		r.Post("/", s.handleSaveSubtitle)
+		r.Post("/upload", s.handleUploadSubtitle)
 		r.Get("/{id}/file", s.handleSubtitleFile)
 		r.Delete("/{id}", s.handleDeleteSubtitle)
 	})
@@ -779,12 +780,13 @@ type subtitleSummary struct {
 	ID       int64  `json:"id"`
 	Language string `json:"language"`
 	Name     string `json:"name"`
+	Format   string `json:"format"`
 }
 
 func savedSubtitleSummaries(subs []Subtitle) []subtitleSummary {
 	out := make([]subtitleSummary, 0, len(subs))
 	for _, sub := range subs {
-		out = append(out, subtitleSummary{ID: sub.ID, Language: sub.Language, Name: sub.Name})
+		out = append(out, subtitleSummary{ID: sub.ID, Language: sub.Language, Name: sub.Name, Format: sub.Format})
 	}
 	return out
 }
@@ -1067,6 +1069,118 @@ func (s *Server) handleSaveSubtitle(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("HX-Trigger", "subtitlesChanged")
 	writeJSON(w, http.StatusCreated, map[string]int64{"id": sub.ID})
+}
+
+// maxSubtitleUpload caps a manually uploaded subtitle file. Matches the 8 MiB
+// limit the OpenSubtitles download path uses.
+const maxSubtitleUpload = 8 << 20
+
+// handleUploadSubtitle stores a subtitle file uploaded directly from the admin's
+// computer (no provider). Unlike the search/download path this needs no
+// SubtitleProvider — only a BlobStore — so it works even when OpenSubtitles is
+// not configured. The original bytes are stored verbatim (SubRip is kept as-is,
+// not converted) with the detected format recorded on the row; the player
+// converts SRT to WebVTT on load. The request is multipart/form-data: file,
+// language, name, title_id, episode_id.
+func (s *Server) handleUploadSubtitle(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(maxSubtitleUpload + 1<<20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid upload: "+err.Error())
+		return
+	}
+
+	titleID := optionalInt64Form(r, "title_id")
+	episodeID := optionalInt64Form(r, "episode_id")
+	if (titleID == nil) == (episodeID == nil) {
+		writeError(w, http.StatusBadRequest, "provide exactly one of title_id or episode_id")
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file required")
+		return
+	}
+	defer file.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(file, maxSubtitleUpload+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "read upload: "+err.Error())
+		return
+	}
+	if len(raw) == 0 {
+		writeError(w, http.StatusBadRequest, "empty file")
+		return
+	}
+	if len(raw) > maxSubtitleUpload {
+		writeError(w, http.StatusRequestEntityTooLarge, "file too large (max 8 MiB)")
+		return
+	}
+
+	// Keep the original bytes verbatim. Detect the format (WebVTT vs SubRip) from
+	// the content first, falling back to the file extension, so the row records
+	// what was actually stored and the player can convert SRT on load.
+	origName := path.Base(header.Filename)
+	data := raw
+	format := "srt"
+	if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(string(raw), "\ufeff")), "WEBVTT") ||
+		strings.EqualFold(path.Ext(origName), ".vtt") {
+		format = "vtt"
+	}
+
+	lang := strings.TrimSpace(r.FormValue("language"))
+	if lang == "" {
+		lang = "sub"
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		name = strings.TrimSuffix(origName, path.Ext(origName))
+	}
+	if name == "" {
+		name = "Tải lên thủ công"
+	}
+	// provider_file_id is VARCHAR(128); keep a short, stable handle for the row.
+	fileID := origName
+	if fileID == "" || fileID == "." {
+		fileID = "upload"
+	}
+	if len(fileID) > 128 {
+		fileID = fileID[:128]
+	}
+
+	store := s.blobs[s.blobPrimary]
+	key := subtitleStorageKey(titleID, episodeID, "manual", fileID, lang, format)
+	if err := store.Put(r.Context(), key, data, subtitleContentType(format)); err != nil {
+		writeError(w, http.StatusInternalServerError, "store subtitle: "+err.Error())
+		return
+	}
+
+	sub := &Subtitle{
+		TitleID: titleID, EpisodeID: episodeID,
+		Provider: "manual", ProviderFileID: fileID, Language: lang, Name: name,
+		Format: format, StorageBackend: store.Name(), StorageKey: key,
+	}
+	if err := s.store.AddSubtitle(r.Context(), sub); err != nil {
+		_ = store.Delete(r.Context(), key)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("HX-Trigger", "subtitlesChanged")
+	writeJSON(w, http.StatusCreated, map[string]int64{"id": sub.ID})
+}
+
+// optionalInt64Form parses a form field as an int64 pointer, returning nil when
+// the field is absent, empty, or unparseable (so callers can treat it as unset).
+func optionalInt64Form(r *http.Request, field string) *int64 {
+	v := strings.TrimSpace(r.FormValue(field))
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &n
 }
 
 // handleSubtitleFile serves a saved subtitle's file, reading it from whichever

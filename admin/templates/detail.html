@@ -47,7 +47,16 @@
     .btn-play { font: inherit; }
     .region-title { font-size: 1.1rem; margin: 2rem 0 .5rem; }
     button.btn-add { font: inherit; border: none; cursor: pointer; }
-    body:not(.subs-enabled) .sub-add { display: none; }
+    body:not(.subs-enabled) .sub-search-section { display: none; }
+    .modal-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #1c2530; }
+    .modal-section:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+    .modal-section h4 { margin: 0 0 .5rem; font-size: .9rem; color: #adbac7; }
+    .modal-section .field { display: block; margin-bottom: .5rem; }
+    .modal-section .field span { display: block; font-size: .75rem; color: #8b98a5; margin-bottom: .2rem; }
+    .modal-section input[type=file] { width: 100%; color: #c4b5fd; font-size: .85rem; }
+    .upload-btn { margin-top: .25rem; background: #16a34a; border: 1px solid #16a34a; color: #fff; border-radius: 8px; padding: .45rem .8rem; cursor: pointer; }
+    .upload-btn:hover { background: #15803d; }
+    .upload-btn:disabled { opacity: .6; cursor: default; }
     /* subtitle search modal */
     .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 50; }
     .modal.hidden { display: none; }
@@ -145,13 +154,31 @@
         <strong id="sub-modal-title">Thêm phụ đề</strong>
         <button class="modal-close" type="button" onclick="closeSubModal()">✕</button>
       </div>
-      <div class="modal-row">
-        <input type="text" id="sub-modal-query" placeholder="Từ khóa tìm kiếm…" onkeydown="if(event.key==='Enter')searchSubModal()">
-        <input type="text" id="sub-modal-lang" class="lang" value="vi" title="Mã ngôn ngữ, vd: en,vi">
-        <button type="button" onclick="searchSubModal()">Tìm</button>
+
+      <div class="modal-section">
+        <h4>Tải lên từ máy của bạn</h4>
+        <label class="field">
+          <span>Tệp phụ đề (.srt hoặc .vtt)</span>
+          <input type="file" id="sub-upload-file" accept=".srt,.vtt,text/vtt,application/x-subrip">
+        </label>
+        <div class="modal-row">
+          <input type="text" id="sub-upload-name" placeholder="Tên hiển thị (tùy chọn)">
+          <input type="text" id="sub-upload-lang" class="lang" value="vi" title="Mã ngôn ngữ, vd: en, vi">
+        </div>
+        <button type="button" class="upload-btn" onclick="uploadSubModal(this)">⬆ Tải lên</button>
+        <div id="sub-upload-status" class="muted"></div>
       </div>
-      <div id="sub-modal-status" class="muted"></div>
-      <div id="sub-modal-results"></div>
+
+      <div class="modal-section sub-search-section">
+        <h4>Tìm trên OpenSubtitles</h4>
+        <div class="modal-row">
+          <input type="text" id="sub-modal-query" placeholder="Từ khóa tìm kiếm…" onkeydown="if(event.key==='Enter')searchSubModal()">
+          <input type="text" id="sub-modal-lang" class="lang" value="vi" title="Mã ngôn ngữ, vd: en,vi">
+          <button type="button" onclick="searchSubModal()">Tìm</button>
+        </div>
+        <div id="sub-modal-status" class="muted"></div>
+        <div id="sub-modal-results"></div>
+      </div>
     </div>
   </div>
 
@@ -170,6 +197,10 @@ function openSubModal(kind, id, season, episode) {
   document.getElementById('sub-modal-results').innerHTML = '';
   document.getElementById('sub-modal-status').textContent = '';
   document.getElementById('sub-modal-status').className = 'muted';
+  document.getElementById('sub-upload-file').value = '';
+  document.getElementById('sub-upload-name').value = '';
+  document.getElementById('sub-upload-status').textContent = '';
+  document.getElementById('sub-upload-status').className = 'muted';
   let q = TITLE_NAME;
   if (subTarget.season && subTarget.episode) {
     q += ' S' + String(subTarget.season).padStart(2, '0') + 'E' + String(subTarget.episode).padStart(2, '0');
@@ -248,6 +279,39 @@ async function saveSubModal(i, btn) {
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Lưu';
     setSubModalStatus('Lưu thất bại: ' + e.message, true);
+  }
+}
+
+function setSubUploadStatus(text, isErr) {
+  const el = document.getElementById('sub-upload-status');
+  el.textContent = text;
+  el.className = isErr ? 'err' : 'muted';
+}
+
+async function uploadSubModal(btn) {
+  if (!subTarget) return;
+  const fileInput = document.getElementById('sub-upload-file');
+  const file = fileInput.files[0];
+  if (!file) { setSubUploadStatus('Chọn một tệp phụ đề.', true); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('language', document.getElementById('sub-upload-lang').value.trim() || 'sub');
+  fd.append('name', document.getElementById('sub-upload-name').value.trim());
+  if (subTarget.kind === 'episode') fd.append('episode_id', subTarget.id);
+  else fd.append('title_id', subTarget.id);
+  btn.disabled = true;
+  setSubUploadStatus('Đang tải lên…');
+  try {
+    const res = await fetch('/api/subtitles/upload', { method: 'POST', body: fd });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    htmx.trigger(document.body, 'subtitlesChanged');
+    fileInput.value = '';
+    document.getElementById('sub-upload-name').value = '';
+    setSubUploadStatus('Đã tải lên phụ đề. Có thể tải thêm.');
+  } catch (e) {
+    setSubUploadStatus('Tải lên thất bại: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
   }
 }
 

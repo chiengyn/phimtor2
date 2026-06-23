@@ -122,18 +122,35 @@
 
     <div class="card hidden" id="subtitle-card">
       <h2>Phụ đề (tùy chọn)</h2>
-      <p class="muted">Tìm phụ đề trên OpenSubtitles và lưu cho mục này. Tệp phụ đề sẽ được tải về và lưu trữ.</p>
       <label class="field" id="sub-episode-field" style="display:none">
         <span>Gán phụ đề cho tập</span>
         <select id="sub-episode-select"></select>
       </label>
-      <div class="row">
-        <input type="text" id="sub-query" placeholder="Từ khóa tìm kiếm…">
-        <input type="text" id="sub-lang" value="vi" style="flex:0 0 80px;text-align:center" title="Mã ngôn ngữ, vd: en,vi">
-        <button id="sub-search-btn" onclick="searchSubs()">Tìm phụ đề</button>
+
+      <div id="sub-upload-section">
+        <h3 style="margin:.4rem 0;font-size:1rem">Tải lên từ máy của bạn</h3>
+        <label class="field">
+          <span>Tệp phụ đề (.srt hoặc .vtt)</span>
+          <input type="file" id="sub-upload-file" accept=".srt,.vtt,text/vtt,application/x-subrip">
+        </label>
+        <div class="row">
+          <input type="text" id="sub-upload-name" placeholder="Tên hiển thị (tùy chọn)">
+          <input type="text" id="sub-upload-lang" value="vi" style="flex:0 0 80px;text-align:center" title="Mã ngôn ngữ, vd: en, vi">
+          <button id="sub-upload-btn" onclick="uploadSub(this)">⬆ Tải lên</button>
+        </div>
+        <div style="margin-top:.6rem"><span id="sub-upload-status"></span></div>
       </div>
-      <div style="margin-top:.6rem"><span id="sub-status"></span></div>
-      <div id="sub-results"></div>
+
+      <div id="sub-search-section" class="hidden" style="margin-top:1rem;padding-top:1rem;border-top:1px solid #1c2530">
+        <h3 style="margin:.4rem 0;font-size:1rem">Tìm trên OpenSubtitles</h3>
+        <div class="row">
+          <input type="text" id="sub-query" placeholder="Từ khóa tìm kiếm…">
+          <input type="text" id="sub-lang" value="vi" style="flex:0 0 80px;text-align:center" title="Mã ngôn ngữ, vd: en,vi">
+          <button id="sub-search-btn" onclick="searchSubs()">Tìm phụ đề</button>
+        </div>
+        <div style="margin-top:.6rem"><span id="sub-status"></span></div>
+        <div id="sub-results"></div>
+      </div>
     </div>
   </main>
 
@@ -466,9 +483,13 @@ const TITLE_NAME = document.body.dataset.titleName || '';
 let subResults = [];
 
 function initSubtitleCard() {
-  if (!SUBTITLES_ENABLED) return;
+  // The card is always available: manual upload only needs a BlobStore. The
+  // OpenSubtitles search section is shown only when a provider is configured.
   document.getElementById('subtitle-card').classList.remove('hidden');
-  document.getElementById('sub-query').value = TITLE_NAME;
+  if (SUBTITLES_ENABLED) {
+    document.getElementById('sub-search-section').classList.remove('hidden');
+    document.getElementById('sub-query').value = TITLE_NAME;
+  }
   if (PACK_MODE) {
     // Season pack: the subtitle must target a specific episode.
     const field = document.getElementById('sub-episode-field');
@@ -547,6 +568,47 @@ async function saveSub(i, btn) {
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Lưu';
     setSubStatus('Lưu thất bại: ' + e.message, true);
+  }
+}
+
+function setSubUploadStatus(text, isErr) {
+  const el = document.getElementById('sub-upload-status');
+  el.textContent = text;
+  el.className = isErr ? 'err' : '';
+}
+
+async function uploadSub(btn) {
+  const fileInput = document.getElementById('sub-upload-file');
+  const file = fileInput.files[0];
+  if (!file) { setSubUploadStatus('Chọn một tệp phụ đề.', true); return; }
+  let owner;
+  if (PACK_MODE) {
+    const sel = document.getElementById('sub-episode-select');
+    if (!sel.value) { setSubUploadStatus('Chọn tập để gán phụ đề.', true); return; }
+    owner = { episode_id: Number(sel.value) };
+  } else if (EPISODE_ID) {
+    owner = { episode_id: Number(EPISODE_ID) };
+  } else {
+    owner = { title_id: Number(TITLE_ID) };
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('language', document.getElementById('sub-upload-lang').value.trim() || 'sub');
+  fd.append('name', document.getElementById('sub-upload-name').value.trim());
+  if (owner.episode_id) fd.append('episode_id', owner.episode_id);
+  else fd.append('title_id', owner.title_id);
+  btn.disabled = true;
+  setSubUploadStatus('Đang tải lên…');
+  try {
+    const res = await fetch('/api/subtitles/upload', { method: 'POST', body: fd });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    fileInput.value = '';
+    document.getElementById('sub-upload-name').value = '';
+    setSubUploadStatus('Đã tải lên phụ đề.');
+  } catch (e) {
+    setSubUploadStatus('Tải lên thất bại: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
   }
 }
 
