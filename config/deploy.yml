@@ -62,11 +62,15 @@ env:
     SUBTITLE_STORAGE_BACKEND: local
     SUBTITLE_STORAGE_DIR: /data/subtitles
     OPENSUBTITLES_USER_AGENT: phimtor2 v1.0
+    SUBSOURCE_USER_AGENT: phimtor2 v1.0
   secret:
     - ADMIN_PASSWORD
     - DB_PASSWORD
     - TMDB_API_KEY
     - OPENSUBTITLES_API_KEY
+    # SubSource (subsource.net) subtitle provider. Drop it from this list and
+    # from .kamal/secrets if you are not using SubSource.
+    - SUBSOURCE_API_KEY
     # Optional OpenSubtitles login (raises the daily download quota). Add these
     # to the list and to .kamal/secrets only if you have an account:
     #   - OPENSUBTITLES_USERNAME

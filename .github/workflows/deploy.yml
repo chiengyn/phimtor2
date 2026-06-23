@@ -9,7 +9,7 @@ name: Deploy (manual)
 #   KAMAL_SSH_PRIVATE_KEY   private key whose public key is authorized on the
 #                           server for the Kamal SSH user (root by default)
 #   KAMAL_REGISTRY_PASSWORD GitHub PAT with read:packages (host pulls from ghcr)
-#   ADMIN_PASSWORD, TMDB_API_KEY, OPENSUBTITLES_API_KEY,
+#   ADMIN_PASSWORD, TMDB_API_KEY, OPENSUBTITLES_API_KEY, SUBSOURCE_API_KEY,
 #   DB_PASSWORD, MYSQL_ROOT_PASSWORD
 #
 # Required repo VARIABLES (same screen → Variables; these aren't secret and the
@@ -76,6 +76,7 @@ jobs:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+          SUBSOURCE_API_KEY: ${{ secrets.SUBSOURCE_API_KEY }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
         run: |

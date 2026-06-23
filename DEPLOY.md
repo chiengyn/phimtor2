@@ -57,6 +57,7 @@ set -a && source .env && set +a
 | `ADMIN_PASSWORD` | secret | admin Basic-auth password |
 | `TMDB_API_KEY` | secret | themoviedb.org v3 key |
 | `OPENSUBTITLES_API_KEY` | secret | opensubtitles.com v1 key |
+| `SUBSOURCE_API_KEY` | secret | subsource.net key (alt subtitle source) |
 | `DB_PASSWORD` | secret | app DB user password |
 | `MYSQL_ROOT_PASSWORD` | secret | MySQL root password |
 
@@ -111,8 +112,8 @@ Actions):
    `setup`): `kamal setup --skip-push`.
 2. Add the repo **Secrets**: `KAMAL_SSH_PRIVATE_KEY` (key authorized on the
    server for the Kamal SSH user, root by default), `KAMAL_REGISTRY_PASSWORD`,
-   `ADMIN_PASSWORD`, `TMDB_API_KEY`, `OPENSUBTITLES_API_KEY`, `DB_PASSWORD`,
-   `MYSQL_ROOT_PASSWORD`.
+   `ADMIN_PASSWORD`, `TMDB_API_KEY`, `OPENSUBTITLES_API_KEY`, `SUBSOURCE_API_KEY`,
+   `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`.
 3. Add the repo **Variables** (non-secret, read by the configs via ERB):
    `SERVER_IP`, `ADMIN_HOST`, `VIEWER_HOST`, `STREAMER_HOST`. (`SERVER_IP` also
    seeds `known_hosts`, replacing a separate `SSH_HOST`.)
