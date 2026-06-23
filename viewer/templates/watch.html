@@ -19,6 +19,23 @@
 	}
 	.player-placeholder.err { color: var(--accent); }
 
+	/* Notice shown while the torrent is loading; hidden once playback starts.
+	   Torrents can take a while to find seeders/buffer, so this tells users to
+	   hang on rather than assume the player is broken. */
+	.load-notice {
+		display: flex; align-items: center; gap: 10px;
+		margin: 0 0 14px; padding: 12px 16px;
+		background: rgba(229,9,20,0.10); border: 1px solid rgba(229,9,20,0.35);
+		border-radius: var(--radius); color: var(--text); font-size: 0.88rem; line-height: 1.5;
+	}
+	.load-notice[hidden] { display: none; }
+	.load-notice .spinner {
+		flex: 0 0 auto; width: 16px; height: 16px; border-radius: 50%;
+		border: 2px solid rgba(255,255,255,0.25); border-top-color: var(--accent);
+		animation: load-notice-spin 0.8s linear infinite;
+	}
+	@keyframes load-notice-spin { to { transform: rotate(360deg); } }
+
 	/* In fullscreen, drop the inline height cap and let the video fill the
 	   whole screen (otherwise a 1080p video stays letterboxed on a 4K display). */
 	.watch .plyr--fullscreen-active,
@@ -148,6 +165,11 @@
 	</div>
 
 	{{if .HasVideo}}
+	<div class="load-notice" id="load-notice" hidden>
+		<span class="spinner"></span>
+		<span>Phim đang được chuẩn bị — quá trình ban đầu có thể mất thời gian lâu hơn. Vui lòng chờ, video sẽ tự động phát khi sẵn sàng.</span>
+	</div>
+
 	<div class="player" id="player-wrap">
 		<div class="player-placeholder" id="player-placeholder"></div>
 	</div>
@@ -246,6 +268,17 @@ function setStatus(text, isErr) {
 	el.className = 'status-msg' + (isErr ? ' err' : '');
 }
 
+// The "please wait" notice is shown while a source is being prepared/buffered and
+// hidden the moment real playback starts (or if loading fails).
+function showLoadNotice() {
+	const el = document.getElementById('load-notice');
+	if (el) el.hidden = false;
+}
+function hideLoadNotice() {
+	const el = document.getElementById('load-notice');
+	if (el) el.hidden = true;
+}
+
 // showPlayerStatus puts a status message in the player slot (replacing any
 // current player) so loading/error text appears where the video will be, rather
 // than below it. buildPlayer later swaps this out for the real <video>.
@@ -254,6 +287,7 @@ function showPlayerStatus(text, isErr) {
 	if (player) { try { player.destroy(); } catch(e) {} player = null; }
 	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
 	wrap.innerHTML = '<div class="player-placeholder" id="player-placeholder"></div>';
+	if (isErr) hideLoadNotice(); // loading failed — stop telling the user to wait
 	setPlayerStatus(text, isErr);
 }
 
@@ -302,6 +336,7 @@ async function playSource(videoID) {
 	const v = VIDEOS.find(x => x.id === videoID);
 	if (v && v.available === false) return; // gated source — not playable yet
 	setStatus('');
+	showLoadNotice();
 	showPlayerStatus('Đang chuẩn bị nguồn phát…');
 	document.getElementById('progress-text').textContent = 'Đang chuẩn bị…';
 	let data;
@@ -384,6 +419,7 @@ function buildPlayer(streamURL) {
 	let retries = 0;
 	video.addEventListener('error', () => {
 		if (retries++ >= MAX_STREAM_RETRIES) {
+			hideLoadNotice();
 			setStatus('Không phát được nguồn này. Vui lòng thử lại hoặc chọn nguồn khác.', true);
 			return;
 		}
@@ -402,6 +438,7 @@ function buildPlayer(streamURL) {
 	video.addEventListener('stalled', armWatchdog);
 	video.addEventListener('playing', () => {
 		if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
+		hideLoadNotice();
 		setStatus('');
 	});
 
