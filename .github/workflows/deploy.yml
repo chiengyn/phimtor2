@@ -15,7 +15,7 @@ name: Deploy (manual)
 #
 # Required repo VARIABLES (same screen → Variables; these aren't secret and the
 # configs read them via ERB <%= ENV[...] %>):
-#   SERVER_IP, ADMIN_HOST, VIEWER_HOST, STREAMER1_HOST, STREAMER2_HOST
+#   SERVER_IP, ADMIN_HOST, VIEWER_HOST, MANAGER_HOST, STREAMER1_HOST, STREAMER2_HOST
 #
 # Preconditions:
 #   - The host is already bootstrapped once from a workstation:
@@ -71,6 +71,7 @@ jobs:
           SERVER_IP: ${{ vars.SERVER_IP }}
           ADMIN_HOST: ${{ vars.ADMIN_HOST }}
           VIEWER_HOST: ${{ vars.VIEWER_HOST }}
+          MANAGER_HOST: ${{ vars.MANAGER_HOST }}
           STREAMER1_HOST: ${{ vars.STREAMER1_HOST }}
           STREAMER2_HOST: ${{ vars.STREAMER2_HOST }}
           # Secrets.

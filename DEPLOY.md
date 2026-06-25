@@ -9,15 +9,19 @@ Kamal **accessory** on the same host, tuned for a small (1 GB) box.
 |-------------|----------------------------------|------------------------------|-------------------------|------|
 | admin       | `config/deploy.yml`              | `chiengyn/phimtor2-admin`    | `$ADMIN_HOST`    | 8081 |
 | viewer      | `config/deploy.viewer.yml`       | `chiengyn/phimtor2-viewer`   | `$VIEWER_HOST`   | 8082 |
-| manager     | `config/deploy.manager.yml`      | `chiengyn/phimtor2-manager`  | internal-only    | 8083 |
+| manager     | `config/deploy.manager.yml`      | `chiengyn/phimtor2-manager`  | `$MANAGER_HOST`  | 8083 |
 | streamer 1  | `config/deploy.streamer.yml`     | `chiengyn/phimtor2-streamer` | `$STREAMER1_HOST` | 8080 |
 | streamer 2  | `… -d s2` (`deploy.streamer.s2.yml`) | `chiengyn/phimtor2-streamer` | `$STREAMER2_HOST` | 8080 |
 
 `admin` owns the schema and runs migrations on startup; `viewer` reads the same
 database read-only. Admin and viewer share an on-host volume (`phimtor2_subtitles`)
-for the local subtitle blob store. The **manager** is internal-only (`proxy:
-false`, no public host): admin/viewer reach it server-to-server at
-`http://phimtor2-manager:8083`, and the **streamers self-register** with it.
+for the local subtitle blob store. The **manager** is published at `$MANAGER_HOST`
+(every route is bearer-token gated, so public exposure is safe) **and** keeps its
+kamal-network alias: same-host admin/viewer + local streamers use the faster
+internal `http://phimtor2-manager:8083`, while streamers on **other servers**
+register over the public `https://$MANAGER_HOST`. The **streamers self-register**
+with it. `$MANAGER_HOST` needs a DNS record before public HTTPS works, but the
+deploy itself health-checks the container directly and succeeds without it.
 
 **Multiple streamers** use Kamal **destinations** (one image, one `service:
 phimtor2-streamer`, so the image's service label matches): instance 1 is the base
@@ -62,6 +66,7 @@ set -a && source .env && set +a
 | `SERVER_IP` | host | `203.0.113.10` |
 | `ADMIN_HOST` | host | `admin.yourdomain.com` |
 | `VIEWER_HOST` | host | `yourdomain.com` |
+| `MANAGER_HOST` | host | `manager.yourdomain.com` (token-gated; needs DNS) |
 | `STREAMER1_HOST` | host | `stream1.yourdomain.com` |
 | `STREAMER2_HOST` | host | `stream2.yourdomain.com` |
 | `KAMAL_REGISTRY_PASSWORD` | secret | GitHub PAT with `read:packages` |
@@ -135,7 +140,7 @@ Actions):
    `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `MANAGER_REGISTER_TOKEN`,
    `MANAGER_INTERNAL_TOKEN`, `STREAMER_INTERNAL_TOKEN`.
 3. Add the repo **Variables** (non-secret, read by the configs via ERB):
-   `SERVER_IP`, `ADMIN_HOST`, `VIEWER_HOST`, `STREAMER1_HOST`, `STREAMER2_HOST`.
+   `SERVER_IP`, `ADMIN_HOST`, `VIEWER_HOST`, `MANAGER_HOST`, `STREAMER1_HOST`, `STREAMER2_HOST`.
    (`SERVER_IP` also seeds `known_hosts`, replacing a separate `SSH_HOST`.)
 4. *(Optional approval gate)* Create a `production` **environment** with required
    reviewers — each run then pauses for sign-off before deploying.
@@ -156,12 +161,15 @@ job fills those from the GitHub secrets above, exactly like `.env` does locally.
   directly (the streamer sends permissive CORS headers on those public routes).
   The **manager** reaches each streamer server-to-server at
   `http://phimtor2-streamer-N:8080` over the kamal network for the token-gated
-  control routes (add/list/get/delete). Those hostnames only resolve because each
-  streamer config gives its container a **`network-alias: phimtor2-streamer-N`**
-  (under `servers.web.options`); the streamer advertises that same internal URL to
-  the manager via `STREAMER_ADVERTISE_INTERNAL_URL`. The **manager itself** is
-  internal-only (`proxy: false`, alias `phimtor2-manager`); admin/viewer reach it
-  at `http://phimtor2-manager:8083`.
+  control routes (add/list/get/delete). For a SAME-host streamer those resolve via
+  its **`network-alias: phimtor2-streamer-N`** (advertised to the manager as
+  `STREAMER_ADVERTISE_INTERNAL_URL`). A streamer on **another server** instead
+  advertises its **public** host as the internal URL (e.g.
+  `STREAMER_ADVERTISE_INTERNAL_URL=https://streamerX.yourdomain.com`) — the
+  manager reaches its token-gated control routes over the internet — and sets
+  `MANAGER_URL=https://$MANAGER_HOST` to register. The **manager** is published at
+  `$MANAGER_HOST` (token-gated) yet keeps its `phimtor2-manager` alias, so
+  same-host admin/viewer still use `http://phimtor2-manager:8083`.
 - **Streamer redeploys need the old container stopped first.** Each streamer holds
   an **exclusive lock** on its prefix-completion store, so it can't run two
   instances of the *same* config at once. Kamal's rolling deploy (start new →

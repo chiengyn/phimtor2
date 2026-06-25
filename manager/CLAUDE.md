@@ -7,11 +7,17 @@ Guidance for the **streamer manager** control plane
 
 ## What this is
 
-An **internal-only** control plane that load-balances torrents across multiple
+A **control plane** that load-balances torrents across multiple
 [`streamer/`](../streamer/CLAUDE.md) instances. It is **not browser-facing**: only
 the admin and viewer servers call it (server-to-server), and streamers register
 themselves with it. The browser never talks to the manager — it streams directly
 from the owning streamer's public URL, which the manager hands back on add/list.
+
+Every route is **bearer-token gated**, so it is published at `$MANAGER_HOST`
+(while keeping its `phimtor2-manager` kamal-network alias) so streamers on **other
+servers** can register and be reached cross-host. Same-host admin/viewer + local
+streamers use the faster internal `http://phimtor2-manager:8083`; only remote
+streamers need the public host.
 
 Why it exists: a torrent is **sticky** to the streamer that added it (pieces live
 on that instance's disk; other instances 404). The manager assigns each new
@@ -79,5 +85,6 @@ reconcile (and once at startup).
 ## Docker
 
 `Dockerfile` builds a static `CGO_ENABLED=0` binary on a distroless base — no
-ffmpeg, no assets, no volume. `EXPOSE 8083`. Deployed internal-only (no public
-proxy host) via `config/deploy.manager.yml`; see [`../DEPLOY.md`](../DEPLOY.md).
+ffmpeg, no assets, no volume. `EXPOSE 8083`. Deployed at `$MANAGER_HOST` (token
+auth, plus the internal kamal alias) via `config/deploy.manager.yml`; see
+[`../DEPLOY.md`](../DEPLOY.md).

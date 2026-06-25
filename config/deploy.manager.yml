@@ -1,10 +1,17 @@
-# Kamal deploy — MANAGER service (streamer control plane, INTERNAL-ONLY).
+# Kamal deploy — MANAGER service (streamer control plane).
 #
 #   kamal deploy -c config/deploy.manager.yml
 #
-# Not browser-facing: no public proxy host. Admin and viewer reach it
-# server-to-server over the kamal network at http://phimtor2-manager:8083, and
-# streamers self-register with it. It holds no DB and no disk state.
+# Publicly reachable at $MANAGER_HOST so streamers on OTHER servers can register
+# and the manager can be reached cross-host. Every route is bearer-token gated
+# (register / internal tokens), so public exposure is safe as long as the tokens
+# stay secret. It ALSO keeps its kamal-network alias, so same-host admin/viewer
+# and local streamers keep using the faster internal URL http://phimtor2-manager:8083
+# (only remote streamers need the public https host). Holds no DB and no disk state.
+#
+# Requires a DNS record: $MANAGER_HOST → the host. kamal-proxy issues the TLS cert
+# via Let's Encrypt, so the record must exist BEFORE public HTTPS works (the deploy
+# itself health-checks the container directly and succeeds without it).
 
 service: phimtor2-manager
 image: chiengyn/phimtor2-manager
@@ -12,15 +19,18 @@ image: chiengyn/phimtor2-manager
 servers:
   web:
     hosts:
-      - <%= ENV["SERVER_IP"] %>   # same host as the rest
-    # Internal-only: `proxy: false` on the primary role disables kamal-proxy, so
-    # the manager is never published. The container still joins the kamal network
-    # via its network-alias, so admin/viewer/streamers reach it by name.
-    proxy: false
+      - <%= ENV["SERVER_IP"] %>   # same host as the rest (for now)
     options:
-      # Stable DNS alias on the kamal network so admin/viewer/streamers resolve
-      # it by name (the real container name changes every deploy).
+      # Stable DNS alias on the kamal network so same-host admin/viewer/streamers
+      # resolve it by name (the real container name changes every deploy).
       network-alias: phimtor2-manager
+
+proxy:
+  ssl: true
+  host: <%= ENV["MANAGER_HOST"] %>   # e.g. manager.phimnet.online (needs DNS)
+  app_port: 8083
+  healthcheck:
+    path: /up   # token-free liveness route
 
 registry:
   server: ghcr.io
