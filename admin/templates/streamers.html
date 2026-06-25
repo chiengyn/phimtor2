@@ -19,7 +19,9 @@
 
   .instance { background: #16213e; border: 1px solid #2d2d4e; border-radius: 8px; padding: 1.1rem 1.25rem; }
   .instance-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
-  .instance-id { font-size: 1.05rem; font-weight: 700; color: #e0e0e0; }
+  .instance-id { font-size: 1.05rem; font-weight: 700; color: #79c0ff; text-decoration: none; }
+  .instance-id:hover { text-decoration: underline; }
+  .watch-hint { font-size: 0.75rem; color: #666; }
   .badge { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 4px; }
   .badge-up { background: #14532d; color: #86efac; }
   .badge-down { background: #3a1620; color: #f6a6b6; }
@@ -50,7 +52,7 @@
   {{ range .Instances }}
     <div class="instance">
       <div class="instance-head">
-        <span class="instance-id">{{ .ID }}</span>
+        <a class="instance-id" href="/watch?streamer={{ .ID }}" title="Mở trang xem cho streamer này">{{ .ID }} →</a>
         {{ if .Healthy }}<span class="badge badge-up">đang hoạt động</span>
         {{ else }}<span class="badge badge-down">mất kết nối</span>{{ end }}
         <span class="count">{{ len .Torrents }} torrent</span>

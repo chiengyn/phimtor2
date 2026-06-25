@@ -214,6 +214,11 @@ func (s *Server) setupRouter() {
 		r.Get("/{hash}", s.handleStreamerProxy)
 		r.Delete("/{hash}", s.handleStreamerProxy)
 	})
+	// Instance-scoped add/list for the per-streamer watch page (?streamer=<id>).
+	r.Route("/api/streamer/instances/{id}/torrents", func(r chi.Router) {
+		r.Get("/", s.handleStreamerProxy)
+		r.Post("/", s.handleStreamerProxy)
+	})
 
 	s.router = r
 }
@@ -517,6 +522,9 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	render(w, "watch.html", map[string]any{
 		"SubtitlesEnabled":  s.subtitlesEnabled(),
 		"SubtitleProviders": strings.Join(s.enabledProviderNames(), ","),
+		// When set, the page is scoped to one streamer: add/list target that
+		// instance only. Empty = aggregate across all streamers.
+		"StreamerID": r.URL.Query().Get("streamer"),
 	})
 }
 

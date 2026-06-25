@@ -94,6 +94,13 @@ func (r *Registry) allInstances() []*Instance {
 	return out
 }
 
+func (r *Registry) instanceByID(id string) (*Instance, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	in, ok := r.instances[id]
+	return in, ok
+}
+
 func (r *Registry) owner(hash string) (*Instance, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

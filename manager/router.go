@@ -64,23 +64,54 @@ func (r *Registry) aggregateList(ctx context.Context) []torrentEntry {
 	return out
 }
 
-// placeAdd picks a streamer, forwards the add, records ownership, and returns the
-// new infohash plus the owning streamer's public URL. magnet (if non-empty) is
-// used for idempotent dedupe so a re-add never double-places.
+// errInstanceNotFound is returned when an add/list targets an unknown instance.
+var errInstanceNotFound = errors.New("streamer instance not found")
+
+// placeAdd picks a streamer (least-loaded), forwards the add, records ownership,
+// and returns the new infohash plus the owning streamer's public URL.
 func (r *Registry) placeAdd(ctx context.Context, contentType string, body []byte, magnet string) (map[string]string, error) {
 	// Dedupe: if we can read the infohash off the magnet and already own it on a
 	// healthy instance, return that instead of placing a second copy.
-	if hash := infohashFromMagnet(magnet); hash != "" {
-		if in, ok := r.owner(hash); ok && in.healthy(r.ttl) {
-			return map[string]string{"infoHash": hash, "streamerPublicURL": in.PublicURL}, nil
-		}
+	if res := r.dedupeAdd(magnet); res != nil {
+		return res, nil
 	}
-
 	in := r.pickInstance()
 	if in == nil {
 		return nil, errNoInstance
 	}
+	return r.addVia(ctx, in, contentType, body)
+}
 
+// addToInstance forwards an add to a specific streamer (bypassing load
+// balancing) — used by the per-streamer watch page.
+func (r *Registry) addToInstance(ctx context.Context, id, contentType string, body []byte, magnet string) (map[string]string, error) {
+	in, ok := r.instanceByID(id)
+	if !ok || !in.healthy(r.ttl) {
+		return nil, errInstanceNotFound
+	}
+	// Dedupe only when the magnet already lives on THIS instance; otherwise place
+	// it here as requested.
+	if hash := infohashFromMagnet(magnet); hash != "" {
+		if owner, ok := r.owner(hash); ok && owner.ID == in.ID && owner.healthy(r.ttl) {
+			return map[string]string{"infoHash": hash, "streamerPublicURL": in.PublicURL}, nil
+		}
+	}
+	return r.addVia(ctx, in, contentType, body)
+}
+
+// dedupeAdd returns an existing placement for a magnet's infohash if one is
+// already owned by a healthy instance, else nil.
+func (r *Registry) dedupeAdd(magnet string) map[string]string {
+	if hash := infohashFromMagnet(magnet); hash != "" {
+		if in, ok := r.owner(hash); ok && in.healthy(r.ttl) {
+			return map[string]string{"infoHash": hash, "streamerPublicURL": in.PublicURL}
+		}
+	}
+	return nil
+}
+
+// addVia forwards an add to the given instance and records ownership.
+func (r *Registry) addVia(ctx context.Context, in *Instance, contentType string, body []byte) (map[string]string, error) {
 	resp, err := in.do(ctx, http.MethodPost, "/api/torrents", r.cfg.StreamerInternalToken, contentType, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

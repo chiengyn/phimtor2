@@ -84,10 +84,10 @@
   .os-dl { color: #666; white-space: nowrap; }
 </style>
 </head>
-<body data-subtitles-enabled="{{ .SubtitlesEnabled }}" data-subtitle-providers="{{ .SubtitleProviders }}">
+<body data-subtitles-enabled="{{ .SubtitlesEnabled }}" data-subtitle-providers="{{ .SubtitleProviders }}" data-streamer-id="{{ .StreamerID }}">
 <header>
-  <h1>Phimtor — Xem phim</h1>
-  <span><a href="/streamers">Streamers</a> · <a href="/">← Quản trị</a></span>
+  <h1>Phimtor — Xem phim{{ if .StreamerID }} · <span style="color:#79c0ff">{{ .StreamerID }}</span>{{ end }}</h1>
+  <span><a href="/streamers">← Streamers</a> · <a href="/">Quản trị</a></span>
 </header>
 <div class="layout">
   <aside class="sidebar">
@@ -131,7 +131,14 @@ function chosenProvider(id) {
   const el = document.getElementById(id);
   return el ? el.value : (SUB_PROVIDERS[0] || '');
 }
-const CONTROL = '/api/streamer/torrents';
+// When scoped to a streamer (?streamer=<id>), add/list target that instance
+// only; otherwise they aggregate across all streamers. Delete is always by
+// infohash (the manager routes it to the owning streamer).
+const STREAMER_ID = document.body.dataset.streamerId || '';
+const CONTROL = STREAMER_ID
+  ? `/api/streamer/instances/${encodeURIComponent(STREAMER_ID)}/torrents`
+  : '/api/streamer/torrents';
+const DELETE_BASE = '/api/streamer/torrents';
 const OS_SEARCH = '/api/subtitles/search';
 const OS_DL = '/api/subtitles/download';
 // infoHash -> owning streamer public base URL (from each list/add response).
@@ -189,7 +196,7 @@ async function addTorrentFile() {
 
 async function removeTorrent(infoHash) {
   if (!confirm('Gỡ torrent này?')) return;
-  await fetch(`${CONTROL}/${infoHash}`, { method: 'DELETE' });
+  await fetch(`${DELETE_BASE}/${infoHash}`, { method: 'DELETE' });
   if (currentSrc && currentSrc.includes(infoHash)) {
     resetPlayer();
   }

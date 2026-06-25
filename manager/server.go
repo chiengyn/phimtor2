@@ -55,6 +55,10 @@ func (s *Server) setupRouter() {
 		r.Get("/api/torrents", s.handleListTorrents)
 		r.Get("/api/torrents/{infoHash}", s.handleGetTorrent)
 		r.Delete("/api/torrents/{infoHash}", s.handleDeleteTorrent)
+		// Instance-scoped add/list (the per-streamer watch page): force placement
+		// on / list only this instance, bypassing load balancing.
+		r.Post("/api/instances/{id}/torrents", s.handleAddToInstance)
+		r.Get("/api/instances/{id}/torrents", s.handleListInstance)
 		r.Get("/admin/instances", s.handleInstances)
 	})
 
@@ -144,15 +148,34 @@ func (s *Server) handleDeregister(w http.ResponseWriter, r *http.Request) {
 // --- control-plane handlers ---
 
 func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
+	body, contentType, magnet, ok := readAddBody(w, r)
+	if !ok {
+		return
+	}
+	res, err := s.reg.placeAdd(r.Context(), contentType, body, magnet)
+	s.writeAddResult(w, res, err)
+}
+
+// handleAddToInstance forces an add onto a specific streamer (per-streamer watch
+// page), bypassing load balancing.
+func (s *Server) handleAddToInstance(w http.ResponseWriter, r *http.Request) {
+	body, contentType, magnet, ok := readAddBody(w, r)
+	if !ok {
+		return
+	}
+	res, err := s.reg.addToInstance(r.Context(), chi.URLParam(r, "id"), contentType, body, magnet)
+	s.writeAddResult(w, res, err)
+}
+
+// readAddBody reads the add request body and sniffs the magnet (for dedupe)
+// without consuming it. ok=false means it already wrote an error response.
+func readAddBody(w http.ResponseWriter, r *http.Request) (body []byte, contentType, magnet string, ok bool) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxAddBody))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "read body")
-		return
+		return nil, "", "", false
 	}
-	contentType := r.Header.Get("Content-Type")
-
-	// Sniff the magnet for dedupe without consuming the forwarded body.
-	magnet := ""
+	contentType = r.Header.Get("Content-Type")
 	if contentType == "application/json" {
 		var jb struct {
 			Magnet string `json:"magnet"`
@@ -161,14 +184,19 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 			magnet = jb.Magnet
 		}
 	}
+	return body, contentType, magnet, true
+}
 
-	res, err := s.reg.placeAdd(r.Context(), contentType, body, magnet)
+func (s *Server) writeAddResult(w http.ResponseWriter, res map[string]string, err error) {
 	if err != nil {
-		if err == errNoInstance {
+		switch err {
+		case errNoInstance:
 			writeError(w, http.StatusServiceUnavailable, err.Error())
-			return
+		case errInstanceNotFound:
+			writeError(w, http.StatusNotFound, err.Error())
+		default:
+			writeError(w, http.StatusBadGateway, err.Error())
 		}
-		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, res)
@@ -176,6 +204,21 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListTorrents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.reg.aggregateList(r.Context()))
+}
+
+// handleListInstance lists just one streamer's torrents (per-streamer watch page).
+func (s *Server) handleListInstance(w http.ResponseWriter, r *http.Request) {
+	in, ok := s.reg.instanceByID(chi.URLParam(r, "id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "streamer instance not found")
+		return
+	}
+	torrents, err := s.reg.listTorrents(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, torrents)
 }
 
 func (s *Server) handleGetTorrent(w http.ResponseWriter, r *http.Request) {
