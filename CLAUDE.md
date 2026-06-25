@@ -23,9 +23,8 @@ the torrent there, and returns the owning streamer's **public URL**. The browser
 then hits *that* streamer directly for **stats + stream** (the only public
 streamer routes; add/list/get/delete are token-gated internal). Streamers
 **self-register** with the manager and heartbeat. Subtitle search (OpenSubtitles)
-is proxied by the admin. The streamer keeps a **minimal built-in test UI** at its
-own `/` for sanity-checking torrents/streaming in isolation (works standalone
-when `MANAGER_URL` is unset).
+is proxied by the admin. The streamer is **API-only** (no UI); it still works
+standalone when `MANAGER_URL` is unset.
 
 When working inside a module, read **that module's `CLAUDE.md`** — file paths in
 each are relative to the module directory. There are currently **no tests** in
@@ -62,6 +61,7 @@ both services are Vietnamese ("Phim lẻ" = movies, "Phim bộ" = TV series).
   docker compose up -d         # MySQL; admin UI at http://localhost:8081
   ```
 - `data/` holds the streamer's on-disk torrent storage (gitignored).
-- Each service serves its UI assets via a **cwd-relative path** (`static/` or
+- The **viewer** serves its UI assets via a **cwd-relative path** (`static/` +
   `templates/`), so it must be launched from its own module directory (the Docker
-  images handle this with `WORKDIR /app`).
+  image handles this with `WORKDIR /app`). The admin embeds its templates in the
+  binary; the streamer and manager are API-only (no assets).

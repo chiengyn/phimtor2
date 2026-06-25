@@ -34,14 +34,6 @@ func (s *Server) setupRouter() {
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
 
-	// The production watch UI lives in the admin service, which calls these
-	// endpoints from the browser (hence CORS). This minimal built-in page is a
-	// backend test harness only (torrents + streaming, no subtitles), served
-	// from a cwd-relative path.
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "static/index.html")
-	})
-
 	// Liveness probe for kamal-proxy / load balancers (doesn't touch the
 	// torrent client or the filesystem).
 	r.Get("/up", func(w http.ResponseWriter, _ *http.Request) {

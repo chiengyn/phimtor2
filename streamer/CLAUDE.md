@@ -29,10 +29,7 @@ streamer registers with the manager on startup (advertising
 `STREAMER_INSTANCE_ID`), heartbeats every 10s, and deregisters on shutdown.
 Empty `MANAGER_URL` disables this entirely (standalone mode).
 
-It still ships a **minimal built-in test UI** at `GET /`
-(`static/index.html`, served cwd-relative) so you can sanity-check torrent
-add/list/remove/stream without the admin running. The test UI has **no
-subtitle support** — that's an admin-only feature.
+It is **API-only** — there is no built-in UI (the watch page lives in the admin).
 
 The API: `GET /api/torrents` (list), `POST /api/torrents` (magnet JSON or
 `.torrent` multipart), `GET`/`DELETE /api/torrents/{infoHash}` — all **internal**
@@ -54,11 +51,7 @@ go run ./loadtest -magnet 'magnet:?...' -n 30 -scatter
 go run ./loadtest -infohash <hex> -n 50 -bitrate 1.5 -duration 60s -scatter
 ```
 
-The test UI (`static/index.html`) is served via a **cwd-relative path**, so the
-server must be launched from `streamer/` (or wherever `static/` lives) for `GET /`
-to work; the API itself doesn't depend on it. It also needs `ffmpeg` on PATH for
-transcoding and a writable `DATA_DIR`. The Docker image handles the cwd by
-`WORKDIR /app` with `static/` copied alongside the binary.
+The server needs `ffmpeg` on PATH for transcoding and a writable `DATA_DIR`.
 
 Configuration is via env vars or matching CLI flags (see `config.go`):
 `PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`,
@@ -140,9 +133,9 @@ torrent reader lives.
 `Dockerfile` builds a static `CGO_ENABLED=0`, amd64-only binary and runs it on a
 distroless base, with a statically linked `ffmpeg` copied in (so transcoding
 works while keeping the image small; `capped-sqlite` remains unavailable without
-CGO). The minimal test UI (`static/`) is copied in alongside the binary.
-`.github/workflows/docker.yml` (repo root) builds and pushes all three service
-images to **GHCR** (`ghcr.io/<owner>/phimtor2-{admin,viewer,streamer}`) on pushes
-to `main` and `v*` tags — a matrix build, one job per service with build context
+CGO). `.github/workflows/docker.yml` (repo root) builds and pushes all four
+service images to **GHCR**
+(`ghcr.io/<owner>/phimtor2-{admin,viewer,streamer,manager}`) on pushes to `main`
+and `v*` tags — a matrix build, one job per service with build context
 `./<service>`, authenticated with the built-in `GITHUB_TOKEN` (no extra secrets).
 For deploying the stack to a host, see [`../DEPLOY.md`](../DEPLOY.md) (Kamal).

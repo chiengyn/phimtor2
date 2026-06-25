@@ -41,7 +41,6 @@ WORKDIR /app
 COPY --from=build /out/phimtor2 /app/phimtor2
 COPY --from=build --chown=65532:65532 /out/data /data
 COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
-COPY static /app/static
 
 # Data directory (torrent cache). Mount a volume here to persist.
 ENV DATA_DIR=/data
