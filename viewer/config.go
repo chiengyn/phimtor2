@@ -27,12 +27,13 @@ type Config struct {
 	DBPassword string
 	DBName     string
 
-	// Streamer service. The viewer adds torrents server-to-server (internal URL),
-	// while the browser only reaches the streamer's public stats + stream
-	// endpoints (public URL, must be browser-reachable). In local dev they're
-	// usually identical.
-	StreamerPublicURL   string
-	StreamerInternalURL string
+	// Streamer manager (control plane). The viewer adds torrents server-to-server
+	// via the manager (internal URL + bearer token); the manager picks a streamer
+	// and returns its public URL, which the prepare response hands to the browser
+	// for stats + stream directly. There is no single static public streamer URL
+	// anymore — it is per-torrent.
+	ManagerInternalURL   string
+	ManagerInternalToken string
 
 	// Subtitle storage. The viewer reads the SAME storage the admin writes to,
 	// read-only — local must point at the same directory, s3 at the same bucket.
@@ -59,8 +60,8 @@ func loadConfig() Config {
 		DBPassword: envStr("DB_PASSWORD", ""),
 		DBName:     envStr("DB_NAME", "phimtor"),
 
-		StreamerPublicURL:   envStr("STREAMER_PUBLIC_URL", "http://localhost:8080"),
-		StreamerInternalURL: envStr("STREAMER_INTERNAL_URL", "http://localhost:8080"),
+		ManagerInternalURL:   envStr("MANAGER_INTERNAL_URL", "http://localhost:8083"),
+		ManagerInternalToken: envStr("MANAGER_INTERNAL_TOKEN", ""),
 
 		SubtitleStorageBackend: envStr("SUBTITLE_STORAGE_BACKEND", "local"),
 		SubtitleStorageDir:     envStr("SUBTITLE_STORAGE_DIR", "./data/subtitles"),
@@ -80,8 +81,7 @@ func loadConfig() Config {
 	flag.IntVar(&cfg.DBPort, "db-port", cfg.DBPort, "MySQL port")
 	flag.StringVar(&cfg.DBUser, "db-user", cfg.DBUser, "MySQL user")
 	flag.StringVar(&cfg.DBName, "db-name", cfg.DBName, "MySQL database name")
-	flag.StringVar(&cfg.StreamerPublicURL, "streamer-public-url", cfg.StreamerPublicURL, "Browser-reachable base URL of the streamer (stats + stream)")
-	flag.StringVar(&cfg.StreamerInternalURL, "streamer-internal-url", cfg.StreamerInternalURL, "Server-to-server base URL of the streamer (add torrent)")
+	flag.StringVar(&cfg.ManagerInternalURL, "manager-url", cfg.ManagerInternalURL, "Server-to-server base URL of the streamer manager (add torrent)")
 	flag.StringVar(&cfg.SubtitleStorageBackend, "subtitle-storage", cfg.SubtitleStorageBackend, "Subtitle storage backend: local | s3")
 	flag.StringVar(&cfg.SubtitleStorageDir, "subtitle-dir", cfg.SubtitleStorageDir, "Local subtitle storage directory (read-only, shared with admin)")
 	flag.Parse()

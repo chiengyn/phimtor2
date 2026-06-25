@@ -24,13 +24,13 @@ type Server struct {
 	watch    *template.Template
 	notFound *template.Template
 
-	// streamerPublicURL is injected into the watch page for the browser to reach
-	// the streamer's stats + stream endpoints. streamer is the server-side client
-	// the viewer uses to add torrents (the browser never adds directly). blobs
-	// serves saved subtitle files read-only, keyed by storage backend name.
-	streamerPublicURL string
-	streamer          *streamerClient
-	blobs             map[string]BlobStore
+	// manager is the server-side client the viewer uses to add torrents via the
+	// streamer manager (the browser never adds directly). The manager returns the
+	// owning streamer's public URL per prepare, which the browser then uses to
+	// reach that streamer's stats + stream endpoints directly. blobs serves saved
+	// subtitle files read-only, keyed by storage backend name.
+	manager *managerClient
+	blobs   map[string]BlobStore
 
 	// publicURL is the viewer's own browser-facing origin (no trailing slash),
 	// used to build absolute canonical / Open Graph / sitemap URLs. Empty in
@@ -48,12 +48,11 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		store:             store,
-		streamerPublicURL: strings.TrimRight(cfg.StreamerPublicURL, "/"),
-		streamer:          newStreamerClient(cfg.StreamerInternalURL),
-		blobs:             blobs,
-		publicURL:         strings.TrimRight(cfg.PublicURL, "/"),
-		discordURL:        cfg.DiscordURL,
+		store:      store,
+		manager:    newManagerClient(cfg.ManagerInternalURL, cfg.ManagerInternalToken),
+		blobs:      blobs,
+		publicURL:  strings.TrimRight(cfg.PublicURL, "/"),
+		discordURL: cfg.DiscordURL,
 	}
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
@@ -476,7 +475,6 @@ type watchData struct {
 	Heading       string
 	Sub           string
 	BackHref      string
-	StreamerURL   string // public streamer base URL (browser-reachable)
 	OwnerKind     string // "title" | "episode"
 	OwnerID       int64
 	VideosJSON    string // JSON array, injected via a data-* attribute
@@ -574,7 +572,6 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		Heading:       title.Title,
 		Sub:           yearOf(title.AirDate),
 		BackHref:      fmt.Sprintf("/titles/%d", title.ID),
-		StreamerURL:   s.streamerPublicURL,
 		OwnerKind:     "title",
 		OwnerID:       title.ID,
 		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
@@ -617,7 +614,6 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		Heading:       ec.TitleName,
 		Sub:           sub,
 		BackHref:      fmt.Sprintf("/titles/%d", ec.TitleID),
-		StreamerURL:   s.streamerPublicURL,
 		OwnerKind:     "episode",
 		OwnerID:       id,
 		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
@@ -649,14 +645,15 @@ func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, "nguồn này hiện không khả dụng")
 		return
 	}
-	infoHash, err := s.streamer.addTorrent(r.Context(), video.Magnet)
+	infoHash, streamerPublicURL, err := s.manager.addTorrent(r.Context(), video.Magnet)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"infoHash":  infoHash,
-		"fileIndex": video.FileIndex,
+		"infoHash":          infoHash,
+		"fileIndex":         video.FileIndex,
+		"streamerPublicURL": streamerPublicURL,
 	})
 }
 

@@ -76,7 +76,6 @@
 </style>
 </head>
 <body
-  data-streamer="{{ .StreamerURL }}"
   data-subtitles-enabled="{{ .SubtitlesEnabled }}"
   data-info-hash="{{ .Video.InfoHash }}"
   data-magnet="{{ .Video.Magnet }}"
@@ -133,13 +132,15 @@
 <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 <script>
 const D = document.body.dataset;
-const STREAMER = (D.streamer || '').replace(/\/$/, '');
 const SUBTITLES_ENABLED = D.subtitlesEnabled === 'true';
 const INFO_HASH = D.infoHash;
 const FILE_INDEX = parseInt(D.fileIndex, 10);
 const FILE_PATH = D.filePath;
 const VIDEO_NAME = D.name;
-const API = STREAMER + '/api/torrents';
+// Control ops go to this admin server (same origin); the manager returns the
+// owning streamer public URL (streamerPublic), used for stats/stream directly.
+const CONTROL = '/api/streamer/torrents';
+let streamerPublic = null;
 const OS_SEARCH = '/api/subtitles/search';
 const OS_DL = '/api/subtitles/download';
 const OS_SAVE = '/api/subtitles';
@@ -164,18 +165,20 @@ function setStatus(text, isErr) {
 // magnet just returns the already-tracked torrent), then start playback.
 async function start() {
   try {
-    const res = await fetch(API, {
+    const res = await fetch(CONTROL, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({magnet: D.magnet})
     });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    const data = await res.json();
+    streamerPublic = (data.streamerPublicURL || '').replace(/\/$/, '');
   } catch(e) {
     setStatus('Không thể thêm torrent vào streamer: ' + e.message, true);
     return;
   }
 
-  const src = `${API}/${INFO_HASH}/files/${FILE_INDEX}/stream`;
+  const src = `${streamerPublic}/api/torrents/${INFO_HASH}/files/${FILE_INDEX}/stream`;
   const video = document.getElementById('player');
   const source = document.createElement('source');
   source.src = src;
@@ -205,9 +208,10 @@ function formatBytes(bytes) {
 function formatSpeed(bps) { return formatBytes(bps || 0) + '/s'; }
 
 async function refreshStats() {
-  // Progress comes from the per-torrent info; speeds/peers from the stats endpoint.
+  // Progress comes from the per-torrent info (control plane); speeds/peers from
+  // the owning streamer's public stats endpoint.
   try {
-    const res = await fetch(`${API}/${INFO_HASH}`);
+    const res = await fetch(`${CONTROL}/${INFO_HASH}`);
     if (res.ok) {
       const t = await res.json();
       const pct = t.totalBytes ? Math.round(t.bytesCompleted / t.totalBytes * 100) : 0;
@@ -218,8 +222,9 @@ async function refreshStats() {
     }
   } catch(e) { /* bỏ qua lỗi poll */ }
 
+  if (!streamerPublic) return;
   try {
-    const res = await fetch(`${API}/${INFO_HASH}/stats`);
+    const res = await fetch(`${streamerPublic}/api/torrents/${INFO_HASH}/stats`);
     if (res.ok) document.getElementById('stats').innerHTML = statsChips(await res.json());
   } catch(e) { /* bỏ qua lỗi poll */ }
 }

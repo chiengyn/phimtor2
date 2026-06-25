@@ -153,7 +153,6 @@
 	}
 </style>
 <section class="watch wrap"
-	data-streamer="{{.StreamerURL}}"
 	data-owner-kind="{{.OwnerKind}}"
 	data-owner-id="{{.OwnerID}}"
 	data-videos="{{.VideosJSON}}"
@@ -243,8 +242,10 @@
 <script>
 const ROOT = document.querySelector('.watch');
 const D = ROOT.dataset;
-const STREAMER = (D.streamer || '').replace(/\/$/, '');
-const API = STREAMER + '/api/torrents';
+// The owning streamer's public base URL is not known up front anymore: the
+// prepare call picks a streamer and returns it. The browser then hits that
+// streamer's stats + stream endpoints directly.
+let streamerBase = null;
 
 let VIDEOS = [];
 try { VIDEOS = JSON.parse(D.videos || '[]'); } catch(e) { VIDEOS = []; }
@@ -349,6 +350,7 @@ async function playSource(videoID) {
 		return;
 	}
 	currentInfoHash = data.infoHash;
+	streamerBase = (data.streamerPublicURL || '').replace(/\/$/, '');
 	activeVideoID = videoID;
 	renderSourceChips();
 	startStatsPolling();
@@ -359,7 +361,7 @@ async function playSource(videoID) {
 	setPlayerStatus('Đang tải thông tin…');
 	const ready = await waitForStreamReady(data.infoHash, videoID);
 	if (!ready) return; // timed out, or the user switched sources mid-wait
-	const src = `${API}/${data.infoHash}/files/${data.fileIndex}/stream`;
+	const src = `${streamerBase}/api/torrents/${data.infoHash}/files/${data.fileIndex}/stream`;
 	buildPlayer(src);
 	setStatus('');
 }
@@ -381,7 +383,7 @@ async function waitForStreamReady(infoHash, videoID) {
 	while (Date.now() - start < STREAM_READY_TIMEOUT_MS) {
 		if (activeVideoID !== videoID) return false; // superseded by another source
 		try {
-			const res = await fetch(`${API}/${infoHash}/stats`);
+			const res = await fetch(`${streamerBase}/api/torrents/${infoHash}/stats`);
 			if (res.ok) {
 				const s = await res.json();
 				// totalBytes>0 ⇒ metadata in; bytesCompleted ⇒ first chunk buffered.
@@ -475,9 +477,9 @@ function startStatsPolling() {
 }
 
 async function refreshStats() {
-	if (!currentInfoHash) return;
+	if (!currentInfoHash || !streamerBase) return;
 	try {
-		const res = await fetch(`${API}/${currentInfoHash}/stats`);
+		const res = await fetch(`${streamerBase}/api/torrents/${currentInfoHash}/stats`);
 		if (!res.ok) return;
 		const s = await res.json();
 		const pct = s.totalBytes ? Math.round(s.bytesCompleted / s.totalBytes * 100) : 0;

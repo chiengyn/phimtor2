@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -11,12 +13,13 @@ import (
 )
 
 type Server struct {
-	manager *TorrentManager
-	router  chi.Router
+	manager       *TorrentManager
+	router        chi.Router
+	internalToken string
 }
 
-func NewServer(manager *TorrentManager) *Server {
-	s := &Server{manager: manager}
+func NewServer(manager *TorrentManager, internalToken string) *Server {
+	s := &Server{manager: manager, internalToken: internalToken}
 	s.setupRouter()
 	return s
 }
@@ -47,15 +50,46 @@ func (s *Server) setupRouter() {
 	})
 
 	r.Route("/api/torrents", func(r chi.Router) {
-		r.Get("/", s.handleListTorrents)
-		r.Post("/", s.handleAddTorrent)
-		r.Get("/{infoHash}", s.handleGetTorrent)
-		r.Delete("/{infoHash}", s.handleRemoveTorrent)
+		// Public data plane: anonymous browsers (admin watch page, viewer) hit
+		// these directly for the owning streamer's stats + stream.
 		r.Get("/{infoHash}/stats", s.handleTorrentStats)
 		r.Get("/{infoHash}/files/{fileIndex}/stream", s.handleStream)
+
+		// Internal control plane: only the manager calls these (server-side, with
+		// the bearer token). They never come from a browser.
+		r.Group(func(r chi.Router) {
+			r.Use(s.internalAuth)
+			r.Get("/", s.handleListTorrents)
+			r.Post("/", s.handleAddTorrent)
+			r.Get("/{infoHash}", s.handleGetTorrent)
+			r.Delete("/{infoHash}", s.handleRemoveTorrent)
+		})
 	})
 
 	s.router = r
+}
+
+// internalAuth gates the control-plane routes behind a shared bearer token. When
+// the token is empty (single-streamer dev), the gate is a no-op so the whole API
+// stays reachable as before.
+func (s *Server) internalAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.internalToken != "" && !bearerEquals(r.Header.Get("Authorization"), s.internalToken) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// bearerEquals reports whether an Authorization header carries the given token,
+// using a constant-time comparison so a valid token isn't leaked by timing.
+func bearerEquals(header, token string) bool {
+	const prefix = "Bearer "
+	if len(header) <= len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(header[len(prefix):]), []byte(token)) == 1
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

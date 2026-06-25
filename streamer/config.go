@@ -16,6 +16,19 @@ type Config struct {
 	MaxConns    int
 	RetainHot   bool
 	IdleTTLMin  int
+
+	// InternalToken gates the control-plane routes (add/list/get/delete). The
+	// stats/stream routes stay public. Empty disables the gate (single-streamer
+	// dev: the whole API is reachable, as before).
+	InternalToken string
+
+	// Self-registration with the manager. ManagerURL empty disables it entirely,
+	// preserving standalone single-streamer mode.
+	ManagerURL           string
+	RegisterToken        string
+	InstanceID           string
+	AdvertiseInternalURL string
+	AdvertisePublicURL   string
 }
 
 func loadConfig() Config {
@@ -33,6 +46,14 @@ func loadConfig() Config {
 		// Drop torrents that go unstreamed this long, freeing disk and peer
 		// connections. 0 disables reaping (torrents stay until explicitly removed).
 		IdleTTLMin: envInt("IDLE_TTL_MIN", 30),
+
+		// Control-plane / manager wiring (all env-only; secrets and topology).
+		InternalToken:        envStr("STREAMER_INTERNAL_TOKEN", ""),
+		ManagerURL:           envStr("MANAGER_URL", ""),
+		RegisterToken:        envStr("MANAGER_REGISTER_TOKEN", ""),
+		InstanceID:           envStr("STREAMER_INSTANCE_ID", defaultInstanceID()),
+		AdvertiseInternalURL: envStr("STREAMER_ADVERTISE_INTERNAL_URL", ""),
+		AdvertisePublicURL:   envStr("STREAMER_ADVERTISE_PUBLIC_URL", ""),
 	}
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
@@ -50,6 +71,16 @@ func loadConfig() Config {
 	flag.Parse()
 
 	return cfg
+}
+
+// defaultInstanceID gives each streamer a stable-ish identity when
+// STREAMER_INSTANCE_ID is unset. The hostname is unique per container under
+// Kamal/Docker, which is enough for the manager to key its registry.
+func defaultInstanceID() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "streamer"
 }
 
 func envStr(key, def string) string {

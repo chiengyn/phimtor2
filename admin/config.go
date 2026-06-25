@@ -33,10 +33,11 @@ type Config struct {
 	AdminUser     string
 	AdminPassword string
 
-	// StreamerURL is the base URL of the streamer service. It is injected into
-	// the watch page so the browser talks to the streamer's torrent/stream API
-	// directly (cross-origin).
-	StreamerURL string
+	// ManagerInternalURL is the base URL of the streamer manager (control plane).
+	// The admin calls it server-side to add/list/get/delete torrents; the browser
+	// never talks to it. ManagerInternalToken is the shared bearer it sends.
+	ManagerInternalURL   string
+	ManagerInternalToken string
 
 	// OpenSubtitles integration (env-only, since these include secrets). When
 	// OpenSubtitlesAPIKey is empty the subtitle search/download endpoints report
@@ -87,7 +88,8 @@ func loadConfig() Config {
 		AdminUser:     envStr("ADMIN_USER", "admin"),
 		AdminPassword: envStr("ADMIN_PASSWORD", ""),
 
-		StreamerURL: envStr("STREAMER_URL", "http://localhost:8080"),
+		ManagerInternalURL:   envStr("MANAGER_INTERNAL_URL", "http://localhost:8083"),
+		ManagerInternalToken: envStr("MANAGER_INTERNAL_TOKEN", ""),
 
 		OpenSubtitlesAPIKey:    envStr("OPENSUBTITLES_API_KEY", ""),
 		OpenSubtitlesUserAgent: envStr("OPENSUBTITLES_USER_AGENT", "phimtor2 v1.0"),
@@ -117,7 +119,7 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.TMDBFallbackLang, "tmdb-fallback", cfg.TMDBFallbackLang, "Fallback TMDB language")
 	flag.StringVar(&cfg.YTSBaseURL, "yts-base-url", cfg.YTSBaseURL, "Base URL of YTS's movie API (used by the crawl jobs)")
 	flag.StringVar(&cfg.AdminUser, "admin-user", cfg.AdminUser, "HTTP Basic auth user")
-	flag.StringVar(&cfg.StreamerURL, "streamer-url", cfg.StreamerURL, "Base URL of the streamer service (used by the watch page)")
+	flag.StringVar(&cfg.ManagerInternalURL, "manager-url", cfg.ManagerInternalURL, "Base URL of the streamer manager (control plane)")
 	flag.StringVar(&cfg.SubtitleStorageBackend, "subtitle-storage", cfg.SubtitleStorageBackend, "Subtitle storage backend: local | s3")
 	flag.StringVar(&cfg.SubtitleStorageDir, "subtitle-dir", cfg.SubtitleStorageDir, "Local subtitle storage directory")
 	flag.Parse()

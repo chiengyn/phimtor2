@@ -15,10 +15,13 @@ The public, read-only [`viewer/`](../viewer/CLAUDE.md) renders what this service
 writes.
 
 This module also hosts the **torrent watch page** (`GET /watch`,
-`templates/watch.html`). The page itself is a plain JS SPA that talks to the
-[`streamer/`](../streamer/CLAUDE.md) service **directly from the browser**
-(cross-origin) for torrent add/list/remove/stream — its base URL is injected via
-`STREAMER_URL`. Subtitles are served by **this** service: `opensubtitles.go` is a
+`templates/watch.html`). The page is a plain JS SPA. **Control ops**
+(add/list/remove/get) go to this admin server's same-origin
+`/api/streamer/torrents` proxy (`manager.go` → the [`manager/`](../manager/CLAUDE.md)
+control plane), which returns each torrent's owning **streamer public URL**; the
+browser then hits *that* streamer directly for **stats + stream**. So the browser
+never holds a single streamer base URL anymore. Subtitles are served by **this**
+service: `opensubtitles.go` is a
 server-side proxy (so the API key never reaches the browser) that searches by
 text query + season/episode parsed from the file name. There is no moviehash
 matching here — the admin holds no torrent data; that lives in the streamer.
@@ -50,8 +53,14 @@ unset).
   `DB_USER`/`DB_PASSWORD`/`DB_NAME`. The DSN is built with
   `parseTime=true&charset=utf8mb4` so dates scan into `time.Time` and Vietnamese
   text round-trips.
-- Watch page: `STREAMER_URL` (`http://localhost:8080`) — must be reachable from
-  the **browser**, not just the admin server, since the page calls it directly.
+- Streamer manager (control plane, `manager.go`): `MANAGER_INTERNAL_URL`
+  (`http://localhost:8083`) + `MANAGER_INTERNAL_TOKEN` (env-only bearer). The
+  admin calls the manager **server-side** (behind basic auth) to add/list/get/
+  delete torrents; the browser never talks to it. The manager returns each
+  torrent's **owning streamer public URL**, which the watch/play/add pages use to
+  hit that streamer's stats + stream directly. A **streamers dashboard**
+  (`GET /streamers`, `templates/streamers.html`) renders the manager's
+  `/admin/instances` status.
 - OpenSubtitles (env-only, like the other secrets; no flags): `OPENSUBTITLES_API_KEY`
   (required to enable subtitle search/download), `OPENSUBTITLES_USER_AGENT`, and
   optional `OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD` (a login token

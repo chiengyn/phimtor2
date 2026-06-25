@@ -46,6 +46,54 @@ services:
     volumes:
       - minio_data:/data
 
+  # Optional multi-streamer stack for testing the manager + load balancing.
+  # Off by default; start it with:  docker compose --profile streamers up -d --build
+  # Then run admin/viewer from their module dirs with MANAGER_INTERNAL_URL=
+  # http://localhost:8083 (tokens left empty here, so the auth gates are disabled).
+  manager:
+    build: ./manager
+    profiles: ["streamers"]
+    restart: unless-stopped
+    environment:
+      MANAGER_PORT: 8083
+      MANAGER_HEARTBEAT_TTL: 30
+    ports:
+      - "8083:8083"
+
+  streamer-1:
+    build: ./streamer
+    profiles: ["streamers"]
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      DATA_DIR: /data
+      STREAMER_INSTANCE_ID: streamer-1
+      MANAGER_URL: http://manager:8083
+      STREAMER_ADVERTISE_INTERNAL_URL: http://streamer-1:8080
+      STREAMER_ADVERTISE_PUBLIC_URL: http://localhost:8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - streamer1_data:/data
+
+  streamer-2:
+    build: ./streamer
+    profiles: ["streamers"]
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      DATA_DIR: /data
+      STREAMER_INSTANCE_ID: streamer-2
+      MANAGER_URL: http://manager:8083
+      STREAMER_ADVERTISE_INTERNAL_URL: http://streamer-2:8080
+      STREAMER_ADVERTISE_PUBLIC_URL: http://localhost:8090
+    ports:
+      - "8090:8080"
+    volumes:
+      - streamer2_data:/data
+
 volumes:
   mysql_data:
   minio_data:
+  streamer1_data:
+  streamer2_data:

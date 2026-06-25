@@ -1,0 +1,49 @@
+# Kamal deploy — MANAGER service (streamer control plane, INTERNAL-ONLY).
+#
+#   kamal deploy -c config/deploy.manager.yml
+#
+# Not browser-facing: no public proxy host. Admin and viewer reach it
+# server-to-server over the kamal network at http://phimtor2-manager:8083, and
+# streamers self-register with it. It holds no DB and no disk state.
+
+service: phimtor2-manager
+image: chiengyn/phimtor2-manager
+
+servers:
+  web:
+    hosts:
+      - <%= ENV["SERVER_IP"] %>   # same host as the rest
+    options:
+      # Stable DNS alias on the kamal network so admin/viewer/streamers resolve
+      # it by name (the real container name changes every deploy).
+      network-alias: phimtor2-manager
+
+# Internal-only: do NOT publish through kamal-proxy. The container still joins
+# the kamal network (via network-alias above) so other services reach it.
+proxy: false
+
+registry:
+  server: ghcr.io
+  username: chiengyn
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+# Images are built+pushed to GHCR by CI; deploys pull them via
+# `kamal deploy -c config/deploy.manager.yml --skip-push`.
+builder:
+  arch: amd64
+  context: ./manager
+
+env:
+  clear:
+    MANAGER_PORT: 8083
+    MANAGER_LB_STRATEGY: least-torrents
+    MANAGER_HEARTBEAT_TTL: 30
+  secret:
+    # Shared bearer tokens for the internal control plane. STREAMER_INTERNAL_TOKEN
+    # is what the manager sends to streamers (must match theirs); when
+    # MANAGER_INTERNAL_TOKEN is set but STREAMER_INTERNAL_TOKEN is not, the manager
+    # reuses MANAGER_INTERNAL_TOKEN for both.
+    - MANAGER_REGISTER_TOKEN
+    - MANAGER_INTERNAL_TOKEN
+    - STREAMER_INTERNAL_TOKEN

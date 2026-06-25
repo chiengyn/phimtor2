@@ -53,7 +53,8 @@ func main() {
 		log.Fatalf("subtitle storage: %v", err)
 	}
 
-	server := NewServer(store, tmdb, yts, providers, blobs, blobPrimary, cfg.StreamerURL, cfg.AdminUser, cfg.AdminPassword)
+	manager := newManagerClient(cfg.ManagerInternalURL, cfg.ManagerInternalToken)
+	server := NewServer(store, tmdb, yts, providers, blobs, blobPrimary, manager, cfg.AdminUser, cfg.AdminPassword)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{

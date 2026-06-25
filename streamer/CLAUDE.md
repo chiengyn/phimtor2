@@ -11,18 +11,32 @@ A self-hosted torrent video streamer. A Go HTTP server (chi router) wraps
 `anacrolix/torrent` and exposes a small **REST API** that streams video files
 from a torrent to the browser while they download. The defining feature is
 **space-saving storage** — it never keeps the whole file on disk. This service
-is **backend-first**: the production watch page lives in
-[`admin/`](../admin/CLAUDE.md), which calls these endpoints cross-origin (hence
-the permissive CORS middleware). It does **not** touch the shared MySQL catalog.
+is **backend-first** and runs as **N interchangeable instances** behind the
+[`manager/`](../manager/CLAUDE.md) control plane. It does **not** touch the
+shared MySQL catalog.
+
+**Route split (`server.go`).** Only the **data plane** is public: `GET /up`,
+`GET …/{infoHash}/stats`, and `GET …/{infoHash}/files/{fileIndex}/stream`
+(browsers hit the owning streamer directly for these — hence the permissive
+CORS). The **control plane** (add/list/get/delete) is gated by an `internalAuth`
+bearer (`STREAMER_INTERNAL_TOKEN`) and only the manager calls it. With the token
+empty (single-streamer dev) the gate is a no-op and the whole API is reachable as
+before.
+
+**Self-registration (`manager_client.go`).** When `MANAGER_URL` is set, the
+streamer registers with the manager on startup (advertising
+`STREAMER_ADVERTISE_INTERNAL_URL` / `STREAMER_ADVERTISE_PUBLIC_URL` under
+`STREAMER_INSTANCE_ID`), heartbeats every 10s, and deregisters on shutdown.
+Empty `MANAGER_URL` disables this entirely (standalone mode).
 
 It still ships a **minimal built-in test UI** at `GET /`
 (`static/index.html`, served cwd-relative) so you can sanity-check torrent
 add/list/remove/stream without the admin running. The test UI has **no
 subtitle support** — that's an admin-only feature.
 
-The API: `GET /api/torrents` (list),
-`POST /api/torrents` (magnet JSON or `.torrent` multipart),
-`DELETE /api/torrents/{infoHash}`, and
+The API: `GET /api/torrents` (list), `POST /api/torrents` (magnet JSON or
+`.torrent` multipart), `GET`/`DELETE /api/torrents/{infoHash}` — all **internal**
+(token-gated) — plus the **public** `GET /api/torrents/{infoHash}/stats` and
 `GET /api/torrents/{infoHash}/files/{fileIndex}/stream`.
 
 ## Commands
@@ -51,7 +65,10 @@ Configuration is via env vars or matching CLI flags (see `config.go`):
 `MAX_CONNS` (peer connections per torrent, default 200), `RETAIN_HOT`
 (default off; keep every piece of a torrent that has a viewer — trades disk for
 concurrent capacity), and `IDLE_TTL_MIN` (default 30; drop torrents unstreamed
-for this many minutes, 0 disables).
+for this many minutes, 0 disables). Control-plane/manager wiring (all env-only):
+`STREAMER_INTERNAL_TOKEN` (gates the control routes), `MANAGER_URL` (empty
+disables registration), `MANAGER_REGISTER_TOKEN`, `STREAMER_INSTANCE_ID`,
+`STREAMER_ADVERTISE_INTERNAL_URL`, `STREAMER_ADVERTISE_PUBLIC_URL`.
 
 ## Architecture
 

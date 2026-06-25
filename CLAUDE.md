@@ -4,21 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**phimtor2** is a self-hosted movie/TV platform built from **three independent Go
+**phimtor2** is a self-hosted movie/TV platform built from **four independent Go
 services**, each its own module with its own `CLAUDE.md`. Two of them (admin,
-viewer) share a single MySQL database; the streamer stands alone.
+viewer) share a single MySQL database; the streamer(s) and manager stand alone.
 
 | Module | Purpose | Default port | Storage | Detail |
 |--------|---------|--------------|---------|--------|
-| **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
+| **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
 | **`viewer/`** | Public read-only browse/discovery + watch UI | `8082` | MySQL (read-only) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
-| **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage) | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
+| **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage); **N interchangeable instances** | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
+| **`manager/`** | Internal control plane that load-balances torrents across streamers | `8083` | none (in-memory) | [`manager/CLAUDE.md`](manager/CLAUDE.md) |
 
-The production front-end is the admin's watch page (`/watch`); the browser calls
-the streamer's API directly (cross-origin, so the streamer's `STREAMER_URL` must
-be browser-reachable). Subtitle search (OpenSubtitles) is proxied by the admin,
-not the streamer. The streamer keeps a **minimal built-in test UI** at its own
-`/` (no subtitles) for sanity-checking torrents/streaming in isolation.
+The production front-end is the admin's watch page (`/watch`) and the public
+viewer's watch page. **Control plane vs data plane:** the browser asks its own app
+server (admin/viewer) to add/prepare a torrent; that server calls the **manager**
+server-side (`MANAGER_INTERNAL_URL` + bearer token), which picks a streamer, adds
+the torrent there, and returns the owning streamer's **public URL**. The browser
+then hits *that* streamer directly for **stats + stream** (the only public
+streamer routes; add/list/get/delete are token-gated internal). Streamers
+**self-register** with the manager and heartbeat. Subtitle search (OpenSubtitles)
+is proxied by the admin. The streamer keeps a **minimal built-in test UI** at its
+own `/` for sanity-checking torrents/streaming in isolation (works standalone
+when `MANAGER_URL` is unset).
 
 When working inside a module, read **that module's `CLAUDE.md`** — file paths in
 each are relative to the module directory. There are currently **no tests** in

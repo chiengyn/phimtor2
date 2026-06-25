@@ -1,22 +1,28 @@
 # Deploying phimtor2 with Kamal
 
-The three services deploy to a **single host** with [Kamal](https://kamal-deploy.org),
+The services deploy to a **single host** with [Kamal](https://kamal-deploy.org),
 each as its own app behind the shared `kamal-proxy` (host-based routing + automatic
 Let's Encrypt TLS). MariaDB (a lighter, wire-compatible MySQL drop-in) runs as a
 Kamal **accessory** on the same host, tuned for a small (1 GB) box.
 
-| Service  | Config file                      | Image (ghcr.io)              | Domain (example)        | Port |
-|----------|----------------------------------|------------------------------|-------------------------|------|
-| admin    | `config/deploy.yml`              | `chiengyn/phimtor2-admin`    | `$ADMIN_HOST`    | 8081 |
-| viewer   | `config/deploy.viewer.yml`       | `chiengyn/phimtor2-viewer`   | `$VIEWER_HOST`   | 8082 |
-| streamer | `config/deploy.streamer.yml`     | `chiengyn/phimtor2-streamer` | `$STREAMER_HOST` | 8080 |
+| Service     | Config file                      | Image (ghcr.io)              | Domain (example)        | Port |
+|-------------|----------------------------------|------------------------------|-------------------------|------|
+| admin       | `config/deploy.yml`              | `chiengyn/phimtor2-admin`    | `$ADMIN_HOST`    | 8081 |
+| viewer      | `config/deploy.viewer.yml`       | `chiengyn/phimtor2-viewer`   | `$VIEWER_HOST`   | 8082 |
+| manager     | `config/deploy.manager.yml`      | `chiengyn/phimtor2-manager`  | internal-only    | 8083 |
+| streamer 1  | `config/deploy.streamer-1.yml`   | `chiengyn/phimtor2-streamer` | `$STREAMER1_HOST` | 8080 |
+| streamer 2  | `config/deploy.streamer-2.yml`   | `chiengyn/phimtor2-streamer` | `$STREAMER2_HOST` | 8080 |
 
 `admin` owns the schema and runs migrations on startup; `viewer` reads the same
 database read-only. Admin and viewer share an on-host volume (`phimtor2_subtitles`)
-for the local subtitle blob store.
+for the local subtitle blob store. The **manager** is internal-only (no public
+host): admin/viewer reach it server-to-server at `http://phimtor2-manager:8083`,
+and the **streamers self-register** with it. Each streamer needs its **own**
+browser-reachable domain (the manager hands these out for direct stats/stream) and
+its **own** `/data` volume — copy `deploy.streamer-2.yml` to add more.
 
 **Images are built by CI, not by Kamal.** `.github/workflows/docker.yml` builds
-and pushes all three images to GHCR on every push to `main` (and `v*` tags),
+and pushes all four images to GHCR on every push to `main` (and `v*` tags),
 tagging each with the full git SHA — the exact tag Kamal resolves from `git
 rev-parse HEAD`. So deploys **pull** the prebuilt image with `--skip-push`; Kamal
 never builds. The catch: **deploy from the same commit CI built.** Check out (or
@@ -52,7 +58,8 @@ set -a && source .env && set +a
 | `SERVER_IP` | host | `203.0.113.10` |
 | `ADMIN_HOST` | host | `admin.yourdomain.com` |
 | `VIEWER_HOST` | host | `yourdomain.com` |
-| `STREAMER_HOST` | host | `stream.yourdomain.com` |
+| `STREAMER1_HOST` | host | `stream1.yourdomain.com` |
+| `STREAMER2_HOST` | host | `stream2.yourdomain.com` |
 | `KAMAL_REGISTRY_PASSWORD` | secret | GitHub PAT with `read:packages` |
 | `ADMIN_PASSWORD` | secret | admin Basic-auth password |
 | `TMDB_API_KEY` | secret | themoviedb.org v3 key |
@@ -60,6 +67,9 @@ set -a && source .env && set +a
 | `SUBSOURCE_API_KEY` | secret | subsource.net key (alt subtitle source) |
 | `DB_PASSWORD` | secret | app DB user password |
 | `MYSQL_ROOT_PASSWORD` | secret | MySQL root password |
+| `MANAGER_REGISTER_TOKEN` | secret | streamers → manager (`openssl rand -hex 32`) |
+| `MANAGER_INTERNAL_TOKEN` | secret | admin/viewer → manager |
+| `STREAMER_INTERNAL_TOKEN` | secret | manager → streamers |
 
 The only thing still hardcoded in the configs is the GHCR image namespace
 (`image: chiengyn/phimtor2-*`) — change `chiengyn` if you fork under another user.
@@ -71,14 +81,17 @@ the registry), boots the MariaDB accessory, then **pulls** the CI-built image an
 deploys it. Run it for admin first so MariaDB comes up and migrations run:
 
 ```bash
-kamal setup --skip-push                                   # admin: host + proxy +
-                                                          # registry login + MariaDB
-kamal deploy -c config/deploy.streamer.yml --skip-push    # streamer
-kamal deploy -c config/deploy.viewer.yml   --skip-push    # viewer (reads admin's DB)
+kamal setup --skip-push                                     # admin: host + proxy +
+                                                            # registry login + MariaDB
+kamal deploy -c config/deploy.manager.yml    --skip-push    # manager (before streamers)
+kamal deploy -c config/deploy.streamer-1.yml --skip-push    # streamer 1
+kamal deploy -c config/deploy.streamer-2.yml --skip-push    # streamer 2
+kamal deploy -c config/deploy.viewer.yml     --skip-push    # viewer (reads admin's DB)
 ```
 
 `kamal setup` (admin) installs the shared kamal-proxy and logs the host into the
-registry, so the streamer/viewer only need `kamal deploy ... --skip-push`.
+registry, so the other services only need `kamal deploy ... --skip-push`. Deploy
+the **manager before the streamers** so they can register on boot.
 
 ## 5. Subsequent deploys
 
@@ -88,8 +101,10 @@ Pull the commit whose images CI has published, then deploy with `--skip-push`:
 git pull                                                  # match CI's built commit
 set -a && source .env && set +a
 kamal deploy                                  --skip-push  # admin
+kamal deploy -c config/deploy.manager.yml     --skip-push  # manager
+kamal deploy -c config/deploy.streamer-1.yml  --skip-push  # streamer 1
+kamal deploy -c config/deploy.streamer-2.yml  --skip-push  # streamer 2
 kamal deploy -c config/deploy.viewer.yml      --skip-push  # viewer
-kamal deploy -c config/deploy.streamer.yml    --skip-push  # streamer
 ```
 
 > `--skip-push` makes Kamal pull `…/phimtor2-<svc>:<git-sha>` instead of
@@ -103,7 +118,7 @@ but **only when you trigger it** — it has no `push` trigger. Use it instead of
 deploying from your laptop once the server is bootstrapped.
 
 How to run it: **Actions tab → "Deploy (manual)" → Run workflow**, then pick the
-branch/tag to deploy and which service (`all`/`admin`/`viewer`/`streamer`).
+branch/tag to deploy and which service (`all`/`admin`/`viewer`/`manager`/`streamers`).
 
 One-time setup before the first manual run (Settings → Secrets and variables →
 Actions):
@@ -113,10 +128,11 @@ Actions):
 2. Add the repo **Secrets**: `KAMAL_SSH_PRIVATE_KEY` (key authorized on the
    server for the Kamal SSH user, root by default), `KAMAL_REGISTRY_PASSWORD`,
    `ADMIN_PASSWORD`, `TMDB_API_KEY`, `OPENSUBTITLES_API_KEY`, `SUBSOURCE_API_KEY`,
-   `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`.
+   `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `MANAGER_REGISTER_TOKEN`,
+   `MANAGER_INTERNAL_TOKEN`, `STREAMER_INTERNAL_TOKEN`.
 3. Add the repo **Variables** (non-secret, read by the configs via ERB):
-   `SERVER_IP`, `ADMIN_HOST`, `VIEWER_HOST`, `STREAMER_HOST`. (`SERVER_IP` also
-   seeds `known_hosts`, replacing a separate `SSH_HOST`.)
+   `SERVER_IP`, `ADMIN_HOST`, `VIEWER_HOST`, `STREAMER1_HOST`, `STREAMER2_HOST`.
+   (`SERVER_IP` also seeds `known_hosts`, replacing a separate `SSH_HOST`.)
 4. *(Optional approval gate)* Create a `production` **environment** with required
    reviewers — each run then pauses for sign-off before deploying.
 
@@ -131,21 +147,25 @@ job fills those from the GitHub secrets above, exactly like `.env` does locally.
   `options.network` or `docker run` errors with a duplicate `--network`). If you
   rename the admin `service:`, update `DB_HOST` in both the admin and viewer
   configs. Verify the actual name with `kamal accessory details mysql`.
-- **Streamer reachability.** `$STREAMER_HOST` must be reachable from end
-  users' **browsers** — the admin/viewer watch pages call its stats/stream API
-  cross-origin (the streamer already sends permissive CORS headers). The viewer
-  *adds* torrents server-to-server at `http://phimtor2-streamer:8080` over the
-  kamal network. That hostname only resolves because the streamer config gives
-  its container the **`network-alias: phimtor2-streamer`** (under
-  `servers.web.options`) — kamal app containers are named
-  `phimtor2-streamer-web-<version>`, which changes every deploy, so the alias is
-  what makes the name stable.
-- **Streamer redeploys need the old container stopped first.** The streamer holds
+- **Streamer reachability.** Each `$STREAMERn_HOST` must be reachable from end
+  users' **browsers** — the watch pages call that streamer's stats/stream API
+  directly (the streamer sends permissive CORS headers on those public routes).
+  The **manager** reaches each streamer server-to-server at
+  `http://phimtor2-streamer-N:8080` over the kamal network for the token-gated
+  control routes (add/list/get/delete). Those hostnames only resolve because each
+  streamer config gives its container a **`network-alias: phimtor2-streamer-N`**
+  (under `servers.web.options`); the streamer advertises that same internal URL to
+  the manager via `STREAMER_ADVERTISE_INTERNAL_URL`. The **manager itself** is
+  internal-only (`proxy: false`, alias `phimtor2-manager`); admin/viewer reach it
+  at `http://phimtor2-manager:8083`.
+- **Streamer redeploys need the old container stopped first.** Each streamer holds
   an **exclusive lock** on its prefix-completion store, so it can't run two
-  instances at once. Kamal's rolling deploy (start new → health-check → stop old)
-  therefore fails with `open prefix completion: timeout`. Before redeploying the
-  streamer, stop the running one (`docker stop <phimtor2-streamer-web-...>`) — this
-  means a few seconds of streaming downtime. (admin/viewer redeploy normally.)
+  instances of the *same* config at once. Kamal's rolling deploy (start new →
+  health-check → stop old) therefore fails with `open prefix completion: timeout`.
+  Before redeploying a streamer, stop the running one
+  (`docker stop <phimtor2-streamer-1-web-...>`) — a few seconds of downtime for
+  *that* instance; the other instances keep serving. (admin/viewer/manager redeploy
+  normally.)
 - **Health checks.** Each service exposes an unauthenticated `GET /up` (admin's is
   exempt from Basic auth) that kamal-proxy uses before cutting traffic over.
 - **Persistence.** MariaDB data, the subtitle store, and the streamer's torrent

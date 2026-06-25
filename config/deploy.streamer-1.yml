@@ -1,0 +1,75 @@
+# Kamal deploy — STREAMER instance 1 (torrent streaming API + ffmpeg transcode).
+#
+#   kamal deploy -c config/deploy.streamer-1.yml
+#
+# One of N interchangeable streamer instances. It self-registers with the manager
+# (MANAGER_URL) advertising its internal alias and its public host; the manager
+# load-balances torrents across instances and routes by owner. The browser hits
+# this instance's PUBLIC host directly for stats/stream (saving manager
+# bandwidth); the control routes (add/list/get/delete) are token-gated and only
+# the manager calls them. No MySQL.
+#
+# To add another instance, copy this file (see deploy.streamer-2.yml): give it a
+# distinct service/network-alias, its own STREAMERn_HOST, and its own volume.
+
+service: phimtor2-streamer-1
+image: chiengyn/phimtor2-streamer
+
+servers:
+  web:
+    hosts:
+      - <%= ENV["SERVER_IP"] %>
+    options:
+      # Stable DNS alias on the kamal network. The streamer advertises this to the
+      # manager as its internal URL, so the manager reaches it server-to-server.
+      network-alias: phimtor2-streamer-1
+
+proxy:
+  ssl: true
+  host: <%= ENV["STREAMER1_HOST"] %>   # browser-reachable (direct stats/stream)
+  app_port: 8080
+  healthcheck:
+    path: /up
+  # Streaming serves large, long-lived ranged responses; kamal-proxy buffers by
+  # default which stalls a <video> open-ended range. Stream responses and raise
+  # the response timeout for long playback. (See deploy notes in DEPLOY.md.)
+  response_timeout: 3600
+  buffering:
+    responses: false
+
+registry:
+  server: ghcr.io
+  username: chiengyn
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+  context: ./streamer
+
+env:
+  clear:
+    PORT: 8080
+    DATA_DIR: /data
+    READAHEAD_MB: 16
+    STORAGE_MODE: prefix-cache
+    PREFIX_MB: 32
+    CACHE_MB: 2048
+    MAX_CONNS: 50
+    IDLE_TTL_MIN: 20
+    RETAIN_HOT: false
+    # --- Manager registration ---
+    STREAMER_INSTANCE_ID: streamer-1
+    MANAGER_URL: http://phimtor2-manager:8083
+    STREAMER_ADVERTISE_INTERNAL_URL: http://phimtor2-streamer-1:8080
+    STREAMER_ADVERTISE_PUBLIC_URL: https://<%= ENV["STREAMER1_HOST"] %>
+  secret:
+    # Gates the control routes (must match the manager's STREAMER_INTERNAL_TOKEN);
+    # MANAGER_REGISTER_TOKEN authenticates this streamer's self-registration.
+    - STREAMER_INTERNAL_TOKEN
+    - MANAGER_REGISTER_TOKEN
+
+# Torrent cache (prefix tier persisted, cache tier wiped on startup). Each
+# instance needs its OWN volume — they must not share /data.
+volumes:
+  - "phimtor2_streamer_1_data:/data"

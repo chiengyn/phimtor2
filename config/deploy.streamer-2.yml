@@ -1,0 +1,59 @@
+# Kamal deploy — STREAMER instance 2. A second interchangeable streamer.
+#
+#   kamal deploy -c config/deploy.streamer-2.yml
+#
+# Identical to deploy.streamer-1.yml except for its identity: distinct service,
+# network-alias, public host (STREAMER2_HOST), instance id, advertised URLs, and
+# its own /data volume. Copy this file for further instances (streamer-3, …).
+
+service: phimtor2-streamer-2
+image: chiengyn/phimtor2-streamer
+
+servers:
+  web:
+    hosts:
+      - <%= ENV["SERVER_IP"] %>
+    options:
+      network-alias: phimtor2-streamer-2
+
+proxy:
+  ssl: true
+  host: <%= ENV["STREAMER2_HOST"] %>
+  app_port: 8080
+  healthcheck:
+    path: /up
+  response_timeout: 3600
+  buffering:
+    responses: false
+
+registry:
+  server: ghcr.io
+  username: chiengyn
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+  context: ./streamer
+
+env:
+  clear:
+    PORT: 8080
+    DATA_DIR: /data
+    READAHEAD_MB: 16
+    STORAGE_MODE: prefix-cache
+    PREFIX_MB: 32
+    CACHE_MB: 2048
+    MAX_CONNS: 50
+    IDLE_TTL_MIN: 20
+    RETAIN_HOT: false
+    STREAMER_INSTANCE_ID: streamer-2
+    MANAGER_URL: http://phimtor2-manager:8083
+    STREAMER_ADVERTISE_INTERNAL_URL: http://phimtor2-streamer-2:8080
+    STREAMER_ADVERTISE_PUBLIC_URL: https://<%= ENV["STREAMER2_HOST"] %>
+  secret:
+    - STREAMER_INTERNAL_TOKEN
+    - MANAGER_REGISTER_TOKEN
+
+volumes:
+  - "phimtor2_streamer_2_data:/data"

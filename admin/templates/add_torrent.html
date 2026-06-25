@@ -58,7 +58,7 @@
     #sub-status.err { color: #ff8b94; }
   </style>
 </head>
-<body data-streamer="{{ .StreamerURL }}" data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}" data-season-id="{{ .SeasonID }}" data-episodes="{{ .EpisodesJSON }}" data-title-name="{{ if .Title.OriginalTitle }}{{ .Title.OriginalTitle }}{{ else }}{{ .Title.Title }}{{ end }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}" data-subtitle-providers="{{ .SubtitleProviders }}">
+<body data-title-id="{{ .Title.ID }}" data-episode-id="{{ .EpisodeID }}" data-season-id="{{ .SeasonID }}" data-episodes="{{ .EpisodesJSON }}" data-title-name="{{ if .Title.OriginalTitle }}{{ .Title.OriginalTitle }}{{ else }}{{ .Title.Title }}{{ end }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}" data-subtitle-providers="{{ .SubtitleProviders }}">
   <header>
     <h1>➕ Thêm torrent</h1>
     <a href="/titles/{{ .Title.ID }}">← Quay lại</a>
@@ -156,8 +156,10 @@
   </main>
 
 <script>
-const STREAMER = (document.body.dataset.streamer || '').replace(/\/$/, '');
-const API = STREAMER + '/api/torrents';
+// Control ops go to this admin server (same origin); the manager picks a streamer
+// and returns its public URL (streamerPublic), used for stats/stream directly.
+const CONTROL = '/api/streamer/torrents';
+let streamerPublic = null;
 const TITLE_ID = document.body.dataset.titleId || '';
 const EPISODE_ID = document.body.dataset.episodeId || '';
 const SEASON_ID = document.body.dataset.seasonId || '';
@@ -202,7 +204,7 @@ async function previewMagnet() {
   const magnet = document.getElementById('magnet-input').value.trim();
   if (!magnet) { setStatus('Dán liên kết magnet trước.', true); return; }
   input = { kind: 'magnet', magnet };
-  await addToStreamer(() => fetch(API, {
+  await addToStreamer(() => fetch(CONTROL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ magnet }),
@@ -216,7 +218,7 @@ async function previewFile() {
   input = { kind: 'file', file };
   const form = new FormData();
   form.append('torrent', file);
-  await addToStreamer(() => fetch(API, { method: 'POST', body: form }));
+  await addToStreamer(() => fetch(CONTROL, { method: 'POST', body: form }));
 }
 
 // resetSteps tears down everything below the source form so previewing a new
@@ -249,6 +251,7 @@ async function addToStreamer(doFetch) {
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
     const data = await res.json();
     infoHash = data.infoHash;
+    streamerPublic = (data.streamerPublicURL || '').replace(/\/$/, '');
     setStatus('Đang lấy metadata torrent…');
     startStats();
     pollMetadata();
@@ -271,9 +274,9 @@ function statsChips(s) {
 }
 
 async function refreshStats() {
-  if (!infoHash) return;
+  if (!infoHash || !streamerPublic) return;
   try {
-    const res = await fetch(`${API}/${infoHash}/stats`);
+    const res = await fetch(`${streamerPublic}/api/torrents/${infoHash}/stats`);
     if (!res.ok) return;
     const s = await res.json();
     document.getElementById('torrent-stats').innerHTML = statsChips(s);
@@ -305,7 +308,7 @@ function stopStats() {
 async function pollMetadata() {
   let ready = null;
   try {
-    const res = await fetch(`${API}/${infoHash}`);
+    const res = await fetch(`${CONTROL}/${infoHash}`);
     if (res.ok) {
       const t = await res.json();
       if (t && t.files && t.files.length) ready = t.files;
@@ -374,7 +377,7 @@ function guessEpisodeId(p) {
 function previewPlay(index) {
   const video = document.getElementById('player');
   video.classList.remove('hidden');
-  video.src = `${API}/${infoHash}/files/${index}/stream`;
+  video.src = `${streamerPublic}/api/torrents/${infoHash}/files/${index}/stream`;
   video.play().catch(() => {});
 }
 

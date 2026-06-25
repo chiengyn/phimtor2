@@ -38,11 +38,11 @@ service).
 - HTTP: `VIEWER_PORT` (8082).
 - MySQL: `MYSQL_DSN` (overrides the rest) or `DB_HOST`/`DB_PORT`/`DB_USER`/
   `DB_PASSWORD`/`DB_NAME`. Same `parseTime=true&charset=utf8mb4` DSN as admin.
-- Streamer (watch page): `STREAMER_PUBLIC_URL` (8080) — **browser-reachable**,
-  injected into the watch page for the streamer's stats + stream endpoints; and
-  `STREAMER_INTERNAL_URL` (8080) — server-to-server, used by the viewer to **add**
-  torrents (e.g. `http://streamer:8080` under compose). In local dev they're
-  usually identical.
+- Streamer manager (watch page): `MANAGER_INTERNAL_URL` (`http://localhost:8083`)
+  + `MANAGER_INTERNAL_TOKEN` (env-only bearer) — server-to-server. The viewer adds
+  torrents via the manager (`manager.go`); the manager returns the owning
+  streamer's **public URL**, which the prepare response hands to the browser for
+  stats + stream directly. There is no static public streamer URL anymore.
 - Subtitle storage (`blobstore.go`, **read-only**): the viewer reads the *same*
   storage the admin writes to. `SUBTITLE_STORAGE_BACKEND` (`local`|`s3`),
   `SUBTITLE_STORAGE_DIR` (`./data/subtitles` — for `local` this **must** be the
@@ -82,22 +82,24 @@ Flat single `main` package.
 - **Watch page plays real torrents, viewer-mediated.** `handleWatchMovie`/
   `handleWatchEpisode` resolve the videos (`VideosForTitle`/`VideosForEpisode`,
   newest first — first entry is the default) and saved subtitles, and inject them
-  (plus `STREAMER_PUBLIC_URL`) into `watch.html` as JSON in `data-*` attributes.
-  The page (`templates/watch.html`, a Plyr-based plain-JS player) **never adds
-  torrents directly**: it `POST`s to the same-origin `/api/sources/{id}/prepare`,
-  which adds the magnet to the streamer **server-to-server** (`streamer.go`) and
-  returns `{infoHash, fileIndex}`. The browser then streams from, and polls
-  `…/stats` on, the streamer's **public** endpoints only. The stats poll feeds a
+  into `watch.html` as JSON in `data-*` attributes. The page
+  (`templates/watch.html`, a Plyr-based plain-JS player) **never adds torrents
+  directly**: it `POST`s to the same-origin `/api/sources/{id}/prepare`, which adds
+  the magnet via the manager **server-to-server** (`manager.go`) and returns
+  `{infoHash, fileIndex, streamerPublicURL}`. The browser then streams from, and
+  polls `…/stats` on, **that streamer's** public endpoints directly. The stats poll feeds a
   user-facing **progress bar** plus a collapsed **debug panel** (speeds/peers —
   not meant for end users). A **source selector** appears when more than one
   video exists. Saved subtitles are listed as chips (first auto-loaded); the user
   can also load a local `.srt`/`.vtt`. There is no OpenSubtitles search here (the
   viewer is read-only and holds no provider key).
 
-- **Streamer client** (`streamer.go`): a tiny server-side HTTP client whose only
-  job is `addTorrent(magnet) → infoHash`. Keeping the add on the server means only
-  the streamer's stats + stream endpoints need to be browser-reachable (the rest
-  can be firewalled internal in deployment; the streamer itself is unchanged).
+- **Manager client** (`manager.go`): a tiny server-side HTTP client whose only job
+  is `addTorrent(magnet) → (infoHash, streamerPublicURL)` against the manager
+  (with the internal bearer token). The manager picks a streamer; the returned
+  public URL flows through the prepare response so the browser streams from the
+  right instance. Keeping the add on the server means only the streamers' stats +
+  stream endpoints are browser-reachable; everything else is internal.
 
 - **Subtitle blob store** (`blobstore.go`): a **read-only** port of admin's store
   (`Get` only, `local` + `s3`); `handleSubtitleFile` routes a subtitle row to

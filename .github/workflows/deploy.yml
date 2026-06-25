@@ -10,11 +10,12 @@ name: Deploy (manual)
 #                           server for the Kamal SSH user (root by default)
 #   KAMAL_REGISTRY_PASSWORD GitHub PAT with read:packages (host pulls from ghcr)
 #   ADMIN_PASSWORD, TMDB_API_KEY, OPENSUBTITLES_API_KEY, SUBSOURCE_API_KEY,
-#   DB_PASSWORD, MYSQL_ROOT_PASSWORD
+#   DB_PASSWORD, MYSQL_ROOT_PASSWORD,
+#   MANAGER_REGISTER_TOKEN, MANAGER_INTERNAL_TOKEN, STREAMER_INTERNAL_TOKEN
 #
 # Required repo VARIABLES (same screen → Variables; these aren't secret and the
 # configs read them via ERB <%= ENV[...] %>):
-#   SERVER_IP, ADMIN_HOST, VIEWER_HOST, STREAMER_HOST
+#   SERVER_IP, ADMIN_HOST, VIEWER_HOST, STREAMER1_HOST, STREAMER2_HOST
 #
 # Preconditions:
 #   - The host is already bootstrapped once from a workstation:
@@ -28,7 +29,7 @@ on:
         description: Service(s) to deploy
         type: choice
         default: all
-        options: [all, admin, viewer, streamer]
+        options: [all, admin, viewer, manager, streamers]
 
 concurrency:
   group: deploy-production
@@ -70,7 +71,8 @@ jobs:
           SERVER_IP: ${{ vars.SERVER_IP }}
           ADMIN_HOST: ${{ vars.ADMIN_HOST }}
           VIEWER_HOST: ${{ vars.VIEWER_HOST }}
-          STREAMER_HOST: ${{ vars.STREAMER_HOST }}
+          STREAMER1_HOST: ${{ vars.STREAMER1_HOST }}
+          STREAMER2_HOST: ${{ vars.STREAMER2_HOST }}
           # Secrets.
           KAMAL_REGISTRY_PASSWORD: ${{ secrets.KAMAL_REGISTRY_PASSWORD }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
@@ -79,14 +81,24 @@ jobs:
           SUBSOURCE_API_KEY: ${{ secrets.SUBSOURCE_API_KEY }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MANAGER_REGISTER_TOKEN: ${{ secrets.MANAGER_REGISTER_TOKEN }}
+          MANAGER_INTERNAL_TOKEN: ${{ secrets.MANAGER_INTERNAL_TOKEN }}
+          STREAMER_INTERNAL_TOKEN: ${{ secrets.STREAMER_INTERNAL_TOKEN }}
         run: |
           set -euo pipefail
-          admin()    { kamal deploy --skip-push; }
-          viewer()   { kamal deploy -c config/deploy.viewer.yml --skip-push; }
-          streamer() { kamal deploy -c config/deploy.streamer.yml --skip-push; }
+          admin()     { kamal deploy --skip-push; }
+          viewer()    { kamal deploy -c config/deploy.viewer.yml --skip-push; }
+          manager()   { kamal deploy -c config/deploy.manager.yml --skip-push; }
+          streamers() {
+            kamal deploy -c config/deploy.streamer-1.yml --skip-push
+            kamal deploy -c config/deploy.streamer-2.yml --skip-push
+          }
           case "${{ inputs.service }}" in
-            all)      admin; streamer; viewer ;;   # admin first: DB + migrations
-            admin)    admin ;;
-            viewer)   viewer ;;
-            streamer) streamer ;;
+            # admin first (DB + migrations); manager before streamers so they can
+            # register on boot.
+            all)       admin; manager; streamers; viewer ;;
+            admin)     admin ;;
+            viewer)    viewer ;;
+            manager)   manager ;;
+            streamers) streamers ;;
           esac

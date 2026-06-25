@@ -56,8 +56,9 @@ env:
     # TMDB
     TMDB_LANGUAGE: vi-VN
     TMDB_FALLBACK_LANGUAGE: en-US
-    # Streamer base URL injected into the watch page — must be browser-reachable.
-    STREAMER_URL: https://<%= ENV["STREAMER_HOST"] %>
+    # Streamer manager (control plane) — internal-only, server-to-server. The
+    # admin calls it to add/list/get/delete torrents; the browser never does.
+    MANAGER_INTERNAL_URL: http://phimtor2-manager:8083
     # Subtitles: store on a local volume shared with the viewer (see volumes).
     SUBTITLE_STORAGE_BACKEND: local
     SUBTITLE_STORAGE_DIR: /data/subtitles
@@ -67,6 +68,7 @@ env:
     - ADMIN_PASSWORD
     - DB_PASSWORD
     - TMDB_API_KEY
+    - MANAGER_INTERNAL_TOKEN
     - OPENSUBTITLES_API_KEY
     # SubSource (subsource.net) subtitle provider. Drop it from this list and
     # from .kamal/secrets if you are not using SubSource.

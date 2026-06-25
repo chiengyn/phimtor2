@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="10">
+<title>phimtor2 — Streamers</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+  header { background: #1a1a2e; padding: 1rem 2rem; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 1.5rem; color: #e94560; }
+  header a { color: #79c0ff; font-size: 0.85rem; text-decoration: none; }
+  header a:hover { text-decoration: underline; }
+  main { padding: 1.5rem 2rem; display: flex; flex-direction: column; gap: 1.25rem; max-width: 1100px; margin: 0 auto; }
+
+  .err { background: #3a1620; border: 1px solid #e94560; color: #f6a6b6; padding: 0.85rem 1rem; border-radius: 8px; }
+  .empty { color: #666; font-style: italic; }
+
+  .instance { background: #16213e; border: 1px solid #2d2d4e; border-radius: 8px; padding: 1.1rem 1.25rem; }
+  .instance-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
+  .instance-id { font-size: 1.05rem; font-weight: 700; color: #e0e0e0; }
+  .badge { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 4px; }
+  .badge-up { background: #14532d; color: #86efac; }
+  .badge-down { background: #3a1620; color: #f6a6b6; }
+  .count { margin-left: auto; font-size: 0.8rem; color: #888; }
+  .urls { font-size: 0.75rem; color: #777; margin-bottom: 0.75rem; word-break: break-all; }
+  .urls span { color: #9aa4b2; }
+
+  .torrents { display: flex; flex-direction: column; gap: 0.5rem; }
+  .torrent { border-top: 1px solid #2d2d4e; padding-top: 0.5rem; }
+  .torrent-name { font-size: 0.85rem; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress-bar { height: 4px; background: #2d2d4e; border-radius: 2px; overflow: hidden; margin-top: 0.35rem; }
+  .progress-fill { height: 100%; background: #22c55e; border-radius: 2px; }
+  .progress-text { font-size: 0.72rem; color: #666; margin-top: 0.25rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Streamers</h1>
+  <a href="/">← Quản trị</a>
+</header>
+<main>
+  {{ if .Error }}
+    <div class="err">Không kết nối được tới manager: {{ .Error }}</div>
+  {{ end }}
+  {{ if not .Instances }}
+    <div class="empty">Chưa có streamer nào đăng ký.</div>
+  {{ end }}
+  {{ range .Instances }}
+    <div class="instance">
+      <div class="instance-head">
+        <span class="instance-id">{{ .ID }}</span>
+        {{ if .Healthy }}<span class="badge badge-up">đang hoạt động</span>
+        {{ else }}<span class="badge badge-down">mất kết nối</span>{{ end }}
+        <span class="count">{{ len .Torrents }} torrent</span>
+      </div>
+      <div class="urls">
+        <span>public:</span> {{ .PublicURL }}<br>
+        <span>internal:</span> {{ .InternalURL }}
+      </div>
+      {{ if .Torrents }}
+        <div class="torrents">
+          {{ range .Torrents }}
+            <div class="torrent">
+              <div class="torrent-name" title="{{ .Name }}">{{ .Name }}</div>
+              <div class="progress-bar"><div class="progress-fill" style="width:{{ pct .BytesCompleted .TotalBytes }}%"></div></div>
+              <div class="progress-text">{{ pct .BytesCompleted .TotalBytes }}% · {{ filesize .BytesCompleted }} / {{ filesize .TotalBytes }}</div>
+            </div>
+          {{ end }}
+        </div>
+      {{ else }}
+        <div class="empty" style="font-size:0.8rem">Không có torrent.</div>
+      {{ end }}
+    </div>
+  {{ end }}
+</main>
+</body>
+</html>

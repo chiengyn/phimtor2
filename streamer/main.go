@@ -31,7 +31,13 @@ func main() {
 	}
 	defer manager.Close()
 
-	server := NewServer(manager)
+	server := NewServer(manager, cfg.InternalToken)
+
+	// Register with the manager (if configured) and heartbeat until shutdown.
+	// Standalone single-streamer mode leaves MANAGER_URL empty and skips this.
+	reg := newManagerClient(cfg)
+	reg.Start()
+	defer reg.Stop()
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpServer := &http.Server{

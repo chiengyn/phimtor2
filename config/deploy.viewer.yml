@@ -45,15 +45,17 @@ env:
     DB_PORT: 3306
     DB_NAME: phimtor
     DB_USER: phimtor
-    # Streamer: public URL is browser-reachable (stats + stream); internal URL
-    # is server-to-server (adding torrents) over the kamal network.
-    STREAMER_PUBLIC_URL: https://<%= ENV["STREAMER_HOST"] %>
-    STREAMER_INTERNAL_URL: http://phimtor2-streamer:8080
+    # Streamer manager (control plane), server-to-server over the kamal network.
+    # The viewer adds torrents via the manager, which returns the owning streamer's
+    # public URL per prepare for the browser to stream from directly — so there is
+    # no static public streamer URL here anymore.
+    MANAGER_INTERNAL_URL: http://phimtor2-manager:8083
     # Read the same subtitle blob store admin writes (shared host volume).
     SUBTITLE_STORAGE_BACKEND: local
     SUBTITLE_STORAGE_DIR: /data/subtitles
   secret:
     - DB_PASSWORD
+    - MANAGER_INTERNAL_TOKEN
 
 # Mount the SAME named volume admin writes subtitles to (viewer only reads it).
 volumes:

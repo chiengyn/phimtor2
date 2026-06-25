@@ -35,6 +35,13 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return tmdbImageBase + path
 	},
+	// pct renders completed/total as an integer percentage (0 when total is 0).
+	"pct": func(done, total int64) int {
+		if total <= 0 {
+			return 0
+		}
+		return int(done * 100 / total)
+	},
 	// year extracts the leading year from a "YYYY-MM-DD" air date.
 	"year": func(airDate string) string {
 		if len(airDate) >= 4 {
@@ -74,18 +81,18 @@ type Server struct {
 	providers   map[string]SubtitleProvider // keyed by provider name
 	blobs       map[string]BlobStore        // keyed by backend name ("local"/"s3")
 	blobPrimary string                      // backend new subtitles are written to
-	streamerURL string
+	manager     *managerClient
 	user        string
 	pass        string
 	router      chi.Router
 }
 
-func NewServer(store *Store, tmdb *TMDBClient, yts *YTSClient, providers map[string]SubtitleProvider, blobs map[string]BlobStore, blobPrimary, streamerURL, user, pass string) *Server {
+func NewServer(store *Store, tmdb *TMDBClient, yts *YTSClient, providers map[string]SubtitleProvider, blobs map[string]BlobStore, blobPrimary string, manager *managerClient, user, pass string) *Server {
 	s := &Server{
 		store: store, tmdb: tmdb,
 		crawler:   newCrawler(store, tmdb, yts, crawlSubtitleProvider(providers), blobs, blobPrimary),
 		providers: providers, blobs: blobs, blobPrimary: blobPrimary,
-		streamerURL: streamerURL, user: user, pass: pass,
+		manager: manager, user: user, pass: pass,
 	}
 	s.setupRouter()
 	return s
@@ -158,6 +165,7 @@ func (s *Server) setupRouter() {
 
 	r.Get("/", s.handleIndex)
 	r.Get("/watch", s.handleWatch)
+	r.Get("/streamers", s.handleStreamers)
 	r.Get("/crawl", s.handleCrawlPage)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
@@ -196,7 +204,36 @@ func (s *Server) setupRouter() {
 		r.Delete("/{id}", s.handleDeleteSubtitle)
 	})
 
+	// Server-side proxy to the streamer manager. The watch/play/add pages call
+	// these (same origin, behind basic auth) for control ops; the manager picks a
+	// streamer and returns its public URL, which the browser uses for stats/stream
+	// directly. managerPath maps /api/streamer/* → the manager's /api/*.
+	r.Route("/api/streamer/torrents", func(r chi.Router) {
+		r.Get("/", s.handleStreamerProxy)
+		r.Post("/", s.handleStreamerProxy)
+		r.Get("/{hash}", s.handleStreamerProxy)
+		r.Delete("/{hash}", s.handleStreamerProxy)
+	})
+
 	s.router = r
+}
+
+// handleStreamerProxy forwards a control request to the manager, mapping the
+// admin's /api/streamer/* path onto the manager's /api/* path.
+func (s *Server) handleStreamerProxy(w http.ResponseWriter, r *http.Request) {
+	managerPath := strings.Replace(r.URL.Path, "/api/streamer/", "/api/", 1)
+	s.manager.proxy(w, r, managerPath)
+}
+
+// handleStreamers renders the streamers dashboard: each registered streamer with
+// its health and current torrents, read from the manager's status API.
+func (s *Server) handleStreamers(w http.ResponseWriter, r *http.Request) {
+	instances, err := s.manager.instances(r.Context())
+	data := map[string]any{"Instances": instances}
+	if err != nil {
+		data["Error"] = err.Error()
+	}
+	render(w, "streamers.html", data)
 }
 
 // basicAuth gates every route behind a single admin user/password.
@@ -478,7 +515,6 @@ func (s *Server) renderCrawlStatus(w http.ResponseWriter) {
 // this admin server for OpenSubtitles search/download.
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	render(w, "watch.html", map[string]any{
-		"StreamerURL":       s.streamerURL,
 		"SubtitlesEnabled":  s.subtitlesEnabled(),
 		"SubtitleProviders": strings.Join(s.enabledProviderNames(), ","),
 	})
@@ -607,7 +643,6 @@ func (s *Server) handleTitleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	render(w, "detail.html", map[string]any{
 		"Title":             title,
-		"StreamerURL":       s.streamerURL,
 		"SubtitlesEnabled":  s.subtitlesEnabled(),
 		"SubtitleProviders": strings.Join(s.enabledProviderNames(), ","),
 		"YTSBaseURL":        s.crawler.YTSBaseURL(),
@@ -746,7 +781,6 @@ func (s *Server) handleAddTorrentPage(w http.ResponseWriter, r *http.Request) {
 		"EpisodeID":         episodeID,
 		"SeasonID":          seasonID,
 		"ContextLabel":      contextLabel,
-		"StreamerURL":       s.streamerURL,
 		"SubtitlesEnabled":  s.subtitlesEnabled(),
 		"SubtitleProviders": strings.Join(s.enabledProviderNames(), ","),
 		// Plain string embedded in a data- attribute (NOT inside a <script>):
@@ -802,7 +836,6 @@ func (s *Server) handlePlayVideo(w http.ResponseWriter, r *http.Request) {
 
 	render(w, "play.html", map[string]any{
 		"Video":            video,
-		"StreamerURL":      s.streamerURL,
 		"SubtitlesEnabled": s.subtitlesEnabled(),
 		"BackURL":          backURL,
 		"SubOwnerKind":     ownerKind,

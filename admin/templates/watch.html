@@ -84,10 +84,10 @@
   .os-dl { color: #666; white-space: nowrap; }
 </style>
 </head>
-<body data-streamer="{{ .StreamerURL }}" data-subtitles-enabled="{{ .SubtitlesEnabled }}" data-subtitle-providers="{{ .SubtitleProviders }}">
+<body data-subtitles-enabled="{{ .SubtitlesEnabled }}" data-subtitle-providers="{{ .SubtitleProviders }}">
 <header>
   <h1>Phimtor — Xem phim</h1>
-  <a href="/">← Quản trị</a>
+  <span><a href="/streamers">Streamers</a> · <a href="/">← Quản trị</a></span>
 </header>
 <div class="layout">
   <aside class="sidebar">
@@ -113,9 +113,10 @@
 
 <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 <script>
-// The browser talks to the streamer directly for torrents/streaming, and to
-// this admin server (same origin) for OpenSubtitles search/download.
-const STREAMER = (document.body.dataset.streamer || '').replace(/\/$/, '');
+// Control ops (add/list/delete) go to this admin server (same origin, behind
+// auth), which proxies them to the manager. The manager returns each torrent's
+// owning streamer public URL (streamerByHash), which the browser uses for
+// stats/stream directly. Subtitles also go to this admin server.
 const SUBTITLES_ENABLED = document.body.dataset.subtitlesEnabled === 'true';
 const SUB_PROVIDERS = (document.body.dataset.subtitleProviders || '').split(',').filter(Boolean);
 const PROVIDER_LABELS = { opensubtitles: 'OpenSubtitles', subsource: 'SubSource' };
@@ -130,9 +131,11 @@ function chosenProvider(id) {
   const el = document.getElementById(id);
   return el ? el.value : (SUB_PROVIDERS[0] || '');
 }
-const API = STREAMER + '/api/torrents';
+const CONTROL = '/api/streamer/torrents';
 const OS_SEARCH = '/api/subtitles/search';
 const OS_DL = '/api/subtitles/download';
+// infoHash -> owning streamer public base URL (from each list/add response).
+const streamerByHash = {};
 let currentSrc = null;
 let currentVideo = null;
 let player = null;
@@ -147,7 +150,7 @@ async function addMagnet() {
   btn.disabled = true;
   btn.textContent = 'Đang thêm…';
   try {
-    const res = await fetch(API, {
+    const res = await fetch(CONTROL, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({magnet})
@@ -172,7 +175,7 @@ async function addTorrentFile() {
   const form = new FormData();
   form.append('torrent', fileInput.files[0]);
   try {
-    const res = await fetch(API, { method: 'POST', body: form });
+    const res = await fetch(CONTROL, { method: 'POST', body: form });
     if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
     fileInput.value = '';
     await refreshTorrents();
@@ -186,7 +189,7 @@ async function addTorrentFile() {
 
 async function removeTorrent(infoHash) {
   if (!confirm('Gỡ torrent này?')) return;
-  await fetch(`${API}/${infoHash}`, { method: 'DELETE' });
+  await fetch(`${CONTROL}/${infoHash}`, { method: 'DELETE' });
   if (currentSrc && currentSrc.includes(infoHash)) {
     resetPlayer();
   }
@@ -194,7 +197,9 @@ async function removeTorrent(infoHash) {
 }
 
 function playFile(infoHash, fileIndex, fileName) {
-  const src = `${API}/${infoHash}/files/${fileIndex}/stream`;
+  const base = streamerByHash[infoHash];
+  if (!base) { alert('Streamer cho torrent này chưa sẵn sàng.'); return; }
+  const src = `${base}/api/torrents/${infoHash}/files/${fileIndex}/stream`;
   if (currentSrc === src) return;
   currentSrc = src;
   currentVideo = { infoHash, fileIndex, fileName };
@@ -404,8 +409,10 @@ function statsChips(s) {
 
 async function refreshStats(infoHashes) {
   await Promise.all(infoHashes.map(async hash => {
+    const base = streamerByHash[hash];
+    if (!base) return;
     try {
-      const res = await fetch(`${API}/${hash}/stats`);
+      const res = await fetch(`${base}/api/torrents/${hash}/stats`);
       if (!res.ok) return;
       const s = await res.json();
       statsCache[hash] = s;
@@ -433,6 +440,8 @@ function renderTorrents(torrents) {
   }
 
   container.innerHTML = torrents.map(t => {
+    // Record the owning streamer so play/stats can hit it directly.
+    if (t.streamerPublicURL) streamerByHash[t.infoHash] = t.streamerPublicURL.replace(/\/$/, '');
     const pct = t.totalBytes ? Math.round(t.bytesCompleted / t.totalBytes * 100) : 0;
     const files = (t.files || []).map((f, i) => {
       const playBtn = f.isVideo
@@ -463,7 +472,7 @@ function renderTorrents(torrents) {
 
 async function refreshTorrents() {
   try {
-    const res = await fetch(API);
+    const res = await fetch(CONTROL);
     if (!res.ok) return;
     const data = await res.json();
     renderTorrents(data);
