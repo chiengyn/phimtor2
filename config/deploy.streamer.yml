@@ -1,18 +1,20 @@
-# Kamal deploy — STREAMER instance 1 (torrent streaming API + ffmpeg transcode).
+# Kamal deploy — STREAMER (torrent streaming API + ffmpeg transcode).
 #
-#   kamal deploy -c config/deploy.streamer-1.yml
+# This base config IS streamer instance 1:
+#   kamal deploy -c config/deploy.streamer.yml
 #
-# One of N interchangeable streamer instances. It self-registers with the manager
-# (MANAGER_URL) advertising its internal alias and its public host; the manager
-# load-balances torrents across instances and routes by owner. The browser hits
-# this instance's PUBLIC host directly for stats/stream (saving manager
-# bandwidth); the control routes (add/list/get/delete) are token-gated and only
-# the manager calls them. No MySQL.
+# Additional instances are Kamal **destinations** (one image, distinct
+# container/host/volume), so the image's `service=phimtor2-streamer` label still
+# matches. Each destination file (e.g. config/deploy.streamer.s2.yml) overrides
+# only the per-instance bits and deploys with:
+#   kamal deploy -c config/deploy.streamer.yml -d s2
 #
-# To add another instance, copy this file (see deploy.streamer-2.yml): give it a
-# distinct service/network-alias, its own STREAMERn_HOST, and its own volume.
+# Each streamer self-registers with the manager (MANAGER_URL) advertising its
+# internal alias + public host; the manager load-balances and routes by owner.
+# The browser hits the PUBLIC host directly for stats/stream; the control routes
+# (add/list/get/delete) are token-gated and only the manager calls them. No MySQL.
 
-service: phimtor2-streamer-1
+service: phimtor2-streamer
 image: chiengyn/phimtor2-streamer
 
 servers:
@@ -20,9 +22,9 @@ servers:
     hosts:
       - <%= ENV["SERVER_IP"] %>
     options:
-      # Stable DNS alias on the kamal network. The streamer advertises this to the
-      # manager as its internal URL, so the manager reaches it server-to-server.
-      network-alias: phimtor2-streamer-1
+      # Stable DNS alias on the kamal network — the streamer advertises this to
+      # the manager so it can reach the control routes server-to-server.
+      network-alias: phimtor2-streamer
 
 proxy:
   ssl: true
@@ -32,7 +34,7 @@ proxy:
     path: /up
   # Streaming serves large, long-lived ranged responses; kamal-proxy buffers by
   # default which stalls a <video> open-ended range. Stream responses and raise
-  # the response timeout for long playback. (See deploy notes in DEPLOY.md.)
+  # the response timeout for long playback.
   response_timeout: 3600
   buffering:
     responses: false
@@ -61,7 +63,7 @@ env:
     # --- Manager registration ---
     STREAMER_INSTANCE_ID: streamer-1
     MANAGER_URL: http://phimtor2-manager:8083
-    STREAMER_ADVERTISE_INTERNAL_URL: http://phimtor2-streamer-1:8080
+    STREAMER_ADVERTISE_INTERNAL_URL: http://phimtor2-streamer:8080
     STREAMER_ADVERTISE_PUBLIC_URL: https://<%= ENV["STREAMER1_HOST"] %>
   secret:
     # Gates the control routes (must match the manager's STREAMER_INTERNAL_TOKEN);
@@ -70,6 +72,6 @@ env:
     - MANAGER_REGISTER_TOKEN
 
 # Torrent cache (prefix tier persisted, cache tier wiped on startup). Each
-# instance needs its OWN volume — they must not share /data.
+# instance needs its OWN volume — destinations override this so they never share.
 volumes:
-  - "phimtor2_streamer_1_data:/data"
+  - "phimtor2_streamer_data:/data"

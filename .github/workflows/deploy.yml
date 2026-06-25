@@ -29,7 +29,7 @@ on:
         description: Service(s) to deploy
         type: choice
         default: all
-        options: [all, admin, viewer, manager, streamers]
+        options: [all, admin, viewer, manager, streamer]
 
 concurrency:
   group: deploy-production
@@ -86,19 +86,18 @@ jobs:
           STREAMER_INTERNAL_TOKEN: ${{ secrets.STREAMER_INTERNAL_TOKEN }}
         run: |
           set -euo pipefail
-          admin()     { kamal deploy --skip-push; }
-          viewer()    { kamal deploy -c config/deploy.viewer.yml --skip-push; }
-          manager()   { kamal deploy -c config/deploy.manager.yml --skip-push; }
-          streamers() {
-            kamal deploy -c config/deploy.streamer-1.yml --skip-push
-            kamal deploy -c config/deploy.streamer-2.yml --skip-push
-          }
+          admin()    { kamal deploy --skip-push; }
+          viewer()   { kamal deploy -c config/deploy.viewer.yml --skip-push; }
+          manager()  { kamal deploy -c config/deploy.manager.yml --skip-push; }
+          # Streamer instance 1 is the base config; add instances as destinations,
+          # e.g. `kamal deploy -c config/deploy.streamer.yml -d s2 --skip-push`.
+          streamer() { kamal deploy -c config/deploy.streamer.yml --skip-push; }
           case "${{ inputs.service }}" in
-            # admin first (DB + migrations); manager before streamers so they can
+            # admin first (DB + migrations); manager before streamer so it can
             # register on boot.
-            all)       admin; manager; streamers; viewer ;;
-            admin)     admin ;;
-            viewer)    viewer ;;
-            manager)   manager ;;
-            streamers) streamers ;;
+            all)      admin; manager; streamer; viewer ;;
+            admin)    admin ;;
+            viewer)   viewer ;;
+            manager)  manager ;;
+            streamer) streamer ;;
           esac

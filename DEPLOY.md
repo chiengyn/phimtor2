@@ -10,16 +10,20 @@ Kamal **accessory** on the same host, tuned for a small (1 GB) box.
 | admin       | `config/deploy.yml`              | `chiengyn/phimtor2-admin`    | `$ADMIN_HOST`    | 8081 |
 | viewer      | `config/deploy.viewer.yml`       | `chiengyn/phimtor2-viewer`   | `$VIEWER_HOST`   | 8082 |
 | manager     | `config/deploy.manager.yml`      | `chiengyn/phimtor2-manager`  | internal-only    | 8083 |
-| streamer 1  | `config/deploy.streamer-1.yml`   | `chiengyn/phimtor2-streamer` | `$STREAMER1_HOST` | 8080 |
-| streamer 2  | `config/deploy.streamer-2.yml`   | `chiengyn/phimtor2-streamer` | `$STREAMER2_HOST` | 8080 |
+| streamer 1  | `config/deploy.streamer.yml`     | `chiengyn/phimtor2-streamer` | `$STREAMER1_HOST` | 8080 |
+| streamer 2  | `… -d s2` (`deploy.streamer.s2.yml`) | `chiengyn/phimtor2-streamer` | `$STREAMER2_HOST` | 8080 |
 
 `admin` owns the schema and runs migrations on startup; `viewer` reads the same
 database read-only. Admin and viewer share an on-host volume (`phimtor2_subtitles`)
-for the local subtitle blob store. The **manager** is internal-only (no public
-host): admin/viewer reach it server-to-server at `http://phimtor2-manager:8083`,
-and the **streamers self-register** with it. Each streamer needs its **own**
-browser-reachable domain (the manager hands these out for direct stats/stream) and
-its **own** `/data` volume — copy `deploy.streamer-2.yml` to add more.
+for the local subtitle blob store. The **manager** is internal-only (`proxy:
+false`, no public host): admin/viewer reach it server-to-server at
+`http://phimtor2-manager:8083`, and the **streamers self-register** with it.
+
+**Multiple streamers** use Kamal **destinations** (one image, one `service:
+phimtor2-streamer`, so the image's service label matches): instance 1 is the base
+`config/deploy.streamer.yml`; each extra instance is a destination override (e.g.
+`config/deploy.streamer.s2.yml`) deployed with `-d s2`, giving it its own public
+domain, network-alias, and `/data` volume.
 
 **Images are built by CI, not by Kamal.** `.github/workflows/docker.yml` builds
 and pushes all four images to GHCR on every push to `main` (and `v*` tags),
@@ -84,8 +88,8 @@ deploys it. Run it for admin first so MariaDB comes up and migrations run:
 kamal setup --skip-push                                     # admin: host + proxy +
                                                             # registry login + MariaDB
 kamal deploy -c config/deploy.manager.yml    --skip-push    # manager (before streamers)
-kamal deploy -c config/deploy.streamer-1.yml --skip-push    # streamer 1
-kamal deploy -c config/deploy.streamer-2.yml --skip-push    # streamer 2
+kamal deploy -c config/deploy.streamer.yml   --skip-push    # streamer 1
+# kamal deploy -c config/deploy.streamer.yml -d s2 --skip-push   # streamer 2 (optional)
 kamal deploy -c config/deploy.viewer.yml     --skip-push    # viewer (reads admin's DB)
 ```
 
@@ -102,8 +106,8 @@ git pull                                                  # match CI's built com
 set -a && source .env && set +a
 kamal deploy                                  --skip-push  # admin
 kamal deploy -c config/deploy.manager.yml     --skip-push  # manager
-kamal deploy -c config/deploy.streamer-1.yml  --skip-push  # streamer 1
-kamal deploy -c config/deploy.streamer-2.yml  --skip-push  # streamer 2
+kamal deploy -c config/deploy.streamer.yml    --skip-push  # streamer 1
+# kamal deploy -c config/deploy.streamer.yml -d s2 --skip-push  # streamer 2 (optional)
 kamal deploy -c config/deploy.viewer.yml      --skip-push  # viewer
 ```
 

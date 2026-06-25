@@ -13,14 +13,14 @@ servers:
   web:
     hosts:
       - <%= ENV["SERVER_IP"] %>   # same host as the rest
+    # Internal-only: `proxy: false` on the primary role disables kamal-proxy, so
+    # the manager is never published. The container still joins the kamal network
+    # via its network-alias, so admin/viewer/streamers reach it by name.
+    proxy: false
     options:
       # Stable DNS alias on the kamal network so admin/viewer/streamers resolve
       # it by name (the real container name changes every deploy).
       network-alias: phimtor2-manager
-
-# Internal-only: do NOT publish through kamal-proxy. The container still joins
-# the kamal network (via network-alias above) so other services reach it.
-proxy: false
 
 registry:
   server: ghcr.io

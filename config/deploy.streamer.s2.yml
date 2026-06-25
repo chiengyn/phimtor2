@@ -1,0 +1,28 @@
+# Kamal DESTINATION override — STREAMER instance 2.
+#
+#   kamal deploy -c config/deploy.streamer.yml -d s2
+#
+# Deep-merged over config/deploy.streamer.yml. The base `service:
+# phimtor2-streamer` is unchanged (so the image's service label still matches);
+# the destination gives this instance its own container set, public host,
+# network-alias, /data volume, and advertised URLs. Requires a STREAMER2_HOST DNS
+# record pointing at the droplet. Copy this file (.s3.yml, …) for more instances.
+
+servers:
+  web:
+    hosts:
+      - <%= ENV["SERVER_IP"] %>
+    options:
+      network-alias: phimtor2-streamer-2
+
+proxy:
+  host: <%= ENV["STREAMER2_HOST"] %>
+
+env:
+  clear:
+    STREAMER_INSTANCE_ID: streamer-2
+    STREAMER_ADVERTISE_INTERNAL_URL: http://phimtor2-streamer-2:8080
+    STREAMER_ADVERTISE_PUBLIC_URL: https://<%= ENV["STREAMER2_HOST"] %>
+
+volumes:
+  - "phimtor2_streamer_2_data:/data"
