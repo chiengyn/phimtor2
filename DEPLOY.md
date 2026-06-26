@@ -29,6 +29,11 @@ phimtor2-streamer`, so the image's service label matches): instance 1 is the bas
 `config/deploy.streamer.s2.yml`) deployed with `-d s2`, giving it its own public
 domain, network-alias, and `/data` volume.
 
+To add a streamer on a host you **don't** manage with this Kamal stack (a rented
+VPS, a third-party box — Docker only, no Kamal), use the off-Kamal `docker compose`
+recipe in [`DEPLOY-REMOTE-STREAMER.md`](DEPLOY-REMOTE-STREAMER.md): it self-registers
+with the public manager and you approve it once in the admin Streamers dashboard.
+
 **Images are built by CI, not by Kamal.** `.github/workflows/docker.yml` builds
 and pushes all four images to GHCR on every push to `main` (and `v*` tags),
 tagging each with the full git SHA — the exact tag Kamal resolves from `git
