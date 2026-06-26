@@ -64,8 +64,14 @@ Configuration is via env vars or matching CLI flags (see `config.go`):
 `PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`,
 `MAX_CONNS` (peer connections per torrent, default 200), `RETAIN_HOT`
 (default off; keep every piece of a torrent that has a viewer — trades disk for
-concurrent capacity), and `IDLE_TTL_MIN` (default 30; drop torrents unstreamed
-for this many minutes, 0 disables). Control-plane/manager wiring (all env-only,
+concurrent capacity), `IDLE_TTL_MIN` (default 30; drop torrents unstreamed
+for this many minutes, 0 disables), `MAX_UNVERIFIED_MB` (default 0 =
+unlimited; the library's global cross-torrent in-flight/unverified budget — left
+off so one stalled torrent can't starve the others of piece requests, see
+`NewTorrentManager` in `torrent.go`), and `STALL_TIMEOUT_SEC` (default 120, 0
+disables; drop a torrent a viewer is waiting on that downloads nothing with no
+connected seeders for this long — a dead swarm — so it stops pinning a peer slot
+and an open reader, see `runStallChecker` in `reaper.go`). Control-plane/manager wiring (all env-only,
 **all required** — no standalone mode): `MANAGER_URL`, `MANAGER_REGISTER_TOKEN`
 (shared join token), `STREAMER_INSTANCE_ID`, `STREAMER_ADVERTISE_INTERNAL_URL`,
 `STREAMER_ADVERTISE_PUBLIC_URL`. The control-plane credential is **not** an env
@@ -90,6 +96,16 @@ Flat single `main` package. The pieces that only make sense read together:
   prefix-cache) removes the torrent's prefix + cache dirs, clears its bolt
   completion entries, and releases cached fds. `RemoveTorrent` (the API delete
   path) runs the same cleanup. Set `IDLE_TTL_MIN=0` to disable.
+
+- **Stall checker** (`reaper.go`, `runStallChecker`). A second background
+  goroutine handles the opposite case from the reaper: a torrent someone *is*
+  watching but that can't make progress. It drops any watched torrent that is
+  incomplete, has downloaded no new bytes for `STALL_TIMEOUT_SEC`, **and** has no
+  connected seeders (a dead/unreachable swarm) — otherwise it pins a peer slot
+  and an open reader forever while the browser spins. Any byte of progress,
+  completion, or a still-connected seeder (merely slow, or paused with a full
+  buffer) resets its clock, so healthy playback is never dropped. Set
+  `STALL_TIMEOUT_SEC=0` to disable.
 
 - **Pluggable storage** is the core design. `newStorage` (`storage.go`) selects a
   backend by `STORAGE_MODE`:

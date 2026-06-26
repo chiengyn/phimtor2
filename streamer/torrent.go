@@ -98,13 +98,19 @@ type TorrentManager struct {
 	idleTTL    time.Duration
 	activityMu sync.Mutex
 	activity   map[string]*torrentActivity
-	reaperDone chan struct{}
+
+	// stallTimeout, if >0, drops a watched torrent that can't make download
+	// progress (dead swarm); see runStallChecker.
+	stallTimeout time.Duration
+
+	// bgDone stops the background reaper/stall goroutines on Close.
+	bgDone chan struct{}
 
 	rateMu  sync.Mutex
 	samples map[string]rateSample
 }
 
-func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns int, idleTTL time.Duration) (*TorrentManager, error) {
+func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns int, idleTTL time.Duration, maxUnverifiedBytes int64, stallTimeout time.Duration) (*TorrentManager, error) {
 	storageImpl, err := newStorage(storageCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create storage: %w", err)
@@ -114,6 +120,21 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 	cfg.DataDir = storageCfg.DataDir
 	cfg.NoUpload = false
 	cfg.DefaultStorage = storageImpl
+
+	// MaxUnverifiedBytes is a single budget the request engine shares across ALL
+	// torrents: it walks pieces in global priority order and stops requesting the
+	// moment the cumulative in-flight/unverified bytes reach this cap (see
+	// internal/request-strategy/order.go). The library default (64 MiB) is small,
+	// and a stalled torrent (dead/slow swarm) keeps a few high-priority pieces —
+	// its reader window plus our pinned-High prefix — permanently "requested but
+	// never verified". Partial pieces sort to the front of the global order, so
+	// that one torrent pins the whole budget and the scan breaks before reaching
+	// healthy torrents' pieces: they get zero requests and can't play until the
+	// stalled torrent is removed. We bound in-flight per torrent via the peer/conn
+	// limits instead, so disable this cross-torrent cap (0 = unlimited). Storage is
+	// still bounded by the cache budget (capFunc). Set MAX_UNVERIFIED_MB > 0 to
+	// re-impose a global cap.
+	cfg.MaxUnverifiedBytes = maxUnverifiedBytes
 
 	// Raise peer-connection limits above the library defaults (50/25/100/500) so a
 	// hot torrent fills its cache from the swarm fast enough to feed many viewers.
@@ -138,18 +159,25 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 		torrents:    make(map[string]*torrent.Torrent),
 		readahead:   readaheadBytes,
 		prefixBytes: storageCfg.PrefixBytes,
-		idleTTL:     idleTTL,
-		activity:    make(map[string]*torrentActivity),
-		samples:     make(map[string]rateSample),
+		idleTTL:      idleTTL,
+		stallTimeout: stallTimeout,
+		activity:     make(map[string]*torrentActivity),
+		samples:      make(map[string]rateSample),
 	}
 	// Only the prefix-cache backend tracks reader positions; capped-sqlite does not.
 	if rt, ok := storageImpl.(readerTracker); ok {
 		m.tracker = rt
 	}
-	// Reap torrents that go unstreamed for idleTTL, freeing disk and peer slots.
+	// Start the background reaper (idle torrents) and stall checker (dead-swarm
+	// torrents a viewer is waiting on). They share one stop channel.
+	if idleTTL > 0 || stallTimeout > 0 {
+		m.bgDone = make(chan struct{})
+	}
 	if idleTTL > 0 {
-		m.reaperDone = make(chan struct{})
 		go m.runReaper()
+	}
+	if stallTimeout > 0 {
+		go m.runStallChecker()
 	}
 	return m, nil
 }
@@ -444,8 +472,8 @@ func (m *TorrentManager) RemoveTorrent(infoHash string) error {
 }
 
 func (m *TorrentManager) Close() {
-	if m.reaperDone != nil {
-		close(m.reaperDone)
+	if m.bgDone != nil {
+		close(m.bgDone)
 	}
 	m.client.Close()
 	if m.storageImpl != nil {

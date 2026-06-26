@@ -60,6 +60,12 @@ env:
     MAX_CONNS: 50
     IDLE_TTL_MIN: 20
     RETAIN_HOT: false
+    # 0 = disable the library's global cross-torrent unverified-bytes cap so one
+    # stalled torrent can't starve the others of piece requests.
+    MAX_UNVERIFIED_MB: 0
+    # Drop a torrent a viewer is waiting on that downloads nothing with no seeders
+    # for this many seconds (dead swarm), freeing its peer slot + reader. 0 disables.
+    STALL_TIMEOUT_SEC: 120
     # --- Manager registration ---
     STREAMER_INSTANCE_ID: streamer-1
     MANAGER_URL: http://phimtor2-manager:8083

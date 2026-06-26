@@ -17,6 +17,17 @@ type Config struct {
 	RetainHot   bool
 	IdleTTLMin  int
 
+	// MaxUnverifiedMB caps in-flight/unverified bytes across ALL torrents (0 =
+	// unlimited). The library defaults this to 64 MiB, but that global budget lets
+	// one stalled torrent starve every other torrent of piece requests, so we
+	// default it off (see NewTorrentManager).
+	MaxUnverifiedMB int
+
+	// StallTimeoutSec drops a torrent a viewer is waiting on that downloads
+	// nothing for this long with no connected seeders (dead/unreachable swarm), so
+	// it stops pinning a peer slot and a reader. 0 disables (see runStallChecker).
+	StallTimeoutSec int
+
 	// Self-registration with the manager (all required — the streamer no longer
 	// runs standalone). RegisterToken is the shared join token gating the manager's
 	// register endpoint. The streamer's control-plane credential is not configured
@@ -44,6 +55,12 @@ func loadConfig() Config {
 		// Drop torrents that go unstreamed this long, freeing disk and peer
 		// connections. 0 disables reaping (torrents stay until explicitly removed).
 		IdleTTLMin: envInt("IDLE_TTL_MIN", 30),
+		// 0 disables the global cross-torrent unverified-bytes cap so a stalled
+		// torrent can't starve the others of piece requests.
+		MaxUnverifiedMB: envInt("MAX_UNVERIFIED_MB", 0),
+		// Drop a watched torrent that makes no download progress with no seeders
+		// for this many seconds (dead swarm). 0 disables.
+		StallTimeoutSec: envInt("STALL_TIMEOUT_SEC", 120),
 
 		// Control-plane / manager wiring (all env-only; secrets and topology).
 		ManagerURL:           envStr("MANAGER_URL", ""),
@@ -65,6 +82,10 @@ func loadConfig() Config {
 		"Keep every piece of a torrent that has an active viewer (trades disk for concurrent capacity)")
 	flag.IntVar(&cfg.IdleTTLMin, "idle-ttl", cfg.IdleTTLMin,
 		"Drop torrents unstreamed for this many minutes to free disk and peers (0 disables)")
+	flag.IntVar(&cfg.MaxUnverifiedMB, "max-unverified", cfg.MaxUnverifiedMB,
+		"Global in-flight/unverified bytes cap across all torrents in MB (0 disables; default off so a stalled torrent can't starve others)")
+	flag.IntVar(&cfg.StallTimeoutSec, "stall-timeout", cfg.StallTimeoutSec,
+		"Drop a watched torrent that downloads nothing with no seeders for this many seconds (0 disables)")
 	flag.Parse()
 
 	return cfg
