@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"strings"
@@ -17,19 +19,35 @@ type Instance struct {
 	InternalURL string
 	PublicURL   string
 
+	// ControlToken is the streamer's self-generated identity token, presented by
+	// the manager on every control call (set on register). SessionToken is the
+	// manager-minted bearer the streamer presents on heartbeat/deregister.
+	ControlToken string
+	SessionToken string
+
 	lastSeen atomic.Int64 // unix nano of the last register/heartbeat
 	http     *http.Client
 }
 
-func newInstance(id, internalURL, publicURL string, timeout time.Duration) *Instance {
+func newInstance(id, internalURL, publicURL, controlToken string, timeout time.Duration) *Instance {
 	in := &Instance{
-		ID:          id,
-		InternalURL: strings.TrimRight(internalURL, "/"),
-		PublicURL:   strings.TrimRight(publicURL, "/"),
-		http:        &http.Client{Timeout: timeout},
+		ID:           id,
+		InternalURL:  strings.TrimRight(internalURL, "/"),
+		PublicURL:    strings.TrimRight(publicURL, "/"),
+		ControlToken: controlToken,
+		SessionToken: newRandomToken(),
+		http:         &http.Client{Timeout: timeout},
 	}
 	in.touch()
 	return in
+}
+
+// newRandomToken returns a 256-bit cryptographically random hex token, used for
+// the per-instance session token the manager mints for each streamer.
+func newRandomToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func (in *Instance) touch() { in.lastSeen.Store(time.Now().UnixNano()) }
@@ -39,8 +57,9 @@ func (in *Instance) healthy(ttl time.Duration) bool {
 }
 
 // do issues a control-plane request to this streamer's internal API, attaching
-// the shared bearer token. The caller owns closing the response body.
-func (in *Instance) do(ctx context.Context, method, path, token, contentType string, body io.Reader) (*http.Response, error) {
+// the instance's control token (the streamer's own identity, pinned on approval).
+// The caller owns closing the response body.
+func (in *Instance) do(ctx context.Context, method, path, contentType string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, in.InternalURL+path, body)
 	if err != nil {
 		return nil, err
@@ -48,8 +67,8 @@ func (in *Instance) do(ctx context.Context, method, path, token, contentType str
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if in.ControlToken != "" {
+		req.Header.Set("Authorization", "Bearer "+in.ControlToken)
 	}
 	return in.http.Do(req)
 }

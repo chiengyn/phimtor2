@@ -35,6 +35,15 @@
   .progress-bar { height: 4px; background: #2d2d4e; border-radius: 2px; overflow: hidden; margin-top: 0.35rem; }
   .progress-fill { height: 100%; background: #22c55e; border-radius: 2px; }
   .progress-text { font-size: 0.72rem; color: #666; margin-top: 0.25rem; }
+
+  h2.section { font-size: 0.95rem; color: #e94560; text-transform: uppercase; letter-spacing: 0.05em; }
+  .badge-pending { background: #3a2e16; color: #f6d186; }
+  form.inline { display: inline; margin: 0; }
+  .btn { font: inherit; font-size: 0.78rem; font-weight: 700; border: none; border-radius: 5px; padding: 0.3rem 0.7rem; cursor: pointer; }
+  .btn-approve { background: #14532d; color: #86efac; }
+  .btn-approve:hover { background: #176435; }
+  .btn-revoke { background: #3a1620; color: #f6a6b6; margin-left: auto; }
+  .btn-revoke:hover { background: #4a1c29; }
 </style>
 </head>
 <body>
@@ -46,6 +55,27 @@
   {{ if .Error }}
     <div class="err">Không kết nối được tới manager: {{ .Error }}</div>
   {{ end }}
+
+  {{ if .Pending }}
+    <h2 class="section">Chờ duyệt</h2>
+    {{ range .Pending }}
+      <div class="instance">
+        <div class="instance-head">
+          <span class="instance-id">{{ .ID }}</span>
+          <span class="badge badge-pending">chờ duyệt</span>
+          <form class="inline" method="post" action="/streamers/{{ .ID }}/approve" style="margin-left:auto">
+            <button class="btn btn-approve" type="submit">Duyệt</button>
+          </form>
+        </div>
+        <div class="urls">
+          <span>public:</span> {{ .LastPublicURL }}<br>
+          <span>internal:</span> {{ .LastInternalURL }}
+        </div>
+      </div>
+    {{ end }}
+    <h2 class="section">Đã duyệt</h2>
+  {{ end }}
+
   {{ if not .Instances }}
     <div class="empty">Chưa có streamer nào đăng ký.</div>
   {{ end }}
@@ -56,6 +86,10 @@
         {{ if .Healthy }}<span class="badge badge-up">đang hoạt động</span>
         {{ else }}<span class="badge badge-down">mất kết nối</span>{{ end }}
         <span class="count">{{ len .Torrents }} torrent</span>
+        <form class="inline" method="post" action="/streamers/{{ .ID }}/revoke"
+              onsubmit="return confirm('Thu hồi streamer {{ .ID }}?')">
+          <button class="btn btn-revoke" type="submit">Thu hồi</button>
+        </form>
       </div>
       <div class="urls">
         <span>public:</span> {{ .PublicURL }}<br>

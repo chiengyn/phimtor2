@@ -76,9 +76,16 @@ set -a && source .env && set +a
 | `SUBSOURCE_API_KEY` | secret | subsource.net key (alt subtitle source) |
 | `DB_PASSWORD` | secret | app DB user password |
 | `MYSQL_ROOT_PASSWORD` | secret | MySQL root password |
-| `MANAGER_REGISTER_TOKEN` | secret | streamers → manager (`openssl rand -hex 32`) |
+| `MANAGER_REGISTER_TOKEN` | secret | shared join token for streamer `/register` (anti-spam gate; `openssl rand -hex 32`) |
 | `MANAGER_INTERNAL_TOKEN` | secret | admin/viewer → manager |
-| `STREAMER_INTERNAL_TOKEN` | secret | manager → streamers |
+
+The manager→streamer credential is no longer a configured secret: each streamer
+self-generates a `controlToken` (persisted at `/data/identity`) that the manager
+pins when an operator **approves** the streamer in the admin Streamers dashboard.
+A new streamer stays **pending** (and its `/api/torrents` adds fail) until approved.
+The manager persists the approval allow-list to its `/data` volume
+(`MANAGER_STATE_DIR`), so approvals survive redeploys; keep each streamer's
+`/data` volume and `STREAMER_INSTANCE_ID` stable so its approval survives too.
 
 The only thing still hardcoded in the configs is the GHCR image namespace
 (`image: chiengyn/phimtor2-*`) — change `chiengyn` if you fork under another user.
@@ -138,7 +145,7 @@ Actions):
    server for the Kamal SSH user, root by default), `KAMAL_REGISTRY_PASSWORD`,
    `ADMIN_PASSWORD`, `TMDB_API_KEY`, `OPENSUBTITLES_API_KEY`, `SUBSOURCE_API_KEY`,
    `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `MANAGER_REGISTER_TOKEN`,
-   `MANAGER_INTERNAL_TOKEN`, `STREAMER_INTERNAL_TOKEN`.
+   `MANAGER_INTERNAL_TOKEN`.
 3. Add the repo **Variables** (non-secret, read by the configs via ERB):
    `SERVER_IP`, `ADMIN_HOST`, `VIEWER_HOST`, `MANAGER_HOST`, `STREAMER1_HOST`, `STREAMER2_HOST`.
    (`SERVER_IP` also seeds `known_hosts`, replacing a separate `SSH_HOST`.)

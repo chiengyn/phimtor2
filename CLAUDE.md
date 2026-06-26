@@ -13,7 +13,7 @@ viewer) share a single MySQL database; the streamer(s) and manager stand alone.
 | **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
 | **`viewer/`** | Public read-only browse/discovery + watch UI | `8082` | MySQL (read-only) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
 | **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage); **N interchangeable instances** | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
-| **`manager/`** | Control plane that load-balances torrents across streamers (token-gated; public host + internal alias) | `8083` | none (in-memory) | [`manager/CLAUDE.md`](manager/CLAUDE.md) |
+| **`manager/`** | Control plane that load-balances torrents across streamers (token-gated; public host + internal alias) | `8083` | enrollment JSON file | [`manager/CLAUDE.md`](manager/CLAUDE.md) |
 
 The production front-end is the admin's watch page (`/watch`) and the public
 viewer's watch page. **Control plane vs data plane:** the browser asks its own app
@@ -21,10 +21,13 @@ server (admin/viewer) to add/prepare a torrent; that server calls the **manager*
 server-side (`MANAGER_INTERNAL_URL` + bearer token), which picks a streamer, adds
 the torrent there, and returns the owning streamer's **public URL**. The browser
 then hits *that* streamer directly for **stats + stream** (the only public
-streamer routes; add/list/get/delete are token-gated internal). Streamers
-**self-register** with the manager and heartbeat. Subtitle search (OpenSubtitles)
-is proxied by the admin. The streamer is **API-only** (no UI); it still works
-standalone when `MANAGER_URL` is unset.
+streamer routes; add/list/get/delete are internal, gated by the streamer's own
+self-generated identity token). Streamers **self-enroll** with the manager: an
+unknown streamer is **pending** until an operator approves it in the admin
+Streamers dashboard (the manager pins its identity fingerprint), then it
+heartbeats. Subtitle search (OpenSubtitles) is proxied by the admin. The streamer
+is **API-only** (no UI) and **must** register with a manager — there is no
+standalone mode.
 
 When working inside a module, read **that module's `CLAUDE.md`** — file paths in
 each are relative to the module directory. There are currently **no tests** in

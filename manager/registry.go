@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"log"
 	"sync"
 	"time"
@@ -15,46 +16,70 @@ type Registry struct {
 	ttl        time.Duration
 	fwdTimeout time.Duration
 	placer     Placer
+	enroll     *EnrollmentStore
 
 	mu        sync.RWMutex
 	instances map[string]*Instance // by instance ID
 	owners    map[string]*Instance // infohash → owning instance
 }
 
-func NewRegistry(cfg Config) *Registry {
+func NewRegistry(cfg Config, enroll *EnrollmentStore) *Registry {
 	return &Registry{
 		cfg:        cfg,
 		ttl:        time.Duration(cfg.HeartbeatTTLSec) * time.Second,
 		fwdTimeout: time.Duration(cfg.ForwardTimeoutSec) * time.Second,
 		placer:     newPlacer(cfg.LBStrategy),
+		enroll:     enroll,
 		instances:  make(map[string]*Instance),
 		owners:     make(map[string]*Instance),
 	}
 }
 
-// Register upserts an instance and refreshes its heartbeat. Re-registering with
-// new URLs (e.g. after a redeploy) replaces them in place.
-func (r *Registry) Register(id, internalURL, publicURL string) {
+// Register upserts an instance and refreshes its heartbeat, returning the
+// session token the streamer must present on heartbeat/deregister. Re-registering
+// with the same URLs and control token keeps the existing session token (so a
+// heartbeat in flight stays valid); anything changed mints a fresh instance.
+func (r *Registry) Register(id, internalURL, publicURL, controlToken string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if in, ok := r.instances[id]; ok && in.InternalURL == trimSlash(internalURL) && in.PublicURL == trimSlash(publicURL) {
+	if in, ok := r.instances[id]; ok &&
+		in.InternalURL == trimSlash(internalURL) &&
+		in.PublicURL == trimSlash(publicURL) &&
+		in.ControlToken == controlToken {
 		in.touch()
-		return
+		return in.SessionToken
 	}
-	r.instances[id] = newInstance(id, internalURL, publicURL, r.fwdTimeout)
+	in := newInstance(id, internalURL, publicURL, controlToken, r.fwdTimeout)
+	r.instances[id] = in
 	log.Printf("instance registered: %s (internal=%s public=%s)", id, internalURL, publicURL)
+	return in.SessionToken
 }
 
-// Heartbeat refreshes an instance's last-seen. It returns false if the instance
-// is unknown (e.g. the manager restarted), prompting the streamer to re-register.
-func (r *Registry) Heartbeat(id string) bool {
+// Heartbeat refreshes an instance's last-seen, but only if the presented session
+// token matches. It returns false if the instance is unknown (e.g. the manager
+// restarted) or the token is wrong, prompting the streamer to re-register.
+func (r *Registry) Heartbeat(id, sessionToken string) bool {
 	r.mu.RLock()
 	in, ok := r.instances[id]
 	r.mu.RUnlock()
-	if ok {
-		in.touch()
+	if !ok || subtle.ConstantTimeCompare([]byte(in.SessionToken), []byte(sessionToken)) != 1 {
+		return false
 	}
-	return ok
+	in.touch()
+	return true
+}
+
+// DeregisterWithToken drops an instance only when the presented session token
+// matches, so one streamer can't deregister another. Returns false on a miss.
+func (r *Registry) DeregisterWithToken(id, sessionToken string) bool {
+	r.mu.RLock()
+	in, ok := r.instances[id]
+	r.mu.RUnlock()
+	if !ok || subtle.ConstantTimeCompare([]byte(in.SessionToken), []byte(sessionToken)) != 1 {
+		return false
+	}
+	r.Deregister(id)
+	return true
 }
 
 func (r *Registry) Deregister(id string) {

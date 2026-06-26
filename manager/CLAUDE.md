@@ -33,18 +33,34 @@ go run .                         # run (listens on :8083)
 go vet ./...
 ```
 
-Targets Go 1.26. No UI, no DB, no disk state — the smallest of the four images.
+Targets Go 1.26. No UI, no DB. It **does** persist one small file — the streamer
+enrollment allow-list (`<MANAGER_STATE_DIR>/enrollments.json`) — so operator
+approvals survive restarts; otherwise the smallest of the four images.
+
+## Streamer enrollment (approve-pending + TOFU)
+
+Streamers are **not** trusted by a shared secret. Each streamer self-generates and
+persists its own identity token (`controlToken`); on first contact the manager parks
+it as **pending** and an operator **approves** it in the admin Streamers dashboard
+after eyeballing its advertised id/URLs. The manager **pins** that token's
+fingerprint (sha256) on approval, so no other machine can later hijack an approved
+id. The `controlToken` is the credential the manager presents on every
+manager→streamer control call. On each approved register the manager also mints a
+per-instance `sessionToken` that the streamer presents on heartbeat/deregister.
+`MANAGER_REGISTER_TOKEN` survives only as a fleet-wide **anti-spam gate** on
+`/register`. See `enrollment.go`.
 
 ## Configuration (`config.go`)
 
 Env vars with matching CLI flags; tokens are env-only. See `.env.example`.
 
 - HTTP: `MANAGER_PORT` (8083).
-- Auth (three bearer tokens, all empty ⇒ gate disabled for dev):
-  - `MANAGER_REGISTER_TOKEN` — streamers send it to register/heartbeat.
-  - `MANAGER_INTERNAL_TOKEN` — admin/viewer send it on the control routes.
-  - `STREAMER_INTERNAL_TOKEN` — the manager sends it to streamers' internal
-    routes; defaults to `MANAGER_INTERNAL_TOKEN` (one secret for the whole plane).
+- Auth (both bearer tokens empty ⇒ gate disabled for dev):
+  - `MANAGER_REGISTER_TOKEN` — shared join token streamers send at `/register`
+    (anti-spam gate only; not a per-streamer identity).
+  - `MANAGER_INTERNAL_TOKEN` — admin/viewer send it on the control routes (also
+    gates the `/admin/*` enrollment routes).
+- State: `MANAGER_STATE_DIR` (`./data`) — directory for `enrollments.json`.
 - Registry: `MANAGER_HEARTBEAT_TTL` (30s), `MANAGER_RECONCILE_INTERVAL` (60s).
 - Placement: `MANAGER_LB_STRATEGY` (`least-torrents` default, or `round-robin`).
 - `MANAGER_FORWARD_TIMEOUT` (10s) — per control-call timeout to streamers.
@@ -53,14 +69,20 @@ Env vars with matching CLI flags; tokens are env-only. See `.env.example`.
 
 Flat single `main` package, mirroring `streamer/`.
 
-- **`server.go`** — chi router. Two token-gated route groups plus a `/up` that
-  never fans out (so the manager reports up even when a streamer is down):
-  - **Registration** (`MANAGER_REGISTER_TOKEN`): `POST /api/instances/{register,
-    heartbeat,deregister}`.
+- **`server.go`** — chi router plus a `/up` that never fans out (so the manager
+  reports up even when a streamer is down):
+  - **Registration**: `POST /api/instances/register` is gated by the shared
+    `MANAGER_REGISTER_TOKEN` and then runs the enrollment `verify` (approved →
+    `{sessionToken}`; pending → `403 {status:pending}`; fingerprint mismatch →
+    `401`). `POST /api/instances/{heartbeat,deregister}` are gated instead by the
+    per-instance `sessionToken` (validated in-handler — they can't share the join
+    token's group).
   - **Control** (`MANAGER_INTERNAL_TOKEN`): `POST /api/torrents` (place + add →
     `{infoHash, streamerPublicURL}`), `GET /api/torrents` (aggregated, each entry
     annotated with its owner's `streamerPublicURL`), `GET /api/torrents/{hash}`,
-    `DELETE /api/torrents/{hash}`, and `GET /admin/instances` (dashboard status).
+    `DELETE /api/torrents/{hash}`, `GET /admin/instances` (dashboard status), and
+    the enrollment routes `GET /admin/enrollments`,
+    `POST /admin/enrollments/{id}/approve`, `DELETE /admin/enrollments/{id}`.
 - **`registry.go`** — the live instance set (`instances` by ID) and the
   `owners` map (`infohash→instance`). Background loops (`Run`): an expiry
   **sweep** drops instances past the heartbeat TTL, and a **reconcile** fans out
@@ -71,8 +93,12 @@ Flat single `main` package, mirroring `streamer/`.
   `resolveOwner`/`reResolve` (the 3-tier self-heal: trust the map, verify on a
   probe, re-probe all instances on a miss), `getTorrent`/`deleteTorrent`
   (delete is idempotent), `aggregateList`.
-- **`instance.go`** — `Instance{ID, InternalURL, PublicURL, lastSeen}` plus the
-  authenticated `do` helper for internal calls.
+- **`instance.go`** — `Instance{ID, InternalURL, PublicURL, ControlToken,
+  SessionToken, lastSeen}` plus the `do` helper that authenticates internal calls
+  with the instance's own `ControlToken`, and `newRandomToken` for session tokens.
+- **`enrollment.go`** — the persisted streamer allow-list (`EnrollmentStore`): JSON
+  file with atomic writes, `verify`/`approve`/`revoke`/`list`, sha256 fingerprint
+  pinning. The only manager state on disk.
 - **`loadbalance.go`** — `Placer`: `least-torrents` (fewest owned, from the owner
   map — zero extra calls) or `round-robin`.
 
@@ -85,6 +111,7 @@ reconcile (and once at startup).
 ## Docker
 
 `Dockerfile` builds a static `CGO_ENABLED=0` binary on a distroless base — no
-ffmpeg, no assets, no volume. `EXPOSE 8083`. Deployed at `$MANAGER_HOST` (token
-auth, plus the internal kamal alias) via `config/deploy.manager.yml`; see
+ffmpeg, no assets. It now needs a small **volume** for `MANAGER_STATE_DIR`
+(`enrollments.json`). `EXPOSE 8083`. Deployed at `$MANAGER_HOST` (token auth, plus
+the internal kamal alias) via `config/deploy.manager.yml`; see
 [`../DEPLOY.md`](../DEPLOY.md).

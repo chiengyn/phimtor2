@@ -66,12 +66,15 @@ env:
     STREAMER_ADVERTISE_INTERNAL_URL: http://phimtor2-streamer:8080
     STREAMER_ADVERTISE_PUBLIC_URL: https://<%= ENV["STREAMER1_HOST"] %>
   secret:
-    # Gates the control routes (must match the manager's STREAMER_INTERNAL_TOKEN);
-    # MANAGER_REGISTER_TOKEN authenticates this streamer's self-registration.
-    - STREAMER_INTERNAL_TOKEN
+    # Shared join token for self-registration (must match the manager's
+    # MANAGER_REGISTER_TOKEN). This streamer's control-plane credential is its own
+    # self-generated identity token, persisted at /data/identity and pinned by the
+    # manager on approval — not configured here.
     - MANAGER_REGISTER_TOKEN
 
-# Torrent cache (prefix tier persisted, cache tier wiped on startup). Each
-# instance needs its OWN volume — destinations override this so they never share.
+# Torrent cache (prefix tier persisted, cache tier wiped on startup) AND the
+# persisted /data/identity token. Each instance needs its OWN volume — keeping it
+# stable across deploys preserves this streamer's manager approval. Destinations
+# override this so they never share.
 volumes:
   - "phimtor2_streamer_data:/data"

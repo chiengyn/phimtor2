@@ -102,3 +102,63 @@ func (c *managerClient) instances(ctx context.Context) ([]instanceStatus, error)
 	}
 	return out, nil
 }
+
+// enrollment mirrors the manager's /admin/enrollments entries: a streamer's
+// allow-list record plus whether it is currently registered and healthy.
+type enrollment struct {
+	ID              string `json:"id"`
+	Approved        bool   `json:"approved"`
+	Registered      bool   `json:"registered"`
+	Healthy         bool   `json:"healthy"`
+	LastInternalURL string `json:"lastInternalURL"`
+	LastPublicURL   string `json:"lastPublicURL"`
+}
+
+// enrollments fetches the streamer enrollment allow-list (pending + approved).
+func (c *managerClient) enrollments(ctx context.Context) ([]enrollment, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/admin/enrollments", nil)
+	if err != nil {
+		return nil, err
+	}
+	c.authReq(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("manager enrollments: %s", resp.Status)
+	}
+	var out []enrollment
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// approveEnrollment approves a pending streamer by id.
+func (c *managerClient) approveEnrollment(ctx context.Context, id string) error {
+	return c.enrollmentAction(ctx, http.MethodPost, "/admin/enrollments/"+id+"/approve")
+}
+
+// revokeEnrollment removes a streamer's enrollment and drops its live instance.
+func (c *managerClient) revokeEnrollment(ctx context.Context, id string) error {
+	return c.enrollmentAction(ctx, http.MethodDelete, "/admin/enrollments/"+id)
+}
+
+func (c *managerClient) enrollmentAction(ctx context.Context, method, path string) error {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	c.authReq(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("manager enrollment action: %s", resp.Status)
+	}
+	return nil
+}

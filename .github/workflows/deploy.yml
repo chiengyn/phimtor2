@@ -11,7 +11,7 @@ name: Deploy (manual)
 #   KAMAL_REGISTRY_PASSWORD GitHub PAT with read:packages (host pulls from ghcr)
 #   ADMIN_PASSWORD, TMDB_API_KEY, OPENSUBTITLES_API_KEY, SUBSOURCE_API_KEY,
 #   DB_PASSWORD, MYSQL_ROOT_PASSWORD,
-#   MANAGER_REGISTER_TOKEN, MANAGER_INTERNAL_TOKEN, STREAMER_INTERNAL_TOKEN
+#   MANAGER_REGISTER_TOKEN, MANAGER_INTERNAL_TOKEN
 #
 # Required repo VARIABLES (same screen → Variables; these aren't secret and the
 # configs read them via ERB <%= ENV[...] %>):
@@ -84,7 +84,6 @@ jobs:
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
           MANAGER_REGISTER_TOKEN: ${{ secrets.MANAGER_REGISTER_TOKEN }}
           MANAGER_INTERNAL_TOKEN: ${{ secrets.MANAGER_INTERNAL_TOKEN }}
-          STREAMER_INTERNAL_TOKEN: ${{ secrets.STREAMER_INTERNAL_TOKEN }}
         run: |
           set -euo pipefail
           admin()    { kamal deploy --skip-push; }

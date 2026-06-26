@@ -19,16 +19,14 @@ type Config struct {
 	// deregister) — streamers send it. Empty disables the gate (dev).
 	RegisterToken string
 
-	// InternalToken gates the control routes the manager exposes to admin/viewer,
-	// AND is what the manager sends to streamers' internal routes. A single shared
-	// secret across the internal control plane keeps the wiring simple.
+	// InternalToken gates the control routes the manager exposes to admin/viewer.
+	// (The token the manager sends to streamers is no longer a shared secret — it
+	// is each streamer's self-generated control token, pinned on approval.)
 	InternalToken string
 
-	// StreamerInternalToken is the bearer the manager sends to streamers' internal
-	// routes. Defaults to InternalToken when unset (one secret for the whole
-	// internal plane); split them if you want distinct admin↔manager vs
-	// manager↔streamer secrets.
-	StreamerInternalToken string
+	// StateDir holds the persisted streamer enrollment allow-list
+	// (<StateDir>/enrollments.json). The manager is otherwise stateless.
+	StateDir string
 
 	HeartbeatTTLSec      int
 	ReconcileIntervalSec int
@@ -38,20 +36,19 @@ type Config struct {
 
 func loadConfig() Config {
 	cfg := Config{
-		Port:                  envInt("MANAGER_PORT", 8083),
-		RegisterToken:         envStr("MANAGER_REGISTER_TOKEN", ""),
-		InternalToken:         envStr("MANAGER_INTERNAL_TOKEN", ""),
-		StreamerInternalToken: envStr("STREAMER_INTERNAL_TOKEN", ""),
-		HeartbeatTTLSec:       envInt("MANAGER_HEARTBEAT_TTL", 30),
-		ReconcileIntervalSec:  envInt("MANAGER_RECONCILE_INTERVAL", 60),
-		LBStrategy:            envStr("MANAGER_LB_STRATEGY", LBLeastTorrents),
-		ForwardTimeoutSec:     envInt("MANAGER_FORWARD_TIMEOUT", 10),
-	}
-	if cfg.StreamerInternalToken == "" {
-		cfg.StreamerInternalToken = cfg.InternalToken
+		Port:                 envInt("MANAGER_PORT", 8083),
+		RegisterToken:        envStr("MANAGER_REGISTER_TOKEN", ""),
+		InternalToken:        envStr("MANAGER_INTERNAL_TOKEN", ""),
+		StateDir:             envStr("MANAGER_STATE_DIR", "./data"),
+		HeartbeatTTLSec:      envInt("MANAGER_HEARTBEAT_TTL", 30),
+		ReconcileIntervalSec: envInt("MANAGER_RECONCILE_INTERVAL", 60),
+		LBStrategy:           envStr("MANAGER_LB_STRATEGY", LBLeastTorrents),
+		ForwardTimeoutSec:    envInt("MANAGER_FORWARD_TIMEOUT", 10),
 	}
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
+	flag.StringVar(&cfg.StateDir, "state-dir", cfg.StateDir,
+		"Directory for the persisted streamer enrollment allow-list")
 	flag.IntVar(&cfg.HeartbeatTTLSec, "heartbeat-ttl", cfg.HeartbeatTTLSec,
 		"Seconds without a heartbeat before an instance is dropped from the registry")
 	flag.IntVar(&cfg.ReconcileIntervalSec, "reconcile-interval", cfg.ReconcileIntervalSec,

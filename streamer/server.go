@@ -13,13 +13,13 @@ import (
 )
 
 type Server struct {
-	manager       *TorrentManager
-	router        chi.Router
-	internalToken string
+	manager      *TorrentManager
+	router       chi.Router
+	controlToken string
 }
 
-func NewServer(manager *TorrentManager, internalToken string) *Server {
-	s := &Server{manager: manager, internalToken: internalToken}
+func NewServer(manager *TorrentManager, controlToken string) *Server {
+	s := &Server{manager: manager, controlToken: controlToken}
 	s.setupRouter()
 	return s
 }
@@ -61,12 +61,12 @@ func (s *Server) setupRouter() {
 	s.router = r
 }
 
-// internalAuth gates the control-plane routes behind a shared bearer token. When
-// the token is empty (single-streamer dev), the gate is a no-op so the whole API
-// stays reachable as before.
+// internalAuth gates the control-plane routes behind the streamer's control
+// token — its self-generated identity, which the manager presents on every
+// internal call once the streamer is approved. Only the manager holds it.
 func (s *Server) internalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.internalToken != "" && !bearerEquals(r.Header.Get("Authorization"), s.internalToken) {
+		if s.controlToken != "" && !bearerEquals(r.Header.Get("Authorization"), s.controlToken) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}

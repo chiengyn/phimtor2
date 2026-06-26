@@ -14,7 +14,12 @@ import (
 func main() {
 	cfg := loadConfig()
 
-	reg := NewRegistry(cfg)
+	enroll, err := NewEnrollmentStore(cfg.StateDir)
+	if err != nil {
+		log.Fatalf("load enrollment store: %v", err)
+	}
+
+	reg := NewRegistry(cfg, enroll)
 	server := NewServer(reg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

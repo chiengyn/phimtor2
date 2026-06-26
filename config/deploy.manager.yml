@@ -7,7 +7,8 @@
 # (register / internal tokens), so public exposure is safe as long as the tokens
 # stay secret. It ALSO keeps its kamal-network alias, so same-host admin/viewer
 # and local streamers keep using the faster internal URL http://phimtor2-manager:8083
-# (only remote streamers need the public https host). Holds no DB and no disk state.
+# (only remote streamers need the public https host). Holds no DB, but DOES persist
+# the streamer enrollment allow-list to a small volume (so approvals survive deploys).
 #
 # Requires a DNS record: $MANAGER_HOST → the host. kamal-proxy issues the TLS cert
 # via Let's Encrypt, so the record must exist BEFORE public HTTPS works (the deploy
@@ -49,11 +50,16 @@ env:
     MANAGER_PORT: 8083
     MANAGER_LB_STRATEGY: least-torrents
     MANAGER_HEARTBEAT_TTL: 30
+    MANAGER_STATE_DIR: /data   # enrollment allow-list lives here (see volumes below)
   secret:
-    # Shared bearer tokens for the internal control plane. STREAMER_INTERNAL_TOKEN
-    # is what the manager sends to streamers (must match theirs); when
-    # MANAGER_INTERNAL_TOKEN is set but STREAMER_INTERNAL_TOKEN is not, the manager
-    # reuses MANAGER_INTERNAL_TOKEN for both.
+    # MANAGER_REGISTER_TOKEN: shared join token streamers present at /register
+    # (anti-spam gate; each streamer's identity is its own self-generated token,
+    # pinned on approval). MANAGER_INTERNAL_TOKEN: gates the control routes the
+    # manager exposes to admin/viewer. (No manager→streamer secret anymore.)
     - MANAGER_REGISTER_TOKEN
     - MANAGER_INTERNAL_TOKEN
-    - STREAMER_INTERNAL_TOKEN
+
+# Persist the streamer enrollment allow-list (<MANAGER_STATE_DIR>/enrollments.json)
+# so operator approvals survive redeploys.
+volumes:
+  - "phimtor2_manager_data:/data"

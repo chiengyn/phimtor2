@@ -112,7 +112,7 @@ func (r *Registry) dedupeAdd(magnet string) map[string]string {
 
 // addVia forwards an add to the given instance and records ownership.
 func (r *Registry) addVia(ctx context.Context, in *Instance, contentType string, body []byte) (map[string]string, error) {
-	resp, err := in.do(ctx, http.MethodPost, "/api/torrents", r.cfg.StreamerInternalToken, contentType, bytes.NewReader(body))
+	resp, err := in.do(ctx, http.MethodPost, "/api/torrents", contentType, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (r *Registry) deleteTorrent(ctx context.Context, hash string) error {
 	if !ok {
 		return nil
 	}
-	resp, err := in.do(ctx, http.MethodDelete, "/api/torrents/"+hash, r.cfg.StreamerInternalToken, "", nil)
+	resp, err := in.do(ctx, http.MethodDelete, "/api/torrents/"+hash, "", nil)
 	if err != nil {
 		return err
 	}
@@ -198,7 +198,7 @@ func (r *Registry) reResolve(ctx context.Context, hash string) (*Instance, bool)
 
 // instanceHas reports whether a streamer currently holds the torrent.
 func (r *Registry) instanceHas(ctx context.Context, in *Instance, hash string) bool {
-	resp, err := in.do(ctx, http.MethodGet, "/api/torrents/"+hash, r.cfg.StreamerInternalToken, "", nil)
+	resp, err := in.do(ctx, http.MethodGet, "/api/torrents/"+hash, "", nil)
 	if err != nil {
 		return false
 	}
@@ -209,7 +209,7 @@ func (r *Registry) instanceHas(ctx context.Context, in *Instance, hash string) b
 
 // getJSON does a GET against a streamer's internal API and decodes the body.
 func (r *Registry) getJSON(ctx context.Context, in *Instance, path string, v any) error {
-	resp, err := in.do(ctx, http.MethodGet, path, r.cfg.StreamerInternalToken, "", nil)
+	resp, err := in.do(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
 		return err
 	}

@@ -166,6 +166,8 @@ func (s *Server) setupRouter() {
 	r.Get("/", s.handleIndex)
 	r.Get("/watch", s.handleWatch)
 	r.Get("/streamers", s.handleStreamers)
+	r.Post("/streamers/{id}/approve", s.handleApproveStreamer)
+	r.Post("/streamers/{id}/revoke", s.handleRevokeStreamer)
 	r.Get("/crawl", s.handleCrawlPage)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
@@ -231,14 +233,46 @@ func (s *Server) handleStreamerProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStreamers renders the streamers dashboard: each registered streamer with
-// its health and current torrents, read from the manager's status API.
+// its health and current torrents, plus any streamers awaiting approval.
 func (s *Server) handleStreamers(w http.ResponseWriter, r *http.Request) {
 	instances, err := s.manager.instances(r.Context())
 	data := map[string]any{"Instances": instances}
 	if err != nil {
 		data["Error"] = err.Error()
 	}
+	// Pending enrollments (streamers that have contacted the manager but await an
+	// operator's approval). Best-effort: a failure here shouldn't blank the page.
+	if enrolls, eErr := s.manager.enrollments(r.Context()); eErr == nil {
+		pending := []enrollment{}
+		for _, e := range enrolls {
+			if !e.Approved {
+				pending = append(pending, e)
+			}
+		}
+		data["Pending"] = pending
+	} else if err == nil {
+		data["Error"] = eErr.Error()
+	}
 	render(w, "streamers.html", data)
+}
+
+// handleApproveStreamer approves a pending streamer, then returns to the dashboard.
+func (s *Server) handleApproveStreamer(w http.ResponseWriter, r *http.Request) {
+	if err := s.manager.approveEnrollment(r.Context(), chi.URLParam(r, "id")); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/streamers", http.StatusSeeOther)
+}
+
+// handleRevokeStreamer revokes a streamer's enrollment (and drops its live
+// instance), then returns to the dashboard.
+func (s *Server) handleRevokeStreamer(w http.ResponseWriter, r *http.Request) {
+	if err := s.manager.revokeEnrollment(r.Context(), chi.URLParam(r, "id")); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/streamers", http.StatusSeeOther)
 }
 
 // basicAuth gates every route behind a single admin user/password.

@@ -60,7 +60,11 @@ unset).
   torrent's **owning streamer public URL**, which the watch/play/add pages use to
   hit that streamer's stats + stream directly. A **streamers dashboard**
   (`GET /streamers`, `templates/streamers.html`) renders the manager's
-  `/admin/instances` status.
+  `/admin/instances` status and the enrollment allow-list (`/admin/enrollments`):
+  it lists **pending** streamers with an Approve button and lets the operator
+  **Revoke** an approved one (`POST /streamers/{id}/approve`, `.../revoke` proxy to
+  the manager). Streamers self-enroll with a self-generated identity and stay
+  pending until approved here.
 - OpenSubtitles (env-only, like the other secrets; no flags): `OPENSUBTITLES_API_KEY`
   (required to enable subtitle search/download), `OPENSUBTITLES_USER_AGENT`, and
   optional `OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD` (a login token

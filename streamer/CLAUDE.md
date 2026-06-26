@@ -19,17 +19,24 @@ shared MySQL catalog.
 `GET …/{infoHash}/stats`, and `GET …/{infoHash}/files/{fileIndex}/stream`
 (browsers hit the owning streamer directly for these — hence the permissive
 CORS). The **control plane** (add/list/get/delete) is gated by an `internalAuth`
-bearer (`STREAMER_INTERNAL_TOKEN`) and only the manager calls it. With the token
-empty (single-streamer dev) the gate is a no-op and the whole API is reachable as
-before.
+bearer that is the streamer's **own `controlToken`** (its self-generated identity,
+see `identity.go`) — only the manager holds it, having received it at registration.
 
-**Self-registration (`manager_client.go`).** When `MANAGER_URL` is set, the
-streamer registers with the manager on startup (advertising
-`STREAMER_ADVERTISE_INTERNAL_URL` / `STREAMER_ADVERTISE_PUBLIC_URL` under
-`STREAMER_INSTANCE_ID`), heartbeats every 10s, and deregisters on shutdown.
-Empty `MANAGER_URL` disables this entirely (standalone mode).
+**Self-registration (`manager_client.go`, `identity.go`).** The streamer **must**
+register with a manager — there is no standalone mode. On first boot it
+loads-or-generates a persistent identity token at `<DATA_DIR>/identity` (the
+`controlToken`), then registers (advertising `STREAMER_ADVERTISE_INTERNAL_URL` /
+`STREAMER_ADVERTISE_PUBLIC_URL` under `STREAMER_INSTANCE_ID`, gated by the shared
+`MANAGER_REGISTER_TOKEN`, sending the `controlToken` in the body). An unknown
+streamer is parked **pending** until an operator approves it in the admin Streamers
+dashboard (the manager pins the controlToken's fingerprint on approval); until then
+register returns `403` and the streamer retries. Once approved it stores the
+manager-issued `sessionToken`, heartbeats every 10s, and deregisters on shutdown.
+Keep `STREAMER_INSTANCE_ID` + `DATA_DIR` stable across redeploys so the pinned
+approval (and identity) survive.
 
-It is **API-only** — there is no built-in UI (the watch page lives in the admin).
+It is **API-only** — there is no built-in UI (the watch page lives in the admin),
+and it no longer runs standalone (it must register with a manager and be approved).
 
 The API: `GET /api/torrents` (list), `POST /api/torrents` (magnet JSON or
 `.torrent` multipart), `GET`/`DELETE /api/torrents/{infoHash}` — all **internal**
@@ -58,10 +65,11 @@ Configuration is via env vars or matching CLI flags (see `config.go`):
 `MAX_CONNS` (peer connections per torrent, default 200), `RETAIN_HOT`
 (default off; keep every piece of a torrent that has a viewer — trades disk for
 concurrent capacity), and `IDLE_TTL_MIN` (default 30; drop torrents unstreamed
-for this many minutes, 0 disables). Control-plane/manager wiring (all env-only):
-`STREAMER_INTERNAL_TOKEN` (gates the control routes), `MANAGER_URL` (empty
-disables registration), `MANAGER_REGISTER_TOKEN`, `STREAMER_INSTANCE_ID`,
-`STREAMER_ADVERTISE_INTERNAL_URL`, `STREAMER_ADVERTISE_PUBLIC_URL`.
+for this many minutes, 0 disables). Control-plane/manager wiring (all env-only,
+**all required** — no standalone mode): `MANAGER_URL`, `MANAGER_REGISTER_TOKEN`
+(shared join token), `STREAMER_INSTANCE_ID`, `STREAMER_ADVERTISE_INTERNAL_URL`,
+`STREAMER_ADVERTISE_PUBLIC_URL`. The control-plane credential is **not** an env
+var — it is the persisted `<DATA_DIR>/identity` token.
 
 ## Architecture
 

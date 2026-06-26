@@ -17,13 +17,11 @@ type Config struct {
 	RetainHot   bool
 	IdleTTLMin  int
 
-	// InternalToken gates the control-plane routes (add/list/get/delete). The
-	// stats/stream routes stay public. Empty disables the gate (single-streamer
-	// dev: the whole API is reachable, as before).
-	InternalToken string
-
-	// Self-registration with the manager. ManagerURL empty disables it entirely,
-	// preserving standalone single-streamer mode.
+	// Self-registration with the manager (all required — the streamer no longer
+	// runs standalone). RegisterToken is the shared join token gating the manager's
+	// register endpoint. The streamer's control-plane credential is not configured
+	// here: it is the self-generated, persisted identity token (see
+	// loadOrCreateControlToken), which the manager pins on approval.
 	ManagerURL           string
 	RegisterToken        string
 	InstanceID           string
@@ -48,7 +46,6 @@ func loadConfig() Config {
 		IdleTTLMin: envInt("IDLE_TTL_MIN", 30),
 
 		// Control-plane / manager wiring (all env-only; secrets and topology).
-		InternalToken:        envStr("STREAMER_INTERNAL_TOKEN", ""),
 		ManagerURL:           envStr("MANAGER_URL", ""),
 		RegisterToken:        envStr("MANAGER_REGISTER_TOKEN", ""),
 		InstanceID:           envStr("STREAMER_INSTANCE_ID", defaultInstanceID()),

@@ -40,13 +40,16 @@ func (s *Server) setupRouter() {
 		_, _ = w.Write([]byte("OK"))
 	})
 
-	// Self-registration plane: streamers authenticate with the register token.
+	// Self-registration plane. Only /register is gated by the shared join token
+	// (an anti-spam / anti-race gate so anonymous callers can't flood the pending
+	// list). heartbeat/deregister carry the per-instance session token instead,
+	// validated inside the handler — they can't share the join-token gate.
 	r.Group(func(r chi.Router) {
 		r.Use(s.bearer(s.reg.cfg.RegisterToken))
 		r.Post("/api/instances/register", s.handleRegister)
-		r.Post("/api/instances/heartbeat", s.handleHeartbeat)
-		r.Post("/api/instances/deregister", s.handleDeregister)
 	})
+	r.Post("/api/instances/heartbeat", s.handleHeartbeat)
+	r.Post("/api/instances/deregister", s.handleDeregister)
 
 	// Control plane: admin/viewer authenticate with the internal token.
 	r.Group(func(r chi.Router) {
@@ -60,6 +63,10 @@ func (s *Server) setupRouter() {
 		r.Post("/api/instances/{id}/torrents", s.handleAddToInstance)
 		r.Get("/api/instances/{id}/torrents", s.handleListInstance)
 		r.Get("/admin/instances", s.handleInstances)
+		// Enrollment management for the admin Streamers dashboard.
+		r.Get("/admin/enrollments", s.handleEnrollments)
+		r.Post("/admin/enrollments/{id}/approve", s.handleApproveEnrollment)
+		r.Delete("/admin/enrollments/{id}", s.handleRevokeEnrollment)
 	})
 
 	s.router = r
@@ -87,6 +94,16 @@ func bearerEquals(header, token string) bool {
 	return subtle.ConstantTimeCompare([]byte(header[len(prefix):]), []byte(token)) == 1
 }
 
+// bearerToken extracts the raw token from an "Authorization: Bearer <token>"
+// header, or "" if absent/malformed.
+func bearerToken(header string) string {
+	const prefix = "Bearer "
+	if len(header) <= len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		return ""
+	}
+	return header[len(prefix):]
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -101,20 +118,30 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ID          string `json:"id"`
-		InternalURL string `json:"internalURL"`
-		PublicURL   string `json:"publicURL"`
+		ID           string `json:"id"`
+		InternalURL  string `json:"internalURL"`
+		PublicURL    string `json:"publicURL"`
+		ControlToken string `json:"controlToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
-		writeError(w, http.StatusBadRequest, "id, internalURL, publicURL required")
+		writeError(w, http.StatusBadRequest, "id, internalURL, publicURL, controlToken required")
 		return
 	}
-	if body.InternalURL == "" || body.PublicURL == "" {
-		writeError(w, http.StatusBadRequest, "internalURL and publicURL required")
+	if body.InternalURL == "" || body.PublicURL == "" || body.ControlToken == "" {
+		writeError(w, http.StatusBadRequest, "internalURL, publicURL and controlToken required")
 		return
 	}
-	s.reg.Register(body.ID, body.InternalURL, body.PublicURL)
-	w.WriteHeader(http.StatusNoContent)
+
+	switch s.reg.enroll.verify(body.ID, body.ControlToken, body.InternalURL, body.PublicURL) {
+	case verifyApproved:
+		sessionToken := s.reg.Register(body.ID, body.InternalURL, body.PublicURL, body.ControlToken)
+		writeJSON(w, http.StatusOK, map[string]string{"sessionToken": sessionToken})
+	case verifyMismatch:
+		// An approved id presented a different identity than the pinned one.
+		writeError(w, http.StatusUnauthorized, "identity mismatch")
+	default: // verifyPending
+		writeJSON(w, http.StatusForbidden, map[string]string{"status": "pending"})
+	}
 }
 
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -125,8 +152,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "id required")
 		return
 	}
-	if !s.reg.Heartbeat(body.ID) {
-		// Unknown instance (manager restarted): tell the streamer to re-register.
+	if !s.reg.Heartbeat(body.ID, bearerToken(r.Header.Get("Authorization"))) {
+		// Unknown instance or bad session token (e.g. manager restarted): tell the
+		// streamer to re-register.
 		writeError(w, http.StatusNotFound, "unknown instance")
 		return
 	}
@@ -141,7 +169,44 @@ func (s *Server) handleDeregister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "id required")
 		return
 	}
-	s.reg.Deregister(body.ID)
+	// Validate the session token so one streamer can't deregister another. A miss
+	// is not an error — the instance is already absent from the streamer's view.
+	s.reg.DeregisterWithToken(body.ID, bearerToken(r.Header.Get("Authorization")))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- enrollment handlers (admin dashboard) ---
+
+func (s *Server) handleEnrollments(w http.ResponseWriter, r *http.Request) {
+	type enrollmentStatus struct {
+		Enrollment
+		Registered bool `json:"registered"`
+		Healthy    bool `json:"healthy"`
+	}
+	out := []enrollmentStatus{}
+	for _, e := range s.reg.enroll.list() {
+		st := enrollmentStatus{Enrollment: e}
+		if in, ok := s.reg.instanceByID(e.ID); ok {
+			st.Registered = true
+			st.Healthy = in.healthy(s.reg.ttl)
+		}
+		out = append(out, st)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleApproveEnrollment(w http.ResponseWriter, r *http.Request) {
+	if !s.reg.enroll.approve(chi.URLParam(r, "id")) {
+		writeError(w, http.StatusNotFound, "enrollment not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRevokeEnrollment(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.reg.enroll.revoke(id)
+	s.reg.Deregister(id) // drop the live instance too, if any
 	w.WriteHeader(http.StatusNoContent)
 }
 
