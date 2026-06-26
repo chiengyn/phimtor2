@@ -50,7 +50,12 @@
   .torrent-stats .stat.dl b { color: #22c55e; }
   .torrent-stats .stat.ul b { color: #79c0ff; }
   .torrent-stats .stat.seed b { color: #86efac; }
-  .file-list { display: flex; flex-direction: column; gap: 0.25rem; }
+  .files { margin-top: 0.25rem; }
+  .files > summary { cursor: pointer; font-size: 0.75rem; color: #8b98a5; list-style: none; user-select: none; padding: 0.15rem 0; }
+  .files > summary::-webkit-details-marker { display: none; }
+  .files > summary::before { content: "▸"; display: inline-block; margin-right: 0.4rem; transition: transform 0.15s; }
+  .files[open] > summary::before { transform: rotate(90deg); }
+  .file-list { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.35rem; }
   .file-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: #adbac7; }
   .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-size { white-space: nowrap; color: #8b98a5; }
@@ -440,6 +445,19 @@ function getExtBadge(path) {
   return `<span class="badge ${cls}">${escHtml(ext)}</span>`;
 }
 
+// Which torrents have their file list expanded. The list re-renders every poll,
+// so we track open state by infoHash to preserve it across rebuilds (collapsed
+// by default). A delegated 'toggle' listener (capture phase — toggle doesn't
+// bubble) keeps the set in sync with user clicks.
+const expandedFiles = new Set();
+document.getElementById('torrent-list').addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLElement) || !d.matches('details.files')) return;
+  const hash = d.dataset.hash;
+  if (!hash) return;
+  if (d.open) expandedFiles.add(hash); else expandedFiles.delete(hash);
+}, true);
+
 function renderTorrents(torrents) {
   const container = document.getElementById('torrent-list');
   if (!torrents || torrents.length === 0) {
@@ -447,7 +465,12 @@ function renderTorrents(torrents) {
     return;
   }
 
-  container.innerHTML = torrents.map(t => {
+  // The server returns torrents in non-deterministic (map) order, which would
+  // reshuffle the list on every poll. Sort by infoHash (stable — it never
+  // changes, unlike name which starts as a placeholder) for a steady order.
+  const sorted = [...torrents].sort((a, b) => (a.infoHash || '').localeCompare(b.infoHash || ''));
+
+  container.innerHTML = sorted.map(t => {
     // Record the owning streamer so play/stats can hit it directly.
     if (t.streamerPublicURL) streamerByHash[t.infoHash] = t.streamerPublicURL.replace(/\/$/, '');
     const pct = t.totalBytes ? Math.round(t.bytesCompleted / t.totalBytes * 100) : 0;
@@ -473,7 +496,12 @@ function renderTorrents(torrents) {
         <div style="font-size:0.75rem;color:#8b98a5;margin-bottom:0.4rem">${pct}% · ${formatBytes(t.bytesCompleted)} / ${formatBytes(t.totalBytes)}</div>
       ` : '<div style="font-size:0.75rem;color:#8b98a5;margin-bottom:0.4rem">Đang lấy thông tin…</div>'}
       <div class="torrent-stats" id="stats-${escHtml(t.infoHash)}">${statsChips(statsCache[t.infoHash])}</div>
-      <div class="file-list">${files}</div>
+      ${(t.files || []).length ? `
+        <details class="files" data-hash="${escHtml(t.infoHash)}"${expandedFiles.has(t.infoHash) ? ' open' : ''}>
+          <summary>${t.files.length} tệp</summary>
+          <div class="file-list">${files}</div>
+        </details>
+      ` : ''}
     </div>`;
   }).join('');
 }
