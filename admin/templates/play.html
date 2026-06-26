@@ -6,71 +6,72 @@
 <title>{{ .Video.Name }} — Phát phim</title>
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 <style>
+  :root { color-scheme: dark; }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0e1116; color: #e6edf3; line-height: 1.5; min-height: 100vh; }
 
-  header { background: #1a1a2e; padding: 1rem 2rem; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-  header h1 { font-size: 1.25rem; color: #e94560; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  header h1 { font-size: 1.2rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   header a { color: #79c0ff; font-size: 0.85rem; text-decoration: none; white-space: nowrap; }
   header a:hover { text-decoration: underline; }
 
   .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; }
 
   .player-pane { display: flex; flex-direction: column; gap: 1rem; }
-  .plyr { width: 100%; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.8); --plyr-color-main: #e94560; }
+  .plyr { width: 100%; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.8); --plyr-color-main: #2563eb; }
   .plyr video { max-height: calc(100vh - 320px); }
   video#player { width: 100%; max-height: calc(100vh - 320px); border-radius: 8px; background: #000; }
-  .status-msg { color: #888; font-size: 0.9rem; }
-  .status-msg.err { color: #e94560; }
+  .status-msg { color: #8b98a5; font-size: 0.9rem; }
+  .status-msg.err { color: #ff8b94; }
 
-  .card { background: #16213e; border: 1px solid #2d2d4e; border-radius: 8px; padding: 1rem 1.25rem; }
-  .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin-bottom: 0.75rem; }
+  .card { background: #11161d; border: 1px solid #222b36; border-radius: 10px; padding: 1rem 1.25rem; }
+  .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #8b98a5; margin-bottom: 0.75rem; }
 
   .res-badge { font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 999px; background: #14532d; color: #86efac; font-weight: 700; vertical-align: middle; margin-left: 0.5rem; }
 
   .meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; font-size: 0.85rem; }
-  .meta-grid dt { color: #777; }
+  .meta-grid dt { color: #8b98a5; }
   .meta-grid dd { color: #cbd5e1; word-break: break-all; }
 
-  .progress-bar { height: 6px; background: #2d2d4e; border-radius: 3px; overflow: hidden; margin: 0.4rem 0 0.6rem; }
+  .progress-bar { height: 6px; background: #222b36; border-radius: 3px; overflow: hidden; margin: 0.4rem 0 0.6rem; }
   .progress-fill { height: 100%; background: #22c55e; border-radius: 3px; transition: width 1s linear; }
-  .progress-text { font-size: 0.8rem; color: #888; margin-bottom: 0.75rem; }
+  .progress-text { font-size: 0.8rem; color: #8b98a5; margin-bottom: 0.75rem; }
 
-  .stats { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-size: 0.8rem; color: #888; }
+  .stats { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-size: 0.8rem; color: #8b98a5; }
   .stat { white-space: nowrap; }
   .stat b { color: #cbd5e1; font-weight: 600; }
   .stat.dl b { color: #22c55e; }
   .stat.ul b { color: #79c0ff; }
   .stat.seed b { color: #86efac; }
 
-  .btn { cursor: pointer; border: none; border-radius: 6px; padding: 0.4rem 0.85rem; font-size: 0.85rem; font-weight: 600; }
-  .btn-sub { background: #2d2d4e; color: #e0e0e0; }
-  .btn-sub:hover { background: #3d3d5c; }
-  .btn-sub-clear { background: transparent; color: #888; border: 1px solid #3d3d5c; }
-  .btn-sub-clear:hover { color: #e94560; border-color: #e94560; }
+  .btn { cursor: pointer; border: none; border-radius: 8px; padding: 0.4rem 0.85rem; font-size: 0.85rem; font-weight: 600; }
+  .btn-sub { background: #21262d; color: #e6edf3; }
+  .btn-sub:hover { background: #2d333b; }
+  .btn-sub-clear { background: transparent; color: #8b98a5; border: 1px solid #303b48; }
+  .btn-sub-clear:hover { color: #ff8b94; border-color: #5a2330; }
   .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.8rem; }
 
   .subtitle-bar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-  .subtitle-status { font-size: 0.8rem; color: #888; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subtitle-status { font-size: 0.8rem; color: #8b98a5; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .os-panel { margin-top: 0.85rem; display: flex; flex-direction: column; gap: 0.65rem; }
   .os-search-row { display: flex; gap: 0.5rem; }
-  .os-search-row input[type="text"] { flex: 1; background: #0f0f1a; border: 1px solid #3d3d5c; border-radius: 6px; color: #e0e0e0; padding: 0.45rem 0.7rem; font-size: 0.85rem; outline: none; }
+  .os-search-row input[type="text"] { flex: 1; background: #161b22; border: 1px solid #303b48; border-radius: 8px; color: #e6edf3; padding: 0.45rem 0.7rem; font-size: 0.85rem; outline: none; }
   .os-search-row input.os-lang { flex: 0 0 70px; text-align: center; }
   .os-results { display: flex; flex-direction: column; gap: 0.25rem; max-height: 240px; overflow-y: auto; }
-  .os-result { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0.5rem; border-radius: 5px; cursor: pointer; font-size: 0.82rem; }
-  .os-result:hover { background: #1f2a4a; }
-  .os-lang-badge { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: #2d2d4e; color: #c4b5fd; padding: 0.1rem 0.35rem; border-radius: 3px; flex: 0 0 auto; }
-  .os-rel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; }
-  .os-dl { color: #666; white-space: nowrap; }
-  .os-save { background: #14532d; color: #86efac; border: none; border-radius: 5px; padding: 0.2rem 0.5rem; font-size: 0.72rem; font-weight: 700; cursor: pointer; flex: 0 0 auto; }
+  .os-result { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.82rem; }
+  .os-result:hover { background: #1f2733; }
+  .os-lang-badge { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: #30363d; color: #c4b5fd; padding: 0.1rem 0.35rem; border-radius: 4px; flex: 0 0 auto; }
+  .os-rel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #adbac7; }
+  .os-dl { color: #6b7681; white-space: nowrap; }
+  .os-save { background: #14532d; color: #86efac; border: none; border-radius: 6px; padding: 0.2rem 0.5rem; font-size: 0.72rem; font-weight: 700; cursor: pointer; flex: 0 0 auto; }
   .os-save:hover { background: #166534; }
   .os-save:disabled { opacity: 0.5; cursor: default; }
-  .loading-text { color: #666; font-style: italic; font-size: 0.85rem; }
+  .loading-text { color: #8b98a5; font-style: italic; font-size: 0.85rem; }
 
   .saved-subs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-  .saved-chip { display: inline-flex; align-items: center; gap: 0.35rem; background: #16213e; border: 1px solid #2d2d4e; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.78rem; color: #cbd5e1; cursor: pointer; }
-  .saved-chip:hover { border-color: #e94560; }
+  .saved-chip { display: inline-flex; align-items: center; gap: 0.35rem; background: #11161d; border: 1px solid #222b36; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.78rem; color: #cbd5e1; cursor: pointer; }
+  .saved-chip:hover { border-color: #2563eb; }
   .saved-chip.active { border-color: #86efac; color: #86efac; }
   .saved-chip .lang { font-weight: 700; text-transform: uppercase; color: #c4b5fd; font-size: 0.7rem; }
 </style>
@@ -230,7 +231,7 @@ async function refreshStats() {
 }
 
 function statsChips(s) {
-  if (!s) return '<span class="stat" style="color:#555">…</span>';
+  if (!s) return '<span class="stat" style="color:#6b7681">…</span>';
   return `
     <span class="stat dl" title="Tốc độ tải xuống">↓ <b>${formatSpeed(s.downloadSpeed)}</b></span>
     <span class="stat ul" title="Tốc độ tải lên">↑ <b>${formatSpeed(s.uploadSpeed)}</b></span>
