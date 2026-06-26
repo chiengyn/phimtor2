@@ -58,7 +58,20 @@ func (s *Server) setupRouter() {
 		})
 	})
 
+	// Internal load summary for the manager's bandwidth-aware placement. Like the
+	// control plane it is gated by the streamer's own control token.
+	r.Group(func(r chi.Router) {
+		r.Use(s.internalAuth)
+		r.Get("/api/load", s.handleLoad)
+	})
+
 	s.router = r
+}
+
+// handleLoad reports the instance-wide load (swarm transfer rates + torrent
+// count) the manager polls to place new torrents by current bandwidth.
+func (s *Server) handleLoad(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.manager.AggregateStats())
 }
 
 // internalAuth gates the control-plane routes behind the streamer's control
@@ -216,14 +229,35 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
+	// Meter every byte served to the viewer; this egress rate is the load signal
+	// the manager balances new torrents on.
+	cw := &countingResponseWriter{ResponseWriter: w, manager: s.manager}
+
 	if needsTranscode(fileInfo.Path) {
-		if err := transcodeStream(r.Context(), reader, w); err != nil {
+		if err := transcodeStream(r.Context(), reader, cw); err != nil {
 			// Response may have already started; can't write error header
 			return
 		}
 		return
 	}
 
-	w.Header().Set("Content-Type", detectContentType(fileInfo.Path))
-	http.ServeContent(w, r, fileInfo.Path, time.Time{}, reader)
+	cw.Header().Set("Content-Type", detectContentType(fileInfo.Path))
+	http.ServeContent(cw, r, fileInfo.Path, time.Time{}, reader)
+}
+
+// countingResponseWriter wraps an http.ResponseWriter to meter bytes written to a
+// viewer, adding each Write to the manager's egress counter. It deliberately does
+// not promote ReadFrom, so http.ServeContent's io.Copy falls back to Write and
+// every byte is counted.
+type countingResponseWriter struct {
+	http.ResponseWriter
+	manager *TorrentManager
+}
+
+func (w *countingResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if n > 0 {
+		w.manager.AddBytesServed(int64(n))
+	}
+	return n, err
 }

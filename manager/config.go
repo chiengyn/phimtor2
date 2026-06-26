@@ -8,8 +8,9 @@ import (
 
 // Strategy names for MANAGER_LB_STRATEGY.
 const (
-	LBLeastTorrents = "least-torrents"
-	LBRoundRobin    = "round-robin"
+	LBLeastTorrents  = "least-torrents"
+	LBLeastBandwidth = "least-bandwidth"
+	LBRoundRobin     = "round-robin"
 )
 
 type Config struct {
@@ -54,7 +55,7 @@ func loadConfig() Config {
 	flag.IntVar(&cfg.ReconcileIntervalSec, "reconcile-interval", cfg.ReconcileIntervalSec,
 		"Seconds between owner-map reconciles (fan-out list of every instance)")
 	flag.StringVar(&cfg.LBStrategy, "lb-strategy", cfg.LBStrategy,
-		"Load-balancing strategy: "+LBLeastTorrents+" or "+LBRoundRobin)
+		"Load-balancing strategy: "+LBLeastTorrents+", "+LBLeastBandwidth+", or "+LBRoundRobin)
 	flag.IntVar(&cfg.ForwardTimeoutSec, "forward-timeout", cfg.ForwardTimeoutSec,
 		"Per-request timeout for control-plane calls to streamers, in seconds")
 	flag.Parse()

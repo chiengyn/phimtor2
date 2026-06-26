@@ -26,8 +26,20 @@ type Instance struct {
 	SessionToken string
 
 	lastSeen atomic.Int64 // unix nano of the last register/heartbeat
-	http     *http.Client
+
+	// egressSpeed is the streamer's last-polled viewer egress rate in bytes/sec
+	// (HTTP bytes served to browsers, refreshed by the registry's reconcile loop),
+	// the signal the least-bandwidth placer minimizes.
+	egressSpeed atomic.Int64
+
+	http *http.Client
 }
+
+func (in *Instance) setEgress(bytesPerSec int64) { in.egressSpeed.Store(bytesPerSec) }
+
+// egress is the instance's last-polled viewer egress rate in bytes/sec, used by
+// the least-bandwidth placer.
+func (in *Instance) egress() int64 { return in.egressSpeed.Load() }
 
 func newInstance(id, internalURL, publicURL, controlToken string, timeout time.Duration) *Instance {
 	in := &Instance{

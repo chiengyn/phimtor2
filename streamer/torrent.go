@@ -93,6 +93,11 @@ type TorrentManager struct {
 	// used to scale per-reader readahead down under load (readaheadFor).
 	activeReaders atomic.Int64
 
+	// bytesServed is the cumulative count of HTTP bytes written to viewers across
+	// all streams (direct + transcoded), sampled by AggregateStats into an egress
+	// rate the manager uses for bandwidth-aware placement.
+	bytesServed atomic.Int64
+
 	// activity tracks per-torrent streaming usage so idle torrents can be reaped
 	// (dropped) to free disk and peer connections. See reaper.go.
 	idleTTL    time.Duration
@@ -344,6 +349,39 @@ func (m *TorrentManager) GetStats(infoHash string) (TorrentStats, bool) {
 	}
 
 	return st, true
+}
+
+// LoadStats summarizes an instance's current load for the manager's placement
+// decision: the live viewer egress rate plus the torrent count. The manager
+// polls this to balance new torrents by the bandwidth actually being served to
+// viewers — a truer load signal than the raw number of torrents, since a few
+// actively-watched torrents serve far more than many idle ones.
+type LoadStats struct {
+	TorrentCount int   `json:"torrentCount"`
+	EgressSpeed  int64 `json:"egressSpeed"` // HTTP bytes/sec served to viewers
+}
+
+// aggregateRateKey is the sampleRates key for the cumulative egress counter.
+// A real infohash is 40 hex chars, so "*" can never collide with one.
+const aggregateRateKey = "*"
+
+// AddBytesServed records HTTP bytes written to a viewer; the stream handler feeds
+// it through its response-writer wrapper for every byte served (direct or
+// transcoded).
+func (m *TorrentManager) AddBytesServed(n int64) { m.bytesServed.Add(n) }
+
+// AggregateStats returns the instance-wide load: the viewer egress rate (HTTP
+// bytes/sec served to browsers, derived by diffing the cumulative bytesServed
+// counter the same way per-torrent rates are) and the current torrent count.
+// Like per-torrent stats, the first call after start reports a zero rate; the
+// manager polls it on a fixed cadence, so each reading is the average over one
+// poll interval.
+func (m *TorrentManager) AggregateStats() LoadStats {
+	egress, _ := m.sampleRates(aggregateRateKey, m.bytesServed.Load(), 0, time.Now())
+	m.mu.RLock()
+	n := len(m.torrents)
+	m.mu.RUnlock()
+	return LoadStats{TorrentCount: n, EgressSpeed: egress}
 }
 
 // sampleRates derives instantaneous download/upload speeds (bytes/sec) from the

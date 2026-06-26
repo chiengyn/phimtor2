@@ -18,7 +18,7 @@ shared MySQL catalog.
 **Route split (`server.go`).** Only the **data plane** is public: `GET /up`,
 `GET …/{infoHash}/stats`, and `GET …/{infoHash}/files/{fileIndex}/stream`
 (browsers hit the owning streamer directly for these — hence the permissive
-CORS). The **control plane** (add/list/get/delete) is gated by an `internalAuth`
+CORS). The **control plane** (add/list/get/delete, plus `GET /api/load`) is gated by an `internalAuth`
 bearer that is the streamer's **own `controlToken`** (its self-generated identity,
 see `identity.go`) — only the manager holds it, having received it at registration.
 
@@ -39,8 +39,12 @@ It is **API-only** — there is no built-in UI (the watch page lives in the admi
 and it no longer runs standalone (it must register with a manager and be approved).
 
 The API: `GET /api/torrents` (list), `POST /api/torrents` (magnet JSON or
-`.torrent` multipart), `GET`/`DELETE /api/torrents/{infoHash}` — all **internal**
-(token-gated) — plus the **public** `GET /api/torrents/{infoHash}/stats` and
+`.torrent` multipart), `GET`/`DELETE /api/torrents/{infoHash}`, and `GET
+/api/load` (instance-wide viewer egress rate — HTTP bytes/sec served to browsers,
+metered by `countingResponseWriter` in `handleStream` — plus torrent count,
+polled by the manager for bandwidth-aware placement) — all **internal**
+(token-gated) — plus
+the **public** `GET /api/torrents/{infoHash}/stats` and
 `GET /api/torrents/{infoHash}/files/{fileIndex}/stream`.
 
 ## Commands

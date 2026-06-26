@@ -207,20 +207,65 @@ func (r *Registry) expireStale() {
 	}
 }
 
-// reconcileOnce fans out a list to every healthy instance and refreshes the
-// owner map from the result. This catches reaper evictions, out-of-band adds,
-// and torrents that moved between instances.
+// reconcileOnce fans out a list to every healthy instance and rebuilds the owner
+// map from the result. It is authoritative: a torrent an instance no longer
+// reports (e.g. evicted by the streamer's idle reaper) is pruned, not just left
+// behind as a ghost — stale ghosts would inflate ownerCounts and skew the
+// least-torrents placer toward already-loaded streamers. This catches reaper
+// evictions, out-of-band adds, and torrents that moved between instances.
 func (r *Registry) reconcileOnce(ctx context.Context) {
+	newOwners := make(map[string]*Instance)
+	reconciled := make(map[string]bool)
 	for _, in := range r.healthyInstances() {
+		r.refreshLoad(ctx, in)
 		hashes, err := r.listInfohashes(ctx, in)
 		if err != nil {
+			// Couldn't reach this instance — leave its existing owner entries in
+			// place rather than wiping them on a transient error.
 			log.Printf("reconcile: list %s failed: %v", in.ID, err)
 			continue
 		}
+		reconciled[in.ID] = true
 		for _, h := range hashes {
-			r.setOwner(h, in)
+			newOwners[h] = in
 		}
 	}
+	r.rebuildOwners(newOwners, reconciled)
+}
+
+// refreshLoad polls an instance's current viewer egress rate and records it for
+// the least-bandwidth placer. Best-effort: on error the previous reading is kept,
+// so a transient blip doesn't suddenly make a busy streamer look idle. The rate
+// the streamer returns is the average over the interval since the last poll, so
+// the reconcile cadence (MANAGER_RECONCILE_INTERVAL) is the smoothing window.
+func (r *Registry) refreshLoad(ctx context.Context, in *Instance) {
+	var load struct {
+		EgressSpeed int64 `json:"egressSpeed"`
+	}
+	if err := r.getJSON(ctx, in, "/api/load", &load); err != nil {
+		log.Printf("reconcile: load %s failed: %v", in.ID, err)
+		return
+	}
+	in.setEgress(load.EgressSpeed)
+}
+
+// rebuildOwners replaces the owner map with the ground truth gathered this round
+// (newOwners), but carries over any existing entry whose owner we could NOT list
+// (not in reconciled) — for those we have no fresh truth, so dropping them would
+// be wrong. Entries owned by a reconciled instance that are absent from its fresh
+// list are pruned (the reaper-eviction case).
+func (r *Registry) rebuildOwners(newOwners map[string]*Instance, reconciled map[string]bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for hash, in := range r.owners {
+		if reconciled[in.ID] {
+			continue // its ground truth is already in newOwners
+		}
+		if _, ok := newOwners[hash]; !ok {
+			newOwners[hash] = in // no fresh info for this owner; keep it
+		}
+	}
+	r.owners = newOwners
 }
 
 func trimSlash(s string) string {

@@ -62,7 +62,11 @@ Env vars with matching CLI flags; tokens are env-only. See `.env.example`.
     gates the `/admin/*` enrollment routes).
 - State: `MANAGER_STATE_DIR` (`./data`) — directory for `enrollments.json`.
 - Registry: `MANAGER_HEARTBEAT_TTL` (30s), `MANAGER_RECONCILE_INTERVAL` (60s).
-- Placement: `MANAGER_LB_STRATEGY` (`least-torrents` default, or `round-robin`).
+- Placement: `MANAGER_LB_STRATEGY` (`least-torrents` default, `least-bandwidth`,
+  or `round-robin`). `least-bandwidth` balances by each streamer's live viewer
+  egress rate — HTTP bytes/sec served to browsers (polled from the streamer's
+  `/api/load` each reconcile) — with torrent count as the tiebreak when the fleet
+  is idle.
 - `MANAGER_FORWARD_TIMEOUT` (10s) — per control-call timeout to streamers.
 
 ## Architecture
@@ -86,8 +90,11 @@ Flat single `main` package, mirroring `streamer/`.
 - **`registry.go`** — the live instance set (`instances` by ID) and the
   `owners` map (`infohash→instance`). Background loops (`Run`): an expiry
   **sweep** drops instances past the heartbeat TTL, and a **reconcile** fans out
-  `GET /api/torrents` to rebuild the owner map from ground truth (covers the
-  streamer idle reaper, out-of-band adds, and torrents that moved instances).
+  `GET /api/torrents` to rebuild the owner map from ground truth (authoritative:
+  it prunes entries an instance no longer reports, so a reaper eviction can't
+  leave a ghost that skews placement; covers out-of-band adds and torrents that
+  moved instances too) and polls `GET /api/load` to refresh each instance's live
+  viewer egress rate for `least-bandwidth` placement.
 - **`router.go`** — the control orchestration on `Registry`: `placeAdd` (pick →
   forward → record owner; magnet `btih` dedupe so a re-add never double-places),
   `resolveOwner`/`reResolve` (the 3-tier self-heal: trust the map, verify on a
@@ -100,7 +107,9 @@ Flat single `main` package, mirroring `streamer/`.
   file with atomic writes, `verify`/`approve`/`revoke`/`list`, sha256 fingerprint
   pinning. The only manager state on disk.
 - **`loadbalance.go`** — `Placer`: `least-torrents` (fewest owned, from the owner
-  map — zero extra calls) or `round-robin`.
+  map — zero extra calls), `least-bandwidth` (lowest live viewer egress rate,
+  polled per-instance into `Instance.egressSpeed` by the reconcile loop's
+  `refreshLoad`; ties fall back to torrent count then ID), or `round-robin`.
 
 The owner map is a **cache, never truth** — every owner-scoped op verifies via a
 probe and self-heals on 404, so a stale entry (e.g. after the streamer reaper
