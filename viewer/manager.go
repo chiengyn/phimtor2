@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -68,6 +69,29 @@ func (c *managerClient) addTorrent(ctx context.Context, magnet string) (infoHash
 		return "", "", fmt.Errorf("manager returned empty info hash")
 	}
 	return out.InfoHash, strings.TrimRight(out.StreamerPublicURL, "/"), nil
+}
+
+// deleteTorrent asks the manager to drop a torrent, which routes the delete to
+// its owning streamer. It is idempotent on the manager side — deleting a torrent
+// no streamer owns still succeeds — so a duplicate leave/sweep is harmless.
+func (c *managerClient) deleteTorrent(ctx context.Context, infoHash string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/api/torrents/"+url.PathEscape(infoHash), nil)
+	if err != nil {
+		return err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("manager delete torrent: %s", resp.Status)
+	}
+	return nil
 }
 
 // managerErrMsg best-effort extracts the {"error":...} message from a failed

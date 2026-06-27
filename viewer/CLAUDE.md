@@ -43,6 +43,9 @@ service).
   torrents via the manager (`manager.go`); the manager returns the owning
   streamer's **public URL**, which the prepare response hands to the browser for
   stats + stream directly. There is no static public streamer URL anymore.
+- Watch-session reaping: `WATCH_HEARTBEAT_TTL` (30s) — how long a watch session
+  may go silent before the viewer drops its torrent (via the manager) to free
+  streamer resources. Keep it well above the watch page's 10s heartbeat interval.
 - Subtitle storage (`blobstore.go`, **read-only**): the viewer reads the *same*
   storage the admin writes to. `SUBTITLE_STORAGE_BACKEND` (`local`|`s3`),
   `SUBTITLE_STORAGE_DIR` (`./data/subtitles` — for `local` this **must** be the
@@ -76,6 +79,9 @@ Flat single `main` package.
   - `POST /api/sources/{videoID}/prepare` — viewer-mediated playback (see below).
   - `GET /api/subtitles/{id}/file` — serves a saved subtitle file read-only from
     the shared blob store, by the row's `storage_backend` + `storage_key`.
+  - `POST /api/watch/heartbeat` and `POST /api/watch/leave` — watch-session
+    liveness (see *Watch-session reaping* below); drop a torrent once its last
+    viewer goes away.
   - `/static/*` — static assets (`style.css`).
   Unknown / bad ids render the `404.html` page (not a bare error).
 
@@ -94,12 +100,27 @@ Flat single `main` package.
   can also load a local `.srt`/`.vtt`. There is no OpenSubtitles search here (the
   viewer is read-only and holds no provider key).
 
-- **Manager client** (`manager.go`): a tiny server-side HTTP client whose only job
-  is `addTorrent(magnet) → (infoHash, streamerPublicURL)` against the manager
-  (with the internal bearer token). The manager picks a streamer; the returned
-  public URL flows through the prepare response so the browser streams from the
-  right instance. Keeping the add on the server means only the streamers' stats +
-  stream endpoints are browser-reachable; everything else is internal.
+- **Watch-session reaping** (`watchtracker.go`, `manager.go`
+  `deleteTorrent`). So a torrent doesn't linger after the user leaves (wasting the
+  streamer's peers/cache/disk until its ~30-min idle reaper), the watch page
+  heartbeats `POST /api/watch/heartbeat` every 10s with a per-tab `sessionID` +
+  the playing `infoHash`, and beacons `POST /api/watch/leave` on `pagehide` (tab
+  close, navigating to another title, mobile bfcache). The server's `watchTracker`
+  **reference-counts** sessions per infohash: when the last viewer leaves (beacon)
+  or goes silent past `WATCH_HEARTBEAT_TTL` (a background sweep), it drops the
+  torrent via the manager (`DELETE /api/torrents/{hash}`, idempotent → routed to
+  the owning streamer). Reference-counting is what makes one user leaving safe
+  while others keep watching the same torrent; a source switch re-points the
+  session's heartbeat, dropping the previously-watched torrent. The sweep loop is
+  started from `main.go` (`server.watcher.run`) and stops on shutdown.
+
+- **Manager client** (`manager.go`): a tiny server-side HTTP client against the
+  manager (with the internal bearer token): `addTorrent(magnet) → (infoHash,
+  streamerPublicURL)` and `deleteTorrent(infoHash)` (used by the watch-session
+  reaper above). The manager picks a streamer on add; the returned public URL
+  flows through the prepare response so the browser streams from the right
+  instance. Keeping these on the server means only the streamers' stats + stream
+  endpoints are browser-reachable; everything else is internal.
 
 - **Subtitle blob store** (`blobstore.go`): a **read-only** port of admin's store
   (`Get` only, `local` + `s3`); `handleSubtitleFile` routes a subtitle row to

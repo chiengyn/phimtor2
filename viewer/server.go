@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -32,6 +34,12 @@ type Server struct {
 	manager *managerClient
 	blobs   map[string]BlobStore
 
+	// watcher reference-counts active watch sessions so a torrent is dropped via the
+	// manager the moment its last viewer leaves the watch page, instead of lingering
+	// until the streamer's idle reaper. Driven by the watch page's heartbeat + leave
+	// beacon; its sweeper runs from main via watcher.run.
+	watcher *watchTracker
+
 	// publicURL is the viewer's own browser-facing origin (no trailing slash),
 	// used to build absolute canonical / Open Graph / sitemap URLs. Empty in
 	// local dev, where SEO URLs fall back to site-relative.
@@ -54,6 +62,7 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		publicURL:  strings.TrimRight(cfg.PublicURL, "/"),
 		discordURL: cfg.DiscordURL,
 	}
+	s.watcher = newWatchTracker(time.Duration(cfg.WatchHeartbeatTTL)*time.Second, s.manager.deleteTorrent)
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
 	}
@@ -193,6 +202,11 @@ func (s *Server) setupRouter() {
 	// Viewer-mediated playback API (same-origin, called by the watch page JS).
 	r.Post("/api/sources/{videoID}/prepare", s.handlePrepareSource)
 	r.Get("/api/subtitles/{id}/file", s.handleSubtitleFile)
+	// Watch-session liveness: the watch page heartbeats while playing and beacons
+	// a leave on page hide, so the torrent is dropped the instant its last viewer
+	// goes away (see watchtracker.go).
+	r.Post("/api/watch/heartbeat", s.handleWatchHeartbeat)
+	r.Post("/api/watch/leave", s.handleWatchLeave)
 
 	fs := http.FileServer(http.Dir("static"))
 	r.Handle("/static/*", http.StripPrefix("/static/", fs))
@@ -655,6 +669,36 @@ func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 		"fileIndex":         video.FileIndex,
 		"streamerPublicURL": streamerPublicURL,
 	})
+}
+
+// handleWatchHeartbeat records that a watch session is still actively watching
+// its torrent. The watch page calls it on a short interval; once the heartbeats
+// stop (and no leave beacon arrived), the tracker's sweep drops the torrent.
+func (s *Server) handleWatchHeartbeat(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		InfoHash  string `json:"infoHash"`
+		SessionID string `json:"sessionID"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	s.watcher.beat(body.SessionID, body.InfoHash)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleWatchLeave ends a watch session immediately — the watch page beacons it
+// on page hide (tab close or navigating to another title) — so the torrent is
+// dropped at once if this was its last viewer.
+func (s *Server) handleWatchLeave(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SessionID string `json:"sessionID"`
+	}
+	// Best-effort: a malformed/empty beacon body just leaves the session for the
+	// sweep to reap, so a decode error is not worth a 400.
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&body)
+	s.watcher.leave(body.SessionID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleSubtitleFile serves a saved subtitle file read-only from the shared blob

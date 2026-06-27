@@ -38,6 +38,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Reap watch sessions whose heartbeats stopped, dropping their torrents.
+	go server.watcher.run(ctx)
+
 	go func() {
 		log.Printf("phimtor2-viewer listening on http://%s", addr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

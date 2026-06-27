@@ -35,6 +35,13 @@ type Config struct {
 	ManagerInternalURL   string
 	ManagerInternalToken string
 
+	// WatchHeartbeatTTL is how long (seconds) a watch session may go silent before
+	// the viewer treats the tab as gone and drops its torrent. Must comfortably
+	// exceed the watch page's heartbeat interval (10s) so a couple of missed beats
+	// never evict a viewer who is still there. The leave beacon handles the common
+	// case instantly; this TTL is the backstop for crashed tabs / dead networks.
+	WatchHeartbeatTTL int
+
 	// Subtitle storage. The viewer reads the SAME storage the admin writes to,
 	// read-only — local must point at the same directory, s3 at the same bucket.
 	SubtitleStorageBackend string
@@ -62,6 +69,7 @@ func loadConfig() Config {
 
 		ManagerInternalURL:   envStr("MANAGER_INTERNAL_URL", "http://localhost:8083"),
 		ManagerInternalToken: envStr("MANAGER_INTERNAL_TOKEN", ""),
+		WatchHeartbeatTTL:    envInt("WATCH_HEARTBEAT_TTL", 30),
 
 		SubtitleStorageBackend: envStr("SUBTITLE_STORAGE_BACKEND", "local"),
 		SubtitleStorageDir:     envStr("SUBTITLE_STORAGE_DIR", "./data/subtitles"),

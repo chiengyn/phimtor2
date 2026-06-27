@@ -300,6 +300,53 @@ function setPlayerStatus(text, isErr) {
 	ph.className = 'player-placeholder' + (isErr ? ' err' : '');
 }
 
+// --- Watch-session heartbeat ----------------------------------------------
+// Tell our own server we are actively watching so it can drop the torrent the
+// moment we leave — freeing the streamer immediately instead of waiting for its
+// idle reaper. A periodic heartbeat keeps the torrent alive; a leave beacon on
+// page hide ends it at once. The session id lets the server reference-count
+// viewers, so one user leaving never drops a torrent others are still watching.
+const WATCH_SESSION_ID = (window.crypto && crypto.randomUUID)
+	? crypto.randomUUID()
+	: String(Date.now()) + Math.random().toString(16).slice(2);
+const HEARTBEAT_MS = 10000;
+let heartbeatTimer = null;
+
+function sendHeartbeat() {
+	if (!currentInfoHash) return;
+	fetch('/api/watch/heartbeat', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ infoHash: currentInfoHash, sessionID: WATCH_SESSION_ID }),
+		keepalive: true,
+	}).catch(() => {});
+}
+
+// startHeartbeat begins (or, after a source switch, immediately refreshes) the
+// heartbeat. Calling it again just sends one beat with the new infohash — the
+// server moves this session to it and drops the old torrent — without stacking
+// timers.
+function startHeartbeat() {
+	sendHeartbeat();
+	if (!heartbeatTimer) heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_MS);
+}
+
+// sendLeave fires on page hide so the server drops our torrent right away if we
+// were its last viewer. sendBeacon survives the page going away; fetch+keepalive
+// is the fallback for the rare browser without it.
+function sendLeave() {
+	const body = JSON.stringify({ sessionID: WATCH_SESSION_ID });
+	if (navigator.sendBeacon) {
+		navigator.sendBeacon('/api/watch/leave', new Blob([body], { type: 'application/json' }));
+	} else {
+		fetch('/api/watch/leave', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
+	}
+}
+
+// pagehide covers tab close, navigation (incl. switching to another movie) and
+// the mobile bfcache freeze — more reliable than unload, which bfcache skips.
+window.addEventListener('pagehide', sendLeave);
+
 // --- Sources --------------------------------------------------------------
 
 function videoLabel(v) {
@@ -354,6 +401,9 @@ async function playSource(videoID) {
 	activeVideoID = videoID;
 	renderSourceChips();
 	startStatsPolling();
+	// Begin heartbeating this torrent now so the server keeps it alive while we
+	// watch (and, on a source switch, drops the previously-watched one).
+	startHeartbeat();
 	// The streamer adds magnets lazily: until it has fetched the torrent metadata
 	// the stream endpoint 404s, and attaching the <video> to it then raises a fatal
 	// MediaError that kills the player. So wait until the streamer can actually
