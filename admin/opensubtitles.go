@@ -283,6 +283,24 @@ func srtToVTT(s string) string {
 	return "WEBVTT\n\n" + s
 }
 
+// assOverrideRe matches an ASS/SSA override block \u2014 a brace group beginning with
+// a backslash, e.g. {\an8} (position top-center), {\i1}, {\pos(...)}. Some source
+// subtitles carry these inline; WebVTT can't interpret them, so they'd render as
+// literal on-screen cue text.
+var assOverrideRe = regexp.MustCompile(`\{\\[^}]*\}`)
+
+// stripASSOverrides removes inline ASS/SSA override tags from subtitle bytes so
+// they aren't stored (and later shown) as garbage like "{\an8}". Cleaning at the
+// write path means the viewer serves already-clean bytes; the viewer mirrors this
+// as defense-in-depth. Only brace groups that start with a backslash are removed,
+// leaving ordinary text (and stray braces) untouched.
+func stripASSOverrides(b []byte) []byte {
+	if !bytes.Contains(b, []byte("{\\")) {
+		return b // fast path: nothing to strip, avoid a needless allocation
+	}
+	return assOverrideRe.ReplaceAll(b, nil)
+}
+
 var episodeRe = regexp.MustCompile(`(?i)\bS(\d{1,2})E(\d{1,2})\b`)
 
 // parseSubtitleQuery turns a video file name into a search title plus optional

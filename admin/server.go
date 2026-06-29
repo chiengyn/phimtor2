@@ -1150,6 +1150,9 @@ func (s *Server) handleSaveSubtitle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	// Strip inline ASS/SSA override tags ({\an8} etc.) before storing so the viewer
+	// never has to render or clean them.
+	data = stripASSOverrides(data)
 
 	lang := strings.TrimSpace(body.Language)
 	if lang == "" {
@@ -1229,16 +1232,17 @@ func (s *Server) handleUploadSubtitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keep the original bytes verbatim. Detect the format (WebVTT vs SubRip) from
-	// the content first, falling back to the file extension, so the row records
-	// what was actually stored and the player can convert SRT on load.
+	// Detect the format (WebVTT vs SubRip) from the content first, falling back to
+	// the file extension, so the row records what was actually stored and the
+	// player can convert SRT on load. The bytes are otherwise kept as-is except for
+	// stripping inline ASS/SSA override tags ({\an8} etc.) that WebVTT can't render.
 	origName := path.Base(header.Filename)
-	data := raw
 	format := "srt"
 	if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(string(raw), "\ufeff")), "WEBVTT") ||
 		strings.EqualFold(path.Ext(origName), ".vtt") {
 		format = "vtt"
 	}
+	data := stripASSOverrides(raw)
 
 	lang := strings.TrimSpace(r.FormValue("language"))
 	if lang == "" {
