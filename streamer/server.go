@@ -241,8 +241,39 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Direct play: the browser seeks by issuing a Range request at the new offset.
+	// Boost the seek target's priority so the post-seek buffer fills ahead of
+	// background work (ServeContent then streams the range as usual).
+	if start, ok := rangeStart(r.Header.Get("Range")); ok {
+		s.manager.PrioritizeSeek(infoHash, fileIndex, start)
+	}
+
 	cw.Header().Set("Content-Type", detectContentType(fileInfo.Path))
 	http.ServeContent(cw, r, fileInfo.Path, time.Time{}, reader)
+}
+
+// rangeStart returns the start byte offset of a single "bytes=<start>-..." Range
+// header. It returns false for an absent, multi-range, or suffix ("bytes=-N")
+// header and for a start of 0 — so only real forward seeks trigger the extra
+// prioritization, not the initial full-file request.
+func rangeStart(header string) (int64, bool) {
+	const prefix = "bytes="
+	if !strings.HasPrefix(header, prefix) {
+		return 0, false
+	}
+	spec := header[len(prefix):]
+	if strings.ContainsRune(spec, ',') {
+		return 0, false // multi-range: leave it to ServeContent
+	}
+	dash := strings.IndexByte(spec, '-')
+	if dash <= 0 {
+		return 0, false // suffix range or malformed
+	}
+	n, err := strconv.ParseInt(spec[:dash], 10, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // countingResponseWriter wraps an http.ResponseWriter to meter bytes written to a

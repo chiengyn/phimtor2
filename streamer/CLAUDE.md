@@ -157,6 +157,15 @@ Flat single `main` package. The pieces that only make sense read together:
   divided down as more readers open (floor `minReadaheadBytes`) so N concurrent
   viewers don't each reserve the full `READAHEAD_MB`.
 
+  **Seeking.** Direct-play files seek natively: the browser sends a `Range`
+  request at the new offset and `handleStream` calls `PrioritizeSeek` to boost the
+  target pieces so the post-seek buffer fills ahead of background work (the
+  dominant latency is still the swarm fetching those cold pieces). The transcode
+  path is **not** seekable — it ignores `Range` and always streams sequentially
+  from byte 0 (chunked, unknown-length fMP4), so a seek into a `.mkv` waits for
+  the stream to reach that point. Real transcoded seeking needs HLS or a
+  time-seek (`-ss`) protocol; deliberately not built yet.
+
 **Subtitles** are *not* handled here anymore. The watch UI and the
 OpenSubtitles proxy moved to [`admin/`](../admin/CLAUDE.md); the admin matches
 subtitles by text query + season/episode (it has no torrent data, so no

@@ -210,6 +210,40 @@ func (m *TorrentManager) pinPrefixPieces(t *torrent.Torrent) {
 	}
 }
 
+// PrioritizeSeek raises a window of pieces at byteOffset within a file to High so
+// that after a viewer seeks (a Range request to an un-downloaded region) the
+// post-seek playback buffer fills ahead of background work — the pinned
+// prefix/suffix of this torrent and the pieces of any other torrent. The
+// responsive reader already requests the exact seek position at top priority;
+// this just widens the high-priority window so playback doesn't immediately
+// re-buffer once the seek lands. The dominant seek latency is still the swarm
+// fetching those cold pieces, which no priority change removes. Pieces already
+// complete cost nothing, so a no-op when the target is already downloaded.
+func (m *TorrentManager) PrioritizeSeek(infoHash string, fileIndex int, byteOffset int64) {
+	t, ok := m.GetTorrent(infoHash)
+	if !ok || t.Info() == nil {
+		return
+	}
+	files := t.Files()
+	if fileIndex < 0 || fileIndex >= len(files) {
+		return
+	}
+	pieceLen := t.Info().PieceLength
+	if pieceLen <= 0 {
+		return
+	}
+	start := int((files[fileIndex].Offset() + byteOffset) / pieceLen)
+	// Cover roughly one readahead's worth of pieces ahead of the seek point,
+	// capped so tiny pieces can't fan out into hundreds of High requests.
+	window := int(m.readahead/pieceLen) + 1
+	if window > 32 {
+		window = 32
+	}
+	for i := start; i < start+window && i < t.NumPieces(); i++ {
+		t.Piece(i).SetPriority(torrent.PiecePriorityHigh)
+	}
+}
+
 func (m *TorrentManager) AddMagnet(magnetURI string) (string, error) {
 	t, err := m.client.AddMagnet(magnetURI)
 	if err != nil {
