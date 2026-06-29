@@ -88,6 +88,7 @@ type TorrentManager struct {
 	torrents    map[string]*torrent.Torrent
 	readahead   int64
 	prefixBytes int64
+	suffixBytes int64
 
 	// activeReaders counts streaming readers currently open across all torrents,
 	// used to scale per-reader readahead down under load (readaheadFor).
@@ -164,6 +165,7 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 		torrents:    make(map[string]*torrent.Torrent),
 		readahead:   readaheadBytes,
 		prefixBytes: storageCfg.PrefixBytes,
+		suffixBytes: storageCfg.SuffixBytes,
 		idleTTL:      idleTTL,
 		stallTimeout: stallTimeout,
 		activity:     make(map[string]*torrentActivity),
@@ -188,16 +190,23 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 }
 
 // pinPrefixPieces raises the priority of the pieces that hold the first
-// prefixBytes of each video file so the client keeps them resident (and
-// pre-fetches them while idle), making playback start instantly. Must be called
-// after the torrent's metadata is available.
+// prefixBytes and last suffixBytes of each video file so the client keeps them
+// resident (and pre-fetches them while idle), making playback start instantly.
+// The suffix covers the MP4 moov atom of non-faststart files, which the browser
+// range-requests before it can render a frame. The first piece of each video —
+// the container header — is promoted further to PiecePriorityNow so it arrives
+// ahead of the rest of the pinned window. Must be called after the torrent's
+// metadata is available.
 func (m *TorrentManager) pinPrefixPieces(t *torrent.Torrent) {
 	info := t.Info()
 	if info == nil {
 		return
 	}
-	for idx := range prefixPieceIndices(info, m.prefixBytes) {
+	for idx := range prefixPieceIndices(info, m.prefixBytes, m.suffixBytes) {
 		t.Piece(idx).SetPriority(torrent.PiecePriorityHigh)
+	}
+	for _, idx := range videoFileStartPieces(info) {
+		t.Piece(idx).SetPriority(torrent.PiecePriorityNow)
 	}
 }
 

@@ -22,6 +22,7 @@ type StorageConfig struct {
 	Mode        string
 	DataDir     string
 	PrefixBytes int64 // bytes pinned at the start of each video file
+	SuffixBytes int64 // bytes pinned at the end of each video file (MP4 moov atom)
 	CacheBytes  int64 // LRU budget for the bulk (cache / sqlite cap)
 	RetainHot   bool  // keep every piece of a torrent that has an active reader
 }
@@ -59,35 +60,77 @@ func newStorage(cfg StorageConfig) (storage.ClientImplCloser, error) {
 }
 
 // prefixPieceIndices returns the set of piece indices that overlap the first
-// prefixBytes of every video file in the torrent. It is used both by the manager
-// (to raise piece priority so the prefix stays warm) and by the prefix-cache
-// storage (to route those pieces to the persistent tier).
-func prefixPieceIndices(info *metainfo.Info, prefixBytes int64) map[int]bool {
+// prefixBytes *and* the last suffixBytes of every video file in the torrent. It
+// is used both by the manager (to raise piece priority so these stay warm) and
+// by the prefix-cache storage (to route them to the persistent tier).
+//
+// The suffix matters because many torrent MP4s are not "+faststart": their moov
+// atom (the index the player needs before it can render a single frame) sits at
+// the *end* of the file, so http.ServeContent's first range request from the
+// browser is for the tail. Pinning that tail means it is already downloading (or
+// resident) instead of being fetched cold at play time.
+func prefixPieceIndices(info *metainfo.Info, prefixBytes, suffixBytes int64) map[int]bool {
 	out := make(map[int]bool)
-	if prefixBytes <= 0 || info.PieceLength <= 0 {
+	if info.PieceLength <= 0 {
 		return out
 	}
-	for _, fi := range info.UpvertedFiles() {
-		name := strings.Join(fi.BestPath(), "/")
-		if name == "" {
-			// Single-file torrent: the name lives on the info dict.
-			name = info.BestName()
+	addRange := func(firstByte, lastByte int64) {
+		if firstByte < 0 {
+			firstByte = 0
 		}
-		if !isVideoFile(name) {
-			continue
-		}
-		prefixLen := prefixBytes
-		if fi.Length < prefixLen {
-			prefixLen = fi.Length
-		}
-		if prefixLen <= 0 {
-			continue
-		}
-		begin := int(fi.TorrentOffset / info.PieceLength)
-		end := int((fi.TorrentOffset + prefixLen - 1) / info.PieceLength)
+		begin := int(firstByte / info.PieceLength)
+		end := int(lastByte / info.PieceLength)
 		for i := begin; i <= end; i++ {
 			out[i] = true
 		}
 	}
+	for _, fi := range info.UpvertedFiles() {
+		if !isVideoFile(videoFileName(info, fi)) || fi.Length <= 0 {
+			continue
+		}
+		if prefixBytes > 0 {
+			prefixLen := prefixBytes
+			if fi.Length < prefixLen {
+				prefixLen = fi.Length
+			}
+			addRange(fi.TorrentOffset, fi.TorrentOffset+prefixLen-1)
+		}
+		if suffixBytes > 0 {
+			suffixLen := suffixBytes
+			if fi.Length < suffixLen {
+				suffixLen = fi.Length
+			}
+			lastByte := fi.TorrentOffset + fi.Length - 1
+			addRange(lastByte-suffixLen+1, lastByte)
+		}
+	}
 	return out
+}
+
+// videoFileStartPieces returns the first piece index of each video file — the
+// piece holding the container header the player blocks on first. The manager
+// promotes these to PiecePriorityNow so time-to-first-frame isn't gated on the
+// rest of the pinned window.
+func videoFileStartPieces(info *metainfo.Info) []int {
+	var out []int
+	if info.PieceLength <= 0 {
+		return out
+	}
+	for _, fi := range info.UpvertedFiles() {
+		if !isVideoFile(videoFileName(info, fi)) || fi.Length <= 0 {
+			continue
+		}
+		out = append(out, int(fi.TorrentOffset/info.PieceLength))
+	}
+	return out
+}
+
+// videoFileName resolves a file's path within the torrent, falling back to the
+// info dict's name for a single-file torrent (where BestPath is empty).
+func videoFileName(info *metainfo.Info, fi metainfo.FileInfo) string {
+	name := strings.Join(fi.BestPath(), "/")
+	if name == "" {
+		return info.BestName()
+	}
+	return name
 }

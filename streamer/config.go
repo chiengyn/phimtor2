@@ -12,6 +12,7 @@ type Config struct {
 	ReadaheadMB int
 	StorageMode string
 	PrefixMB    int
+	SuffixMB    int
 	CacheMB     int
 	MaxConns    int
 	RetainHot   bool
@@ -47,6 +48,9 @@ func loadConfig() Config {
 		ReadaheadMB: envInt("READAHEAD_MB", 16),
 		StorageMode: envStr("STORAGE_MODE", StorageModePrefixCache),
 		PrefixMB:    envInt("PREFIX_MB", 32),
+		// SuffixMB pins the tail of each video too: non-faststart MP4s keep their
+		// moov atom there, and the browser range-requests it before it can play.
+		SuffixMB: envInt("SUFFIX_MB", 8),
 		// CacheMB is the bounded budget for the bulk; raising it directly raises how
 		// many concurrent viewers can be served without re-hitting the swarm.
 		CacheMB:   envInt("CACHE_MB", 2048),
@@ -76,6 +80,7 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.StorageMode, "storage", cfg.StorageMode,
 		"Storage backend: "+StorageModePrefixCache+" or "+StorageModeCappedSQLite)
 	flag.IntVar(&cfg.PrefixMB, "prefix", cfg.PrefixMB, "Bytes pinned at the start of each video file, in MB")
+	flag.IntVar(&cfg.SuffixMB, "suffix", cfg.SuffixMB, "Bytes pinned at the end of each video file (MP4 moov atom), in MB")
 	flag.IntVar(&cfg.CacheMB, "cache", cfg.CacheMB, "Bounded cache budget for the bulk, in MB")
 	flag.IntVar(&cfg.MaxConns, "max-conns", cfg.MaxConns, "Peer connections per torrent (higher fills the cache faster)")
 	flag.BoolVar(&cfg.RetainHot, "retain-hot", cfg.RetainHot,

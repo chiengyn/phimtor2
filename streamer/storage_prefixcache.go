@@ -52,6 +52,7 @@ type prefixCacheStorage struct {
 	prefixDir   string
 	cacheDir    string
 	prefixBytes int64
+	suffixBytes int64
 	cacheCap    int64
 	retainHot   bool
 
@@ -116,6 +117,7 @@ func newPrefixCacheStorage(cfg StorageConfig) (storage.ClientImplCloser, error) 
 		prefixDir:        prefixDir,
 		cacheDir:         cacheDir,
 		prefixBytes:      cfg.PrefixBytes,
+		suffixBytes:      cfg.SuffixBytes,
 		cacheCap:         cfg.CacheBytes,
 		retainHot:        cfg.RetainHot,
 		prefixCompletion: prefixCompletion,
@@ -227,7 +229,7 @@ func (s *prefixCacheStorage) OpenTorrent(
 	info *metainfo.Info,
 	infoHash metainfo.Hash,
 ) (storage.TorrentImpl, error) {
-	prefixSet := prefixPieceIndices(info, s.prefixBytes)
+	prefixSet := prefixPieceIndices(info, s.prefixBytes, s.suffixBytes)
 
 	hexHash := infoHash.HexString()
 	if err := os.MkdirAll(filepath.Join(s.prefixDir, hexHash), 0o755); err != nil {

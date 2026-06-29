@@ -65,7 +65,10 @@ go run ./loadtest -infohash <hex> -n 50 -bitrate 1.5 -duration 60s -scatter
 The server needs `ffmpeg` on PATH for transcoding and a writable `DATA_DIR`.
 
 Configuration is via env vars or matching CLI flags (see `config.go`):
-`PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `CACHE_MB`,
+`PORT`, `DATA_DIR`, `READAHEAD_MB`, `STORAGE_MODE`, `PREFIX_MB`, `SUFFIX_MB`
+(default 8; bytes pinned at the *end* of each video file — non-faststart MP4s
+keep their moov atom there and the browser range-requests it before it can render
+a frame, so pinning the tail kills a common cold-start stall), `CACHE_MB`,
 `MAX_CONNS` (peer connections per torrent, default 200), `RETAIN_HOT`
 (default off; keep every piece of a torrent that has a viewer — trades disk for
 concurrent capacity), `IDLE_TTL_MIN` (default 30; drop torrents unstreamed
@@ -88,8 +91,10 @@ Flat single `main` package. The pieces that only make sense read together:
 - **`TorrentManager`** (`torrent.go`) owns the `anacrolix/torrent` client and a
   map of active torrents. On every add (`AddMagnet`/`AddTorrentFile`) it spawns a
   goroutine that waits for `GotInfo()` then calls `pinPrefixPieces` to raise the
-  priority of the pieces holding the first `PREFIX_MB` of each video file — so
-  playback starts instantly.
+  priority of the pieces holding the first `PREFIX_MB` *and* last `SUFFIX_MB` of
+  each video file to `High` (the tail covers the MP4 moov atom the browser fetches
+  first on a non-faststart file), and the very first piece of each video to `Now`
+  (the container header) — so playback starts instantly.
 
 - **Idle reaper** (`reaper.go`). The manager tracks per-torrent streaming usage
   (`activity map[infoHash]*torrentActivity`: open-reader count + `lastUsed`,
@@ -138,7 +143,9 @@ Flat single `main` package. The pieces that only make sense read together:
 - **`prefixPieceIndices`** (`storage.go`) is the shared contract between the two
   worlds above: the manager uses it to set piece *priority*, and the prefix-cache
   storage uses the same function to decide which pieces route to the *persistent
-  tier*. Keep these consistent — both must agree on what "the prefix" is.
+  tier*. Keep these consistent — both must agree on what "the prefix" is. It
+  returns both the head (`PREFIX_MB`) and tail (`SUFFIX_MB`) pieces of each video,
+  so the moov-atom tail is pinned on disk and never evicted, just like the head.
 
 - **Streaming + transcode** (`server.go` `handleStream`, `transcode.go`):
   browser-native containers (`.mp4/.webm/.ogg`) are served directly via

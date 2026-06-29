@@ -37,13 +37,28 @@ func detectContentType(path string) string {
 
 // transcodeStream pipes reader through FFmpeg and writes fragmented MP4 to w.
 // The output is browser-compatible regardless of input container/codec.
+//
+// The flags are tuned for low time-to-first-frame on a cold torrent:
+//   - -probesize/-analyzeduration cap how much input FFmpeg reads (trickling in
+//     from the swarm) before it emits anything; the defaults (~5 MB / 5 s) add
+//     seconds of startup stall for no benefit on a codec copy.
+//   - frag_keyframe+empty_moov makes the output progressively streamable. We do
+//     NOT use +faststart here: it relocates the moov atom in a final pass that
+//     needs a seekable output, but our output is a non-seekable pipe, so it only
+//     risks buffering/delay — the fragmented output already needs no faststart.
+//   - -flush_packets 1 pushes each fragment to the browser as soon as it's ready
+//     instead of letting FFmpeg buffer.
 func transcodeStream(ctx context.Context, reader io.ReadSeeker, w http.ResponseWriter) error {
 	args := []string{
+		"-fflags", "+nobuffer",
+		"-probesize", "2M",
+		"-analyzeduration", "2M",
 		"-i", "pipe:0",
 		"-c:v", "copy", // try codec copy first (works if video is already H.264)
 		"-c:a", "aac",
 		"-f", "mp4",
-		"-movflags", "frag_keyframe+empty_moov+faststart",
+		"-movflags", "frag_keyframe+empty_moov",
+		"-flush_packets", "1",
 		"pipe:1",
 	}
 
