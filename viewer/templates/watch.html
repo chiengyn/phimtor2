@@ -596,9 +596,18 @@ async function loadSubtitleFile(file) {
 	}
 }
 
+// stripAssOverrides removes inline ASS/SSA override tags — brace groups that
+// start with a backslash, e.g. {\an8}, {\i1}, {\pos(..)}. WebVTT can't interpret
+// them, so otherwise they show up as literal on-screen text. Mirrors the server's
+// stripASSOverrides so locally-loaded .srt/.vtt files get cleaned too.
+function stripAssOverrides(text) {
+	return text.replace(/\{\\[^}]*\}/g, '');
+}
+
 // setSubtitle records the active subtitle (so it survives a source switch) and
 // applies it to the current player.
 function setSubtitle(vttText, label) {
+	vttText = stripAssOverrides(vttText);
 	activeVtt = vttText;
 	activeVttLabel = label;
 	applyVtt(vttText, label);

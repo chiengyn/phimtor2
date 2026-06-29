@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -733,7 +734,35 @@ func (s *Server) handleSubtitleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", subtitleContentType(sub.Format))
-	w.Write(data)
+	w.Write(stripASSOverrides(data))
+}
+
+// assOverrideRe matches an ASS/SSA override block — a brace group beginning with
+// a backslash, e.g. {\an8} (position top-center), {\i1}, {\pos(...)}. These are
+// styling/positioning directives that some stored .srt/.vtt files carry inline;
+// WebVTT has no notion of them, so the browser renders them as literal cue text.
+var assOverrideRe = regexp.MustCompile(`\{\\[^}]*\}`)
+
+// stripASSOverrides removes inline ASS/SSA override tags from subtitle bytes so
+// they don't show up as on-screen garbage like "{\an8}". It only touches brace
+// groups that start with a backslash, leaving ordinary text (and stray braces)
+// untouched.
+func stripASSOverrides(b []byte) []byte {
+	if !bytesContainsBraceBackslash(b) {
+		return b // fast path: nothing to strip, avoid a needless allocation
+	}
+	return assOverrideRe.ReplaceAll(b, nil)
+}
+
+// bytesContainsBraceBackslash reports whether b contains the "{\" that starts an
+// ASS override block, so the common (clean) subtitle skips the regex entirely.
+func bytesContainsBraceBackslash(b []byte) bool {
+	for i := 0; i+1 < len(b); i++ {
+		if b[i] == '{' && b[i+1] == '\\' {
+			return true
+		}
+	}
+	return false
 }
 
 // subtitleContentType maps a stored subtitle format to a Content-Type. Defaults
