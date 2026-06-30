@@ -343,9 +343,20 @@ function sendLeave() {
 	}
 }
 
-// pagehide covers tab close, navigation (incl. switching to another movie) and
-// the mobile bfcache freeze — more reliable than unload, which bfcache skips.
-window.addEventListener('pagehide', sendLeave);
+// pagehide fires on real navigation/close AND on the mobile bfcache freeze
+// (screen lock, app switch). Only a real departure should drop our torrent: a
+// bfcache freeze (event.persisted) means we are coming right back, so dropping
+// the torrent would strand the restored player on a 404. For the freeze case we
+// stay quiet and let pageshow re-assert the heartbeat (or the server's idle sweep
+// clean up if we never return). More reliable than unload, which bfcache skips.
+window.addEventListener('pagehide', (e) => { if (!e.persisted) sendLeave(); });
+
+// On return — restored from bfcache, or the tab/app refocused — re-send a
+// heartbeat immediately so the server re-counts this viewer before its TTL sweep
+// can drop the torrent. If the torrent was already dropped while we were away, the
+// player's next request 404s and its error handler re-prepares the source.
+window.addEventListener('pageshow', (e) => { if (e.persisted) sendHeartbeat(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) sendHeartbeat(); });
 
 // --- Sources --------------------------------------------------------------
 
@@ -379,8 +390,8 @@ function renderSourceChips() {
 
 // playSource asks the viewer to add the chosen source to the streamer (the
 // browser never adds directly), then streams the returned file.
-async function playSource(videoID) {
-	if (videoID === activeVideoID && player) return;
+async function playSource(videoID, opts = {}) {
+	if (!opts.force && videoID === activeVideoID && player) return;
 	const v = VIDEOS.find(x => x.id === videoID);
 	if (v && v.available === false) return; // gated source — not playable yet
 	setStatus('');
@@ -412,7 +423,7 @@ async function playSource(videoID) {
 	const ready = await waitForStreamReady(data.infoHash, videoID);
 	if (!ready) return; // timed out, or the user switched sources mid-wait
 	const src = `${streamerBase}/api/torrents/${data.infoHash}/files/${data.fileIndex}/stream`;
-	buildPlayer(src);
+	buildPlayer(src, opts.resumeAt || 0);
 	setStatus('');
 }
 
@@ -455,8 +466,26 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 const MAX_STREAM_RETRIES = 3;
 let bufferWatchdog = null;
+let recovering = false;
 
-function buildPlayer(streamURL) {
+// recoverStream re-prepares the active source from scratch — re-adding the
+// torrent on the streamer (it may have been dropped by the idle reaper, the stall
+// checker, or a watch-session sweep while we were backgrounded) and rebuilding the
+// player at roughly the position we left off. This is what lets a dropped torrent
+// self-heal instead of dying on a 404.
+async function recoverStream() {
+	if (recovering || activeVideoID == null) return;
+	recovering = true;
+	const vid = activeVideoID;
+	const resumeAt = (player && player.currentTime) || 0;
+	try {
+		await playSource(vid, { force: true, resumeAt });
+	} finally {
+		recovering = false;
+	}
+}
+
+function buildPlayer(streamURL, resumeAt) {
 	const wrap = document.getElementById('player-wrap');
 	if (player) { try { player.destroy(); } catch(e) {} player = null; }
 	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
@@ -466,16 +495,27 @@ function buildPlayer(streamURL) {
 	source.src = streamURL;
 	video.appendChild(source);
 
-	// The streamer can still 404 in the brief window right after metadata lands;
-	// retry the load a few times before giving up rather than dying on first error.
+	// Resume near where we left off after a recovery re-prepare.
+	if (resumeAt > 0) {
+		video.addEventListener('loadedmetadata', () => {
+			try { video.currentTime = resumeAt; } catch(e) {}
+		}, { once: true });
+	}
+
+	// The streamer can 404 in the brief window right after metadata lands, and the
+	// torrent can be dropped out from under us mid-watch (idle reap, stall drop, or a
+	// watch-session sweep during a background). A few plain reloads cover the former;
+	// if those are exhausted, re-prepare the source from scratch to self-heal a
+	// dropped torrent rather than giving up.
 	let retries = 0;
 	video.addEventListener('error', () => {
-		if (retries++ >= MAX_STREAM_RETRIES) {
-			hideLoadNotice();
-			setStatus('Không phát được nguồn này. Vui lòng thử lại hoặc chọn nguồn khác.', true);
+		if (retries++ < MAX_STREAM_RETRIES) {
+			setTimeout(() => { try { video.load(); video.play().catch(() => {}); } catch(e) {} }, 1500);
 			return;
 		}
-		setTimeout(() => { try { video.load(); video.play().catch(() => {}); } catch(e) {} }, 1500);
+		if (recovering) return; // a recovery re-prepare is already in flight
+		setStatus('Mất kết nối nguồn phát, đang kết nối lại…');
+		recoverStream();
 	});
 
 	// Buffering watchdog: if the stream stalls for too long (slow/missing seeders),
