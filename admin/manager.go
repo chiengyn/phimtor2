@@ -71,6 +71,12 @@ type instanceStatus struct {
 	PublicURL   string           `json:"publicURL"`
 	Healthy     bool             `json:"healthy"`
 	Torrents    []managerTorrent `json:"torrents"`
+
+	// Version and Settings are what the streamer self-reported on register. The
+	// settings map is opaque (whatever knobs that streamer build sends), rendered
+	// generically as key:value chips.
+	Version  string         `json:"version"`
+	Settings map[string]any `json:"settings"`
 }
 
 // managerTorrent is the subset of a streamer torrent the dashboard renders.
@@ -112,6 +118,7 @@ type enrollment struct {
 	Healthy         bool   `json:"healthy"`
 	LastInternalURL string `json:"lastInternalURL"`
 	LastPublicURL   string `json:"lastPublicURL"`
+	LastVersion     string `json:"lastVersion"`
 }
 
 // enrollments fetches the streamer enrollment allow-list (pending + approved).

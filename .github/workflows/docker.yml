@@ -62,3 +62,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          # Baked into the binary (streamer self-reports it to the manager for
+          # the admin Streamers dashboard). Only the streamer Dockerfile
+          # consumes it today; the others just warn "unconsumed build arg".
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}-${{ github.sha }}

@@ -29,6 +29,10 @@
   .count { margin-left: auto; font-size: 0.8rem; color: #8b98a5; }
   .urls { font-size: 0.75rem; color: #8b98a5; margin-bottom: 0.75rem; word-break: break-all; }
   .urls span { color: #adbac7; }
+  .version { font-size: 0.7rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #adbac7; background: #1c2530; border-radius: 6px; padding: 0.15rem 0.5rem; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .settings { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+  .setting { font-size: 0.7rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #8b98a5; background: #161d26; border: 1px solid #222b36; border-radius: 6px; padding: 0.1rem 0.45rem; }
+  .setting b { color: #adbac7; font-weight: 600; }
 
   .torrents { display: flex; flex-direction: column; gap: 0.5rem; }
   .torrent { border-top: 1px solid #1c2530; padding-top: 0.5rem; }
@@ -64,6 +68,7 @@
         <div class="instance-head">
           <span class="instance-id">{{ .ID }}</span>
           <span class="badge badge-pending">chờ duyệt</span>
+          {{ if .LastVersion }}<span class="version" title="Phiên bản streamer: {{ .LastVersion }}">{{ .LastVersion }}</span>{{ end }}
           <form class="inline" method="post" action="/streamers/{{ .ID }}/approve" style="margin-left:auto">
             <button class="btn btn-approve" type="submit">Duyệt</button>
           </form>
@@ -86,6 +91,7 @@
         <a class="instance-id" href="/watch?streamer={{ .ID }}" title="Mở trang xem cho streamer này">{{ .ID }} →</a>
         {{ if .Healthy }}<span class="badge badge-up">đang hoạt động</span>
         {{ else }}<span class="badge badge-down">mất kết nối</span>{{ end }}
+        {{ if .Version }}<span class="version" title="Phiên bản streamer: {{ .Version }}">{{ .Version }}</span>{{ end }}
         <span class="count">{{ len .Torrents }} torrent</span>
         <form class="inline" method="post" action="/streamers/{{ .ID }}/revoke"
               onsubmit="return confirm('Thu hồi streamer {{ .ID }}?')">
@@ -96,6 +102,13 @@
         <span>public:</span> {{ .PublicURL }}<br>
         <span>internal:</span> {{ .InternalURL }}
       </div>
+      {{ if .Settings }}
+        {{/* Opaque key:value chips — whatever the streamer build reports (range
+             over a map renders in sorted key order). */}}
+        <div class="settings">
+          {{ range $k, $v := .Settings }}<span class="setting"><b>{{ $k }}</b> {{ $v }}</span>{{ end }}
+        </div>
+      {{ end }}
       {{ if .Torrents }}
         <div class="torrents">
           {{ range .Torrents }}

@@ -42,6 +42,10 @@ type Enrollment struct {
 	ApprovedAt      time.Time `json:"approvedAt,omitempty"`
 	LastInternalURL string    `json:"lastInternalURL"`
 	LastPublicURL   string    `json:"lastPublicURL"`
+	// LastVersion is the streamer's self-reported build version, refreshed on
+	// every register attempt — so the operator can see what a still-pending
+	// streamer is running before approving it.
+	LastVersion string `json:"lastVersion,omitempty"`
 }
 
 // EnrollmentStore is the persisted streamer allow-list. Reads/writes are
@@ -109,9 +113,10 @@ func (s *EnrollmentStore) flush() error {
 
 // verify checks a presented control token against the enrollment for id. An
 // unknown id is registered as pending (trust-on-first-use) before returning
-// verifyPending. URLs are refreshed on every call so the dashboard shows where a
-// still-pending streamer is advertising from.
-func (s *EnrollmentStore) verify(id, controlToken, internalURL, publicURL string) verifyStatus {
+// verifyPending. URLs and the reported version are refreshed on every call so
+// the dashboard shows where a still-pending streamer is advertising from (and
+// what build it runs).
+func (s *EnrollmentStore) verify(id, controlToken, internalURL, publicURL, version string) verifyStatus {
 	fp := fingerprint(controlToken)
 
 	s.mu.Lock()
@@ -126,6 +131,7 @@ func (s *EnrollmentStore) verify(id, controlToken, internalURL, publicURL string
 			FirstSeen:       time.Now(),
 			LastInternalURL: internalURL,
 			LastPublicURL:   publicURL,
+			LastVersion:     version,
 		}
 		_ = s.flush()
 		return verifyPending
@@ -133,6 +139,7 @@ func (s *EnrollmentStore) verify(id, controlToken, internalURL, publicURL string
 
 	e.LastInternalURL = internalURL
 	e.LastPublicURL = publicURL
+	e.LastVersion = version
 	if !e.Approved {
 		// Not yet approved: keep re-pinning the latest fingerprint so the operator
 		// approves whatever the streamer is currently presenting.

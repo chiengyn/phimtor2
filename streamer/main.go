@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// version identifies this build on the admin Streamers dashboard. Overridden at
+// build time via -ldflags "-X main.version=..." (see Dockerfile); "dev" means a
+// plain `go build`/`go run`.
+var version = "dev"
+
 func main() {
 	cfg := loadConfig()
 

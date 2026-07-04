@@ -78,7 +78,11 @@ Flat single `main` package, mirroring `streamer/`.
   - **Registration**: `POST /api/instances/register` is gated by the shared
     `MANAGER_REGISTER_TOKEN` and then runs the enrollment `verify` (approved →
     `{sessionToken}`; pending → `403 {status:pending}`; fingerprint mismatch →
-    `401`). `POST /api/instances/{heartbeat,deregister}` are gated instead by the
+    `401`). The payload also carries the streamer's self-reported `version` +
+    `settings`, stored opaquely on the `Instance` (`InstanceMeta`, refreshed on
+    every register) and surfaced by `/admin/instances`; the version is also
+    recorded on the enrollment (`LastVersion`) so a still-pending streamer's
+    build is visible before approval. `POST /api/instances/{heartbeat,deregister}` are gated instead by the
     per-instance `sessionToken` (validated in-handler — they can't share the join
     token's group).
   - **Control** (`MANAGER_INTERNAL_TOKEN`): `POST /api/torrents` (place + add →

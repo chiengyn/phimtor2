@@ -105,6 +105,34 @@ func loadConfig() Config {
 	return cfg
 }
 
+// reportedSettings is the operational configuration this streamer self-reports
+// to the manager on register, for display on the admin Streamers dashboard. The
+// manager treats it as opaque JSON, so adding a setting here is enough for it to
+// reach the UI. Only the knobs relevant to the active storage mode are included,
+// so the dashboard doesn't show a cache budget for a mode that has none.
+func (c Config) reportedSettings() map[string]any {
+	s := map[string]any{
+		"storageMode":     c.StorageMode,
+		"readaheadMB":     c.ReadaheadMB,
+		"prefixMB":        c.PrefixMB,
+		"suffixMB":        c.SuffixMB,
+		"maxConns":        c.MaxConns,
+		"idleTTLMin":      c.IdleTTLMin,
+		"stallTimeoutSec": c.StallTimeoutSec,
+		"maxUnverifiedMB": c.MaxUnverifiedMB,
+	}
+	switch c.StorageMode {
+	case StorageModeDownloadAll:
+		s["keepBehindMB"] = c.KeepBehindMB
+	case StorageModeCappedSQLite:
+		s["cacheMB"] = c.CacheMB
+	default: // prefix-cache
+		s["cacheMB"] = c.CacheMB
+		s["retainHot"] = c.RetainHot
+	}
+	return s
+}
+
 // defaultInstanceID gives each streamer a stable-ish identity when
 // STREAMER_INSTANCE_ID is unset. The hostname is unique per container under
 // Kamal/Docker, which is enough for the manager to key its registry.

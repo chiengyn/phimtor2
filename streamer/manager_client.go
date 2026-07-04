@@ -40,6 +40,12 @@ type registerPayload struct {
 	InternalURL  string `json:"internalURL,omitempty"`
 	PublicURL    string `json:"publicURL,omitempty"`
 	ControlToken string `json:"controlToken,omitempty"`
+
+	// Version and Settings are self-reported for the admin Streamers dashboard.
+	// Register-only (heartbeats stay minimal): they can't change without a
+	// restart, and a restart always re-registers.
+	Version  string         `json:"version,omitempty"`
+	Settings map[string]any `json:"settings,omitempty"`
 }
 
 func newManagerClient(cfg Config, controlToken string) *managerClient {
@@ -94,6 +100,8 @@ func (m *managerClient) register() bool {
 		InternalURL:  m.cfg.AdvertiseInternalURL,
 		PublicURL:    m.cfg.AdvertisePublicURL,
 		ControlToken: m.controlToken,
+		Version:      version,
+		Settings:     m.cfg.reportedSettings(),
 	}
 	buf, err := json.Marshal(body)
 	if err != nil {

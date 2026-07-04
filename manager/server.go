@@ -122,6 +122,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		InternalURL  string `json:"internalURL"`
 		PublicURL    string `json:"publicURL"`
 		ControlToken string `json:"controlToken"`
+
+		// Self-reported build/config, passed through to the admin dashboard.
+		Version  string         `json:"version"`
+		Settings map[string]any `json:"settings"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
 		writeError(w, http.StatusBadRequest, "id, internalURL, publicURL, controlToken required")
@@ -132,9 +136,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch s.reg.enroll.verify(body.ID, body.ControlToken, body.InternalURL, body.PublicURL) {
+	switch s.reg.enroll.verify(body.ID, body.ControlToken, body.InternalURL, body.PublicURL, body.Version) {
 	case verifyApproved:
-		sessionToken := s.reg.Register(body.ID, body.InternalURL, body.PublicURL, body.ControlToken)
+		sessionToken := s.reg.Register(body.ID, body.InternalURL, body.PublicURL, body.ControlToken,
+			&InstanceMeta{Version: body.Version, Settings: body.Settings})
 		writeJSON(w, http.StatusOK, map[string]string{"sessionToken": sessionToken})
 	case verifyMismatch:
 		// An approved id presented a different identity than the pinned one.
@@ -313,6 +318,8 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		InternalURL string         `json:"internalURL"`
 		PublicURL   string         `json:"publicURL"`
 		Healthy     bool           `json:"healthy"`
+		Version     string         `json:"version,omitempty"`
+		Settings    map[string]any `json:"settings,omitempty"`
 		Torrents    []torrentEntry `json:"torrents"`
 	}
 	out := []instanceStatus{}
@@ -323,6 +330,10 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 			PublicURL:   in.PublicURL,
 			Healthy:     in.healthy(s.reg.ttl),
 			Torrents:    []torrentEntry{},
+		}
+		if meta := in.meta(); meta != nil {
+			st.Version = meta.Version
+			st.Settings = meta.Settings
 		}
 		if st.Healthy {
 			if torrents, err := s.reg.listTorrents(r.Context(), in); err == nil {

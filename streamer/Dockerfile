@@ -11,10 +11,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Build a static binary.
+# Build a static binary. VERSION is baked in and self-reported to the manager
+# on register (shown on the admin Streamers dashboard); CI passes the image tag
+# + commit SHA, a local `docker build` defaults to "dev".
+ARG VERSION=dev
 COPY . .
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-RUN go build -trimpath -ldflags="-s -w" -o /out/phimtor2 .
+RUN go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/phimtor2 .
 
 # Pre-create the data dir owned by the distroless nonroot uid (65532),
 # since the static runtime image has no shell/mkdir.

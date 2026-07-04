@@ -27,6 +27,11 @@ type Instance struct {
 
 	lastSeen atomic.Int64 // unix nano of the last register/heartbeat
 
+	// selfReport is what the streamer said about itself on its last register
+	// (build version + operational settings), displayed on the admin Streamers
+	// dashboard. Atomic because registers and dashboard reads race.
+	selfReport atomic.Pointer[InstanceMeta]
+
 	// egressSpeed is the streamer's last-polled viewer egress rate in bytes/sec
 	// (HTTP bytes served to browsers, refreshed by the registry's reconcile loop),
 	// the signal the least-bandwidth placer minimizes.
@@ -34,6 +39,18 @@ type Instance struct {
 
 	http *http.Client
 }
+
+// InstanceMeta is a streamer's self-reported build version and operational
+// settings, sent in its register payload. The manager never interprets the
+// settings — they pass through opaquely to the admin dashboard, so a new
+// streamer setting needs no manager change to become visible.
+type InstanceMeta struct {
+	Version  string
+	Settings map[string]any
+}
+
+func (in *Instance) setMeta(m *InstanceMeta) { in.selfReport.Store(m) }
+func (in *Instance) meta() *InstanceMeta     { return in.selfReport.Load() }
 
 func (in *Instance) setEgress(bytesPerSec int64) { in.egressSpeed.Store(bytesPerSec) }
 

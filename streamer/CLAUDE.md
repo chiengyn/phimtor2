@@ -30,7 +30,13 @@ register with a manager — there is no standalone mode. On first boot it
 loads-or-generates a persistent identity token at `<DATA_DIR>/identity` (the
 `controlToken`), then registers (advertising `STREAMER_ADVERTISE_INTERNAL_URL` /
 `STREAMER_ADVERTISE_PUBLIC_URL` under `STREAMER_INSTANCE_ID`, gated by the shared
-`MANAGER_REGISTER_TOKEN`, sending the `controlToken` in the body). An unknown
+`MANAGER_REGISTER_TOKEN`, sending the `controlToken` in the body). The register
+payload also self-reports the build **version** (`var version` in `main.go`,
+baked via `-ldflags -X main.version=…` — the Dockerfile's `VERSION` build arg,
+set by CI to the image tag + commit SHA; "dev" for local builds) and a
+**settings** map (`Config.reportedSettings`: storage mode plus the knobs relevant
+to it) for the admin Streamers dashboard. The manager passes settings through
+opaquely, so adding a key there is all it takes to surface a new setting. An unknown
 streamer is parked **pending** until an operator approves it in the admin Streamers
 dashboard (the manager pins the controlToken's fingerprint on approval); until then
 register returns `403` and the streamer retries. Once approved it stores the

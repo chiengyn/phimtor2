@@ -39,17 +39,22 @@ func NewRegistry(cfg Config, enroll *EnrollmentStore) *Registry {
 // session token the streamer must present on heartbeat/deregister. Re-registering
 // with the same URLs and control token keeps the existing session token (so a
 // heartbeat in flight stays valid); anything changed mints a fresh instance.
-func (r *Registry) Register(id, internalURL, publicURL, controlToken string) string {
+// meta is the streamer's self-reported version/settings, refreshed on every
+// register either way (a redeploy re-registers with the same URLs and token but
+// a new build).
+func (r *Registry) Register(id, internalURL, publicURL, controlToken string, meta *InstanceMeta) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if in, ok := r.instances[id]; ok &&
 		in.InternalURL == trimSlash(internalURL) &&
 		in.PublicURL == trimSlash(publicURL) &&
 		in.ControlToken == controlToken {
+		in.setMeta(meta)
 		in.touch()
 		return in.SessionToken
 	}
 	in := newInstance(id, internalURL, publicURL, controlToken, r.fwdTimeout)
+	in.setMeta(meta)
 	r.instances[id] = in
 	log.Printf("instance registered: %s (internal=%s public=%s)", id, internalURL, publicURL)
 	return in.SessionToken
