@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -71,6 +72,12 @@ func NewEnrollmentStore(stateDir string) (*EnrollmentStore, error) {
 	if err := s.load(); err != nil {
 		return nil, err
 	}
+	// Prove the state dir is writable now, so an unwritable volume (e.g. a
+	// root-owned mount under a nonroot container) fails the boot loudly instead
+	// of silently keeping approvals in memory only.
+	if err := s.flush(); err != nil {
+		return nil, fmt.Errorf("enrollment state dir %s is not writable: %w", stateDir, err)
+	}
 	return s, nil
 }
 
@@ -94,7 +101,10 @@ func (s *EnrollmentStore) load() error {
 }
 
 // flush writes the whole map to disk via a temp file + atomic rename. The caller
-// must hold at least a read lock.
+// must hold at least a read lock. Failures are logged here because every caller
+// discards the error: a silent flush failure (e.g. an unwritable state dir)
+// means approvals only exist in memory and are lost on restart — that must at
+// least be visible in the logs.
 func (s *EnrollmentStore) flush() error {
 	list := make([]*Enrollment, 0, len(s.set))
 	for _, e := range s.set {
@@ -102,13 +112,19 @@ func (s *EnrollmentStore) flush() error {
 	}
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
+		log.Printf("ERROR: persist enrollments: marshal: %v (approvals are NOT saved)", err)
 		return err
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("ERROR: persist enrollments to %s: %v (approvals are NOT saved and will be lost on restart)", s.path, err)
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		log.Printf("ERROR: persist enrollments to %s: %v (approvals are NOT saved and will be lost on restart)", s.path, err)
+		return err
+	}
+	return nil
 }
 
 // verify checks a presented control token against the enrollment for id. An
