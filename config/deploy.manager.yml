@@ -61,5 +61,10 @@ env:
 
 # Persist the streamer enrollment allow-list (<MANAGER_STATE_DIR>/enrollments.json)
 # so operator approvals survive redeploys.
+#
+# Renamed from phimtor2_manager_data: that volume was created root-owned (the
+# old image didn't own /data for the nonroot uid), so flushes always failed and
+# it holds nothing. A fresh volume inherits the fixed image's /data ownership on
+# first use. The old volume is empty and can be pruned.
 volumes:
-  - "phimtor2_manager_data:/data"
+  - "phimtor2_manager_state:/data"
