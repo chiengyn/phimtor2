@@ -33,12 +33,13 @@ func main() {
 	}
 
 	manager, err := NewTorrentManager(StorageConfig{
-		Mode:        cfg.StorageMode,
-		DataDir:     cfg.DataDir,
-		PrefixBytes: int64(cfg.PrefixMB) << 20,
-		SuffixBytes: int64(cfg.SuffixMB) << 20,
-		CacheBytes:  int64(cfg.CacheMB) << 20,
-		RetainHot:   cfg.RetainHot,
+		Mode:            cfg.StorageMode,
+		DataDir:         cfg.DataDir,
+		PrefixBytes:     int64(cfg.PrefixMB) << 20,
+		SuffixBytes:     int64(cfg.SuffixMB) << 20,
+		CacheBytes:      int64(cfg.CacheMB) << 20,
+		RetainHot:       cfg.RetainHot,
+		KeepBehindBytes: int64(cfg.KeepBehindMB) << 20,
 	}, int64(cfg.ReadaheadMB)<<20, cfg.MaxConns, time.Duration(cfg.IdleTTLMin)*time.Minute, int64(cfg.MaxUnverifiedMB)<<20, time.Duration(cfg.StallTimeoutSec)*time.Second)
 	if err != nil {
 		log.Fatalf("create torrent manager: %v", err)

@@ -90,6 +90,14 @@ type TorrentManager struct {
 	prefixBytes int64
 	suffixBytes int64
 
+	// eager (download-all mode) makes every add DownloadAll() once metadata
+	// arrives, banking the whole file while the swarm is still alive; sweeper +
+	// keepBehindBytes drive the watched-piece sweep that reclaims the space
+	// behind viewers (see runWatchedSweeper in reaper.go).
+	eager           bool
+	sweeper         watchedSweeper // nil unless the backend sweeps watched pieces
+	keepBehindBytes int64
+
 	// activeReaders counts streaming readers currently open across all torrents,
 	// used to scale per-reader readahead down under load (readaheadFor).
 	activeReaders atomic.Int64
@@ -160,24 +168,31 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 	}
 
 	m := &TorrentManager{
-		client:      client,
-		storageImpl: storageImpl,
-		torrents:    make(map[string]*torrent.Torrent),
-		readahead:   readaheadBytes,
-		prefixBytes: storageCfg.PrefixBytes,
-		suffixBytes: storageCfg.SuffixBytes,
-		idleTTL:      idleTTL,
-		stallTimeout: stallTimeout,
-		activity:     make(map[string]*torrentActivity),
-		samples:      make(map[string]rateSample),
+		client:          client,
+		storageImpl:     storageImpl,
+		torrents:        make(map[string]*torrent.Torrent),
+		readahead:       readaheadBytes,
+		prefixBytes:     storageCfg.PrefixBytes,
+		suffixBytes:     storageCfg.SuffixBytes,
+		eager:           storageCfg.Mode == StorageModeDownloadAll,
+		keepBehindBytes: storageCfg.KeepBehindBytes,
+		idleTTL:         idleTTL,
+		stallTimeout:    stallTimeout,
+		activity:        make(map[string]*torrentActivity),
+		samples:         make(map[string]rateSample),
 	}
-	// Only the prefix-cache backend tracks reader positions; capped-sqlite does not.
+	// Only the prefix-cache and download-all backends track reader positions;
+	// capped-sqlite does not.
 	if rt, ok := storageImpl.(readerTracker); ok {
 		m.tracker = rt
 	}
-	// Start the background reaper (idle torrents) and stall checker (dead-swarm
-	// torrents a viewer is waiting on). They share one stop channel.
-	if idleTTL > 0 || stallTimeout > 0 {
+	if ws, ok := storageImpl.(watchedSweeper); ok {
+		m.sweeper = ws
+	}
+	// Start the background reaper (idle torrents), stall checker (dead-swarm
+	// torrents a viewer is waiting on) and watched-piece sweeper (download-all
+	// mode). They share one stop channel.
+	if idleTTL > 0 || stallTimeout > 0 || m.sweeper != nil {
 		m.bgDone = make(chan struct{})
 	}
 	if idleTTL > 0 {
@@ -185,6 +200,9 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 	}
 	if stallTimeout > 0 {
 		go m.runStallChecker()
+	}
+	if m.sweeper != nil {
+		go m.runWatchedSweeper()
 	}
 	return m, nil
 }
@@ -208,6 +226,25 @@ func (m *TorrentManager) pinPrefixPieces(t *torrent.Torrent) {
 	for _, idx := range videoFileStartPieces(info) {
 		t.Piece(idx).SetPriority(torrent.PiecePriorityNow)
 	}
+}
+
+// watchOnInfo waits for a just-added torrent's metadata, then pins the pieces
+// playback blocks on first and — in download-all mode — asks the client for the
+// entire torrent. Downloading everything up front is deliberate: swarms decay,
+// and by the time a viewer reaches the later parts of a long file the seeders
+// that had those pieces may be gone. Banking the file while they're still
+// around decouples playback from swarm health; the watched-piece sweep reclaims
+// the disk behind viewers. (After a restart a re-added torrent re-wants any
+// already-swept pieces too — a little bandwidth wasted re-banking watched data,
+// accepted to keep sweep state out of the picture.)
+func (m *TorrentManager) watchOnInfo(t *torrent.Torrent) {
+	go func() {
+		<-t.GotInfo()
+		m.pinPrefixPieces(t)
+		if m.eager {
+			t.DownloadAll()
+		}
+	}()
 }
 
 // PrioritizeSeek raises a window of pieces at byteOffset within a file to High so
@@ -257,10 +294,7 @@ func (m *TorrentManager) AddMagnet(magnetURI string) (string, error) {
 	m.mu.Unlock()
 	m.touchActivity(infoHash) // start the idle clock from when it was added
 
-	go func() {
-		<-t.GotInfo()
-		m.pinPrefixPieces(t)
-	}()
+	m.watchOnInfo(t)
 
 	return infoHash, nil
 }
@@ -283,10 +317,7 @@ func (m *TorrentManager) AddTorrentFile(r io.Reader) (string, error) {
 	m.mu.Unlock()
 	m.touchActivity(infoHash) // start the idle clock from when it was added
 
-	go func() {
-		<-t.GotInfo()
-		m.pinPrefixPieces(t)
-	}()
+	m.watchOnInfo(t)
 
 	return infoHash, nil
 }

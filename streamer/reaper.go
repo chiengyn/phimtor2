@@ -101,6 +101,72 @@ func (m *TorrentManager) reapIdle(now time.Time) {
 	}
 }
 
+// watchedSweepInterval paces the watched-piece sweep (download-all mode). A
+// sweep pass is cheap (map scans + unlinks), and half a minute of extra
+// already-watched data on disk is noise next to KEEP_BEHIND_MB.
+const watchedSweepInterval = 30 * time.Second
+
+// runWatchedSweeper is download-all mode's space reclaimer: DownloadAll banks
+// whole files to disk, and this loop deletes the pieces every active viewer has
+// already played. Torrents with no viewers are left untouched — nothing of
+// theirs is "watched", and their fate belongs to the idle reaper. Stops when
+// bgDone is closed.
+func (m *TorrentManager) runWatchedSweeper() {
+	t := time.NewTicker(watchedSweepInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-m.bgDone:
+			return
+		case <-t.C:
+			m.sweepWatched()
+		}
+	}
+}
+
+// sweepWatched is one sweep pass. For each torrent with viewers it deletes
+// complete pieces that fall keepBehindBytes behind the *earliest* playhead —
+// never the pinned prefix/suffix, so a late joiner still starts instantly. The
+// pieces are cancelled on the torrent before the storage deletes them: the
+// client still believes they're complete (it only re-checks completion when a
+// read fails), and cancelling ensures that when it does find out, DownloadAll's
+// want-everything priority doesn't make it immediately re-fetch what we just
+// reclaimed. A viewer seeking back below the cutoff re-downloads on demand via
+// the capped-storage read recovery.
+func (m *TorrentManager) sweepWatched() {
+	m.mu.RLock()
+	torrents := make(map[string]*torrent.Torrent, len(m.torrents))
+	for ih, t := range m.torrents {
+		torrents[ih] = t
+	}
+	m.mu.RUnlock()
+
+	for ih, t := range torrents {
+		info := t.Info()
+		if info == nil || info.PieceLength <= 0 {
+			continue
+		}
+		minPiece, ok := m.sweeper.MinReaderPiece(t.InfoHash())
+		if !ok {
+			continue // no viewers: the idle reaper's territory
+		}
+		keepBehindPieces := int(m.keepBehindBytes/info.PieceLength) + 1
+		cutoff := minPiece - keepBehindPieces
+		if cutoff <= 0 {
+			continue
+		}
+		t.CancelPieces(0, cutoff)
+		// CancelPieces just cleared the pinned prefix/suffix priorities in that
+		// range; restore them (idempotent, complete pieces cost nothing).
+		m.pinPrefixPieces(t)
+
+		freed, n := m.sweeper.SweepWatched(t.InfoHash(), cutoff, prefixPieceIndices(info, m.prefixBytes, m.suffixBytes))
+		if n > 0 {
+			log.Printf("swept %d watched pieces (%.1f MiB) of %s below piece %d", n, float64(freed)/(1<<20), ih, cutoff)
+		}
+	}
+}
+
 // stallProgress is the last observed download position for one torrent, used by
 // the stall checker to measure how long a watched torrent has been stuck.
 type stallProgress struct {
