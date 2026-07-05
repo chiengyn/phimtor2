@@ -70,7 +70,12 @@ env:
     MAX_UNVERIFIED_MB: 0
     # Drop a torrent a viewer is waiting on that downloads nothing with no seeders
     # for this many seconds (dead swarm), freeing its peer slot + reader. 0 disables.
-    STALL_TIMEOUT_SEC: 120
+    # Disabled for now: dropping a torrent under a blocked reader hits an
+    # anacrolix/torrent infinite-recursion bug (reader.readAt retries "torrent
+    # closed" forever when storage reports a capacity) that stack-overflows the
+    # whole process. Restore 120 once the image with the patched fork
+    # (github.com/chiengyn/torrent) is deployed — the patch makes the drop safe.
+    STALL_TIMEOUT_SEC: 0
     # --- Manager registration ---
     STREAMER_INSTANCE_ID: streamer-1
     MANAGER_URL: http://phimtor2-manager:8083

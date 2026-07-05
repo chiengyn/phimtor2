@@ -95,6 +95,17 @@ and an open reader, see `runStallChecker` in `reaper.go`). Control-plane/manager
 `STREAMER_ADVERTISE_PUBLIC_URL`. The control-plane credential is **not** an env
 var — it is the persisted `<DATA_DIR>/identity` token.
 
+**Patched torrent library.** `go.mod` replaces `github.com/anacrolix/torrent`
+with the fork `github.com/chiengyn/torrent` (branch
+`v1.61.0-reader-recursion-fix`, one commit on top of v1.61.0): upstream's
+`reader.readAt` retries failed reads by unbounded recursion whenever the
+storage reports a capacity (which `prefix-cache` and `download-all` both do),
+so a permanently-failing read — torrent closed under a blocked stream reader
+(e.g. the stall checker dropping it), cancelled context, downloads disallowed —
+recurses until **stack overflow and kills the whole process** (seen in
+production 2026-07-05). The patch bails out of the retry on those conditions.
+Drop the replace once upstream fixes it.
+
 ## Architecture
 
 Flat single `main` package. The pieces that only make sense read together:
