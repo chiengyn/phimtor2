@@ -186,6 +186,13 @@ func (p *downloadAllPiece) Completion() storage.Completion {
 	if err != nil {
 		return storage.Completion{Err: err}
 	}
+	if !c.Ok {
+		// A piece bolt has never seen is known-incomplete, not unknown: reporting
+		// unknown makes the client queue a doomed startup hash-verification of
+		// every piece against an empty disk, and each failure's MarkNotComplete
+		// races chunk writes already in flight (deleting their blob mid-piece).
+		return storage.Completion{Complete: false, Ok: true}
+	}
 	return c
 }
 
