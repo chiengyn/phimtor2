@@ -90,13 +90,12 @@ type TorrentManager struct {
 	prefixBytes int64
 	suffixBytes int64
 
-	// eager (download-all mode) makes every add DownloadAll() once metadata
-	// arrives, banking the whole file while the swarm is still alive; sweeper +
-	// keepBehindBytes drive the watched-piece sweep that reclaims the space
-	// behind viewers (see runWatchedSweeper in reaper.go).
-	eager           bool
-	sweeper         watchedSweeper // nil unless the backend sweeps watched pieces
-	keepBehindBytes int64
+	// eager (download-all mode) banks the whole video file a viewer opens to disk
+	// (File.Download() in GetFileReader) while the swarm is still alive, and keeps
+	// it — only the watched file is fetched, never the whole (possibly multi-file)
+	// torrent, and watched pieces are never swept. Idle torrents are reclaimed
+	// wholesale by the idle reaper.
+	eager bool
 
 	// activeReaders counts streaming readers currently open across all torrents,
 	// used to scale per-reader readahead down under load (readaheadFor).
@@ -175,24 +174,19 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 		prefixBytes:     storageCfg.PrefixBytes,
 		suffixBytes:     storageCfg.SuffixBytes,
 		eager:           storageCfg.Mode == StorageModeDownloadAll,
-		keepBehindBytes: storageCfg.KeepBehindBytes,
 		idleTTL:         idleTTL,
 		stallTimeout:    stallTimeout,
 		activity:        make(map[string]*torrentActivity),
 		samples:         make(map[string]rateSample),
 	}
-	// Only the prefix-cache and download-all backends track reader positions;
-	// capped-sqlite does not.
+	// Only the prefix-cache backend tracks reader positions (to protect each
+	// viewer's window from eviction); download-all and capped-sqlite do not.
 	if rt, ok := storageImpl.(readerTracker); ok {
 		m.tracker = rt
 	}
-	if ws, ok := storageImpl.(watchedSweeper); ok {
-		m.sweeper = ws
-	}
-	// Start the background reaper (idle torrents), stall checker (dead-swarm
-	// torrents a viewer is waiting on) and watched-piece sweeper (download-all
-	// mode). They share one stop channel.
-	if idleTTL > 0 || stallTimeout > 0 || m.sweeper != nil {
+	// Start the background reaper (idle torrents) and stall checker (dead-swarm
+	// torrents a viewer is waiting on). They share one stop channel.
+	if idleTTL > 0 || stallTimeout > 0 {
 		m.bgDone = make(chan struct{})
 	}
 	if idleTTL > 0 {
@@ -200,9 +194,6 @@ func NewTorrentManager(storageCfg StorageConfig, readaheadBytes int64, maxConns 
 	}
 	if stallTimeout > 0 {
 		go m.runStallChecker()
-	}
-	if m.sweeper != nil {
-		go m.runWatchedSweeper()
 	}
 	return m, nil
 }
@@ -229,21 +220,19 @@ func (m *TorrentManager) pinPrefixPieces(t *torrent.Torrent) {
 }
 
 // watchOnInfo waits for a just-added torrent's metadata, then pins the pieces
-// playback blocks on first and — in download-all mode — asks the client for the
-// entire torrent. Downloading everything up front is deliberate: swarms decay,
-// and by the time a viewer reaches the later parts of a long file the seeders
-// that had those pieces may be gone. Banking the file while they're still
-// around decouples playback from swarm health; the watched-piece sweep reclaims
-// the disk behind viewers. (After a restart a re-added torrent re-wants any
-// already-swept pieces too — a little bandwidth wasted re-banking watched data,
-// accepted to keep sweep state out of the picture.)
+// playback blocks on first so time-to-first-frame isn't gated on the rest of the
+// download. In download-all mode this pre-warm is skipped: nothing is fetched
+// until a viewer opens a file (then that whole file is banked on demand via
+// File.Download() in GetFileReader, and its header/moov are prioritized by the
+// responsive reader), so a multi-file torrent never pulls a byte of a file
+// nobody is watching.
 func (m *TorrentManager) watchOnInfo(t *torrent.Torrent) {
+	if m.eager {
+		return
+	}
 	go func() {
 		<-t.GotInfo()
 		m.pinPrefixPieces(t)
-		if m.eager {
-			t.DownloadAll()
-		}
 	}()
 }
 
@@ -497,6 +486,15 @@ func (m *TorrentManager) GetFileReader(infoHash string, fileIndex int) (io.ReadS
 	}
 
 	f := files[fileIndex]
+
+	// download-all mode: bank the whole file this viewer is watching. Only the
+	// opened file is fetched (never the rest of a multi-file torrent), and its
+	// pieces are kept until the torrent goes idle and the reaper drops it. Cheap
+	// to call again if another reader opens the same file — priority is idempotent.
+	if m.eager {
+		f.Download()
+	}
+
 	reader := f.NewReader()
 	reader.SetResponsive()
 

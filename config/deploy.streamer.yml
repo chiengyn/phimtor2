@@ -54,12 +54,13 @@ env:
     PORT: 8080
     DATA_DIR: /data
     READAHEAD_MB: 16
-    # download-all banks each torrent to disk in full while its swarm is still
-    # alive (swarms decay over a long watch), deleting already-watched pieces to
-    # reclaim space. Peak disk per torrent is the full file size — watch the
-    # /data volume. CACHE_MB only applies to prefix-cache; kept for rollback.
+    # download-all banks the whole video file a viewer opens to disk (only that
+    # file, not the rest of a multi-file torrent) while its swarm is still alive
+    # (swarms decay over a long watch), and keeps every watched piece until the
+    # idle reaper drops the torrent (IDLE_TTL_MIN). Peak disk per watched file is
+    # its full size — watch the /data volume. CACHE_MB only applies to
+    # prefix-cache; kept for rollback.
     STORAGE_MODE: download-all
-    KEEP_BEHIND_MB: 256
     PREFIX_MB: 32
     CACHE_MB: 2048
     MAX_CONNS: 50

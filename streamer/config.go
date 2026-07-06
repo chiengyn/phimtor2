@@ -18,11 +18,6 @@ type Config struct {
 	RetainHot   bool
 	IdleTTLMin  int
 
-	// KeepBehindMB is download-all mode's rewind margin: watched pieces are only
-	// deleted once they fall this many MB behind every viewer's playhead, so
-	// small back-seeks replay from disk instead of a possibly-decayed swarm.
-	KeepBehindMB int
-
 	// MaxUnverifiedMB caps in-flight/unverified bytes across ALL torrents (0 =
 	// unlimited). The library defaults this to 64 MiB, but that global budget lets
 	// one stalled torrent starve every other torrent of piece requests, so we
@@ -61,8 +56,6 @@ func loadConfig() Config {
 		CacheMB:   envInt("CACHE_MB", 2048),
 		MaxConns:  envInt("MAX_CONNS", 200),
 		RetainHot: envBool("RETAIN_HOT", false),
-		// Rewind margin for download-all mode's watched-piece sweep.
-		KeepBehindMB: envInt("KEEP_BEHIND_MB", 256),
 		// Drop torrents that go unstreamed this long, freeing disk and peer
 		// connections. 0 disables reaping (torrents stay until explicitly removed).
 		IdleTTLMin: envInt("IDLE_TTL_MIN", 30),
@@ -92,8 +85,6 @@ func loadConfig() Config {
 	flag.IntVar(&cfg.MaxConns, "max-conns", cfg.MaxConns, "Peer connections per torrent (higher fills the cache faster)")
 	flag.BoolVar(&cfg.RetainHot, "retain-hot", cfg.RetainHot,
 		"Keep every piece of a torrent that has an active viewer (trades disk for concurrent capacity)")
-	flag.IntVar(&cfg.KeepBehindMB, "keep-behind", cfg.KeepBehindMB,
-		"download-all mode: keep this many MB behind every viewer's playhead before sweeping watched pieces")
 	flag.IntVar(&cfg.IdleTTLMin, "idle-ttl", cfg.IdleTTLMin,
 		"Drop torrents unstreamed for this many minutes to free disk and peers (0 disables)")
 	flag.IntVar(&cfg.MaxUnverifiedMB, "max-unverified", cfg.MaxUnverifiedMB,
@@ -123,7 +114,8 @@ func (c Config) reportedSettings() map[string]any {
 	}
 	switch c.StorageMode {
 	case StorageModeDownloadAll:
-		s["keepBehindMB"] = c.KeepBehindMB
+		// download-all keeps whatever is watched until the idle reaper drops it;
+		// it has no cache budget or rewind margin of its own.
 	case StorageModeCappedSQLite:
 		s["cacheMB"] = c.CacheMB
 	default: // prefix-cache

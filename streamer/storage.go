@@ -15,9 +15,9 @@ const (
 	StorageModePrefixCache = "prefix-cache"
 	// StorageModeCappedSQLite uses the built-in capped sqlite storage (requires cgo).
 	StorageModeCappedSQLite = "capped-sqlite"
-	// StorageModeDownloadAll banks the whole torrent to disk the moment metadata
-	// arrives (the manager calls DownloadAll) — racing the swarm's decay — and
-	// reclaims space by deleting pieces every viewer has already watched.
+	// StorageModeDownloadAll banks the whole video file a viewer opens to disk
+	// (File.Download()) — racing the swarm's decay — and keeps every watched
+	// piece; space is reclaimed only when the idle reaper drops the torrent.
 	StorageModeDownloadAll = "download-all"
 )
 
@@ -29,11 +29,6 @@ type StorageConfig struct {
 	SuffixBytes int64 // bytes pinned at the end of each video file (MP4 moov atom)
 	CacheBytes  int64 // LRU budget for the bulk (cache / sqlite cap)
 	RetainHot   bool  // keep every piece of a torrent that has an active reader
-
-	// KeepBehindBytes is the rewind margin for download-all mode: watched pieces
-	// are only swept once they fall this many bytes behind every viewer's
-	// playhead, so small back-seeks replay from disk instead of a decayed swarm.
-	KeepBehindBytes int64
 }
 
 // torrentDropper is the optional contract a storage backend implements to free a
@@ -53,16 +48,6 @@ type readerTracker interface {
 	RegisterReader(ih metainfo.Hash) uint64
 	NoteReaderPos(ih metainfo.Hash, id uint64, pieceIndex int)
 	UnregisterReader(ih metainfo.Hash, id uint64)
-}
-
-// watchedSweeper is the optional contract a storage backend implements to
-// reclaim space from already-watched data (download-all mode). The manager's
-// sweep loop (runWatchedSweeper) reads the earliest viewer playhead, cancels
-// the range on the torrent so the client won't re-request it, then asks the
-// storage to delete those pieces.
-type watchedSweeper interface {
-	MinReaderPiece(ih metainfo.Hash) (int, bool)
-	SweepWatched(ih metainfo.Hash, cutoff int, keep map[int]bool) (freedBytes int64, pieces int)
 }
 
 // newStorage builds the storage backend selected by cfg.Mode.

@@ -12,8 +12,9 @@ A self-hosted torrent video streamer. A Go HTTP server (chi router) wraps
 from a torrent to the browser while they download. The defining feature is
 **space-saving storage** — the default `prefix-cache` mode never keeps the
 whole file on disk, while `download-all` mode inverts the trade-off: it banks
-the entire file up front (swarms decay — grab the data while seeders exist) and
-saves space by deleting pieces viewers have already watched. This service
+the whole video file a viewer opens (swarms decay — grab the data while seeders
+exist), keeps every watched piece, and reclaims space only by dropping idle
+torrents wholesale. This service
 is **backend-first** and runs as **N interchangeable instances** behind the
 [`manager/`](../manager/CLAUDE.md) control plane. It does **not** touch the
 shared MySQL catalog.
@@ -78,9 +79,7 @@ Configuration is via env vars or matching CLI flags (see `config.go`):
 (default 8; bytes pinned at the *end* of each video file — non-faststart MP4s
 keep their moov atom there and the browser range-requests it before it can render
 a frame, so pinning the tail kills a common cold-start stall), `CACHE_MB`,
-`KEEP_BEHIND_MB` (default 256; download-all mode's rewind margin — watched
-pieces are swept only once they fall this many MB behind every viewer's
-playhead), `MAX_CONNS` (peer connections per torrent, default 200), `RETAIN_HOT`
+`MAX_CONNS` (peer connections per torrent, default 200), `RETAIN_HOT`
 (default off; keep every piece of a torrent that has a viewer — trades disk for
 concurrent capacity), `IDLE_TTL_MIN` (default 30; drop torrents unstreamed
 for this many minutes, 0 disables), `MAX_UNVERIFIED_MB` (default 0 =
@@ -161,25 +160,23 @@ Flat single `main` package. The pieces that only make sense read together:
     CGO.** Selected via a build-tag pair: `storage_sqlite.go` (`//go:build cgo`)
     vs `storage_sqlite_stub.go` (`//go:build !cgo`, returns an error). A non-CGO
     build silently lacks this mode.
-  - `download-all` — the "bank first, sweep behind" backend
+  - `download-all` — the "keep what's watched" backend
     (`storage_downloadall.go`), built because swarms decay: prefix-cache only
     fetches a window around each playhead, and on a long watch the seeders
     holding the later pieces may leave before they're ever requested. In this
-    mode the manager calls **`t.DownloadAll()`** as soon as metadata arrives
-    (`watchOnInfo` in `torrent.go`), racing the whole file onto disk while the
-    swarm is alive — one blob per piece under `<DATA_DIR>/full` with bolt
-    completion, **persistent across restarts** (nothing wiped on startup).
-    Space is reclaimed from the other end by the **watched-piece sweeper**
-    (`runWatchedSweeper` in `reaper.go`, 30s cadence): pieces that have fallen
-    `KEEP_BEHIND_MB` behind *every* active viewer's playhead (never the pinned
-    prefix/suffix) are `CancelPieces`d on the torrent, then deleted and marked
-    incomplete by the storage (`SweepWatched`, via the `watchedSweeper`
-    interface in `storage.go`). Torrents with no viewers are never swept —
-    they're the idle reaper's job. A huge `Capacity` (1 PiB) is reported not to
-    throttle but so the client treats vanished pieces as evicted and re-checks
-    completion on a failed read: a viewer seeking back below the sweep cutoff
-    re-downloads from the swarm on demand instead of killing the stream. Peak
-    disk per torrent is the full file size; `CACHE_MB`/`RETAIN_HOT` don't apply.
+    mode, when a viewer opens a file the manager calls **`File.Download()`**
+    (`GetFileReader` in `torrent.go`), racing that whole file — and only that
+    file, never the rest of a multi-file torrent — onto disk while the swarm is
+    alive. One blob per piece under `<DATA_DIR>/full` with bolt completion,
+    **persistent across restarts** (nothing wiped on startup). Watched pieces are
+    **never deleted behind the playhead**, so seeking back replays from disk with
+    no re-download. Space is reclaimed only when the **idle reaper**
+    (`IDLE_TTL_MIN`) drops a torrent with no viewers — `DropTorrent` deletes all
+    its blobs at once. A huge `Capacity` (1 PiB) is still reported, not to
+    throttle but so the client treats a *vanished* blob (e.g. lost to a crash
+    mid-write) as evicted and re-downloads it on a failed read instead of killing
+    the stream. Peak disk per watched file is its full size;
+    `CACHE_MB`/`RETAIN_HOT` don't apply.
 
 - **`prefixPieceIndices`** (`storage.go`) is the shared contract between the two
   worlds above: the manager uses it to set piece *priority*, and the prefix-cache

@@ -14,29 +14,28 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-// downloadAllStorage is the "bank first, sweep behind" backend
+// downloadAllStorage is the "keep what's watched" backend
 // (STORAGE_MODE=download-all). It exists because torrent swarms decay: the
 // prefix-cache backend only ever fetches a window around each playhead, and by
 // the time a viewer reaches the later parts of a long movie the seeders that had
-// those pieces may be gone. This backend instead lets the manager DownloadAll()
-// the moment metadata arrives — racing the whole file onto disk while the swarm
-// is still alive — and reclaims space from the *other* end: a background sweep
-// (see runWatchedSweeper) deletes pieces that every active viewer has already
-// played, since those are the bytes least likely to be needed again.
+// those pieces may be gone. This backend instead banks the whole file a viewer
+// is watching (the manager calls File.Download() when a stream opens — see
+// GetFileReader) while the swarm is still alive, and then simply keeps it all:
 //
-//   - Everything is stored, nothing is budget-evicted: one blob file per piece
+//   - Everything watched is stored, nothing is evicted: one blob file per piece
 //     under <DATA_DIR>/full/<infohash>/<index>, with completion persisted in a
-//     bolt DB so banked data survives restarts (the swarm may not).
-//   - Space is reclaimed by SweepWatched: pieces behind every reader's playhead
-//     (minus a rewind margin, and never the pinned prefix/suffix) are deleted
-//     and marked incomplete. The manager cancels those pieces on the torrent
-//     first so the client doesn't immediately re-download them.
+//     bolt DB so banked data survives restarts (the swarm may not). Watched
+//     pieces are never deleted behind the playhead — a viewer can seek back with
+//     no re-download.
+//   - Space is reclaimed only when a torrent goes idle: the idle reaper drops it
+//     (DropTorrent) after IDLE_TTL_MIN with no viewers, deleting the whole
+//     torrent's blobs at once.
 //   - A (huge) Capacity is still reported: not to throttle — the value is
-//     effectively infinite so DownloadAll is never cut off — but because a
-//     capped storage is what makes the client treat vanished data as evicted
-//     and re-check completion on a failed read (see reader.go readAt recovery).
-//     A viewer seeking back into a swept region therefore re-downloads from the
-//     swarm instead of killing the stream — the accepted trade-off of sweeping.
+//     effectively infinite so downloads are never cut off — but because a capped
+//     storage is what makes the client treat a vanished blob (e.g. lost to a
+//     crash mid-write) as evicted and re-check completion on a failed read (see
+//     reader.go readAt recovery), re-downloading it instead of killing the
+//     stream.
 type downloadAllStorage struct {
 	dir        string
 	completion storage.PieceCompletion // persistent (bolt)
@@ -46,20 +45,18 @@ type downloadAllStorage struct {
 
 	capFunc func() (int64, bool)
 
-	mu           sync.Mutex
-	resident     map[metainfo.PieceKey]int64 // complete on-disk pieces -> size
-	nextReaderID uint64
-	// readers tracks every active reader's latest read piece index per torrent —
-	// the sweep deletes only behind the *minimum* of these, so no viewer ever has
-	// pieces removed ahead of (or near behind) their playhead.
-	readers map[metainfo.Hash]map[uint64]int
+	// numPieces records each open torrent's piece count so DropTorrent can clear
+	// its bolt completion entries (a re-add must re-download, not trust completion
+	// for blobs we are about to delete).
+	mu        sync.Mutex
+	numPieces map[metainfo.Hash]int
 }
 
 // downloadAllCapacity is the Capacity reported to the torrent client. It only
-// needs to be "capped" (so vanished pieces are gracefully re-downloaded) while
-// never actually limiting requests — DownloadAll must be free to fetch entire
-// torrents. 1 PiB is unreachable in practice and safely far from overflowing
-// the client's budget arithmetic.
+// needs to be "capped" (so a vanished piece is gracefully re-downloaded) while
+// never actually limiting requests — a watched file must be free to download in
+// full. 1 PiB is unreachable in practice and safely far from overflowing the
+// client's budget arithmetic.
 const downloadAllCapacity int64 = 1 << 50
 
 func newDownloadAllStorage(cfg StorageConfig) (storage.ClientImplCloser, error) {
@@ -82,8 +79,7 @@ func newDownloadAllStorage(cfg StorageConfig) (storage.ClientImplCloser, error) 
 	s := &downloadAllStorage{
 		dir:        dir,
 		completion: completion,
-		resident:   make(map[metainfo.PieceKey]int64),
-		readers:    make(map[metainfo.Hash]map[uint64]int),
+		numPieces:  make(map[metainfo.Hash]int),
 		fds:        newFDCache(256),
 	}
 	s.capFunc = func() (int64, bool) { return downloadAllCapacity, true }
@@ -101,20 +97,14 @@ func (s *downloadAllStorage) Close() error {
 // trusting completion for blobs we are about to delete.
 func (s *downloadAllStorage) DropTorrent(ih metainfo.Hash) error {
 	s.mu.Lock()
-	var keys []metainfo.PieceKey
-	for key := range s.resident {
-		if key.InfoHash == ih {
-			delete(s.resident, key)
-			keys = append(keys, key)
-		}
-	}
-	delete(s.readers, ih)
+	n := s.numPieces[ih]
+	delete(s.numPieces, ih)
 	s.mu.Unlock()
 
 	dir := filepath.Join(s.dir, ih.HexString())
 	s.fds.dropPrefix(dir + string(os.PathSeparator))
-	for _, key := range keys {
-		_ = s.completion.Set(key, false)
+	for idx := 0; idx < n; idx++ {
+		_ = s.completion.Set(metainfo.PieceKey{InfoHash: ih, Index: idx}, false)
 	}
 	return os.RemoveAll(dir)
 }
@@ -128,14 +118,12 @@ func (s *downloadAllStorage) OpenTorrent(
 		return storage.TorrentImpl{}, err
 	}
 
-	// Reconcile resident bookkeeping from persisted completion (after a restart
-	// the blobs are still on disk and must not be re-downloaded or re-counted).
-	for idx := 0; idx < info.NumPieces(); idx++ {
-		key := metainfo.PieceKey{InfoHash: infoHash, Index: idx}
-		if c, err := s.completion.Get(key); err == nil && c.Ok && c.Complete {
-			s.addResident(key, info.Piece(idx).Length())
-		}
-	}
+	// Record the piece count so DropTorrent can clear this torrent's completion
+	// entries. (After a restart the blobs and their completion are still on disk
+	// and are trusted as-is — nothing is re-downloaded or re-counted.)
+	s.mu.Lock()
+	s.numPieces[infoHash] = info.NumPieces()
+	s.mu.Unlock()
 
 	t := &downloadAllTorrent{s: s, ih: infoHash}
 	return storage.TorrentImpl{
@@ -154,16 +142,14 @@ type downloadAllTorrent struct {
 
 func (t *downloadAllTorrent) Piece(p metainfo.Piece) storage.PieceImpl {
 	return &downloadAllPiece{
-		s:      t.s,
-		key:    metainfo.PieceKey{InfoHash: t.ih, Index: p.Index()},
-		length: p.Length(),
+		s:   t.s,
+		key: metainfo.PieceKey{InfoHash: t.ih, Index: p.Index()},
 	}
 }
 
 type downloadAllPiece struct {
-	s      *downloadAllStorage
-	key    metainfo.PieceKey
-	length int64
+	s   *downloadAllStorage
+	key metainfo.PieceKey
 }
 
 func (p *downloadAllPiece) path() string { return p.s.blobPath(p.key) }
@@ -197,11 +183,7 @@ func (p *downloadAllPiece) Completion() storage.Completion {
 }
 
 func (p *downloadAllPiece) MarkComplete() error {
-	if err := p.s.completion.Set(p.key, true); err != nil {
-		return err
-	}
-	p.s.addResident(p.key, p.length)
-	return nil
+	return p.s.completion.Set(p.key, true)
 }
 
 func (p *downloadAllPiece) MarkNotComplete() error {
@@ -209,7 +191,6 @@ func (p *downloadAllPiece) MarkNotComplete() error {
 	if err := os.Remove(p.path()); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	p.s.removeResident(p.key)
 	return p.s.completion.Set(p.key, false)
 }
 
@@ -217,106 +198,4 @@ func (p *downloadAllPiece) MarkNotComplete() error {
 
 func (s *downloadAllStorage) blobPath(key metainfo.PieceKey) string {
 	return filepath.Join(s.dir, key.InfoHash.HexString(), strconv.Itoa(key.Index))
-}
-
-func (s *downloadAllStorage) addResident(key metainfo.PieceKey, size int64) {
-	s.mu.Lock()
-	s.resident[key] = size
-	s.mu.Unlock()
-}
-
-func (s *downloadAllStorage) removeResident(key metainfo.PieceKey) {
-	s.mu.Lock()
-	delete(s.resident, key)
-	s.mu.Unlock()
-}
-
-// ---- readerTracker (same contract as the prefix-cache backend) ----
-
-func (s *downloadAllStorage) RegisterReader(ih metainfo.Hash) uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.nextReaderID++
-	id := s.nextReaderID
-	m := s.readers[ih]
-	if m == nil {
-		m = make(map[uint64]int)
-		s.readers[ih] = m
-	}
-	// Assume the file's first piece until the first read: a just-joined viewer
-	// must freeze the sweep at position 0, not let it delete under them.
-	m[id] = 0
-	return id
-}
-
-func (s *downloadAllStorage) NoteReaderPos(ih metainfo.Hash, id uint64, pieceIndex int) {
-	s.mu.Lock()
-	if m := s.readers[ih]; m != nil {
-		if _, ok := m[id]; ok {
-			m[id] = pieceIndex
-		}
-	}
-	s.mu.Unlock()
-}
-
-func (s *downloadAllStorage) UnregisterReader(ih metainfo.Hash, id uint64) {
-	s.mu.Lock()
-	if m := s.readers[ih]; m != nil {
-		delete(m, id)
-		if len(m) == 0 {
-			delete(s.readers, ih)
-		}
-	}
-	s.mu.Unlock()
-}
-
-// ---- watchedSweeper ----
-
-// MinReaderPiece returns the earliest playhead among the torrent's active
-// readers, or false when it has none (with no viewers nothing is "watched", so
-// the sweep leaves the banked file alone and the idle reaper decides its fate).
-func (s *downloadAllStorage) MinReaderPiece(ih metainfo.Hash) (int, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	m := s.readers[ih]
-	if len(m) == 0 {
-		return 0, false
-	}
-	min := -1
-	for _, pos := range m {
-		if min == -1 || pos < min {
-			min = pos
-		}
-	}
-	return min, true
-}
-
-// SweepWatched deletes every resident piece of ih strictly below cutoff, except
-// those in keep (the pinned prefix/suffix). The caller must have already
-// cancelled the range on the torrent so the client doesn't re-request the
-// pieces it is told (on its next completion re-check) are gone. Completion is
-// flipped before the blob is removed so a crash between the two can never leave
-// a piece recorded complete with its data missing.
-func (s *downloadAllStorage) SweepWatched(ih metainfo.Hash, cutoff int, keep map[int]bool) (freedBytes int64, pieces int) {
-	s.mu.Lock()
-	var victims []metainfo.PieceKey
-	for key, size := range s.resident {
-		if key.InfoHash != ih || key.Index >= cutoff || keep[key.Index] {
-			continue
-		}
-		victims = append(victims, key)
-		freedBytes += size
-		delete(s.resident, key)
-	}
-	s.mu.Unlock()
-
-	for _, k := range victims {
-		_ = s.completion.Set(k, false)
-		path := s.blobPath(k)
-		s.fds.drop(path)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			_ = err // best effort: the blob may already be gone
-		}
-	}
-	return freedBytes, len(victims)
 }
