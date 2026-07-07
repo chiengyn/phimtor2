@@ -463,6 +463,146 @@ func (s *Store) DeleteTitle(ctx context.Context, id int64) (bool, error) {
 	return n > 0, err
 }
 
+// ListFeatured returns the hand-picked hero-billboard titles in display order
+// (position ascending). Joined to titles so a title deleted out from under the
+// featured row simply drops out.
+func (s *Store) ListFeatured(ctx context.Context) ([]TitleSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id, t.tmdb_id, t.type, t.title, t.original_title, t.air_date, t.poster_path
+		FROM featured_titles f
+		JOIN titles t ON t.id = f.title_id
+		ORDER BY f.position ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TitleSummary
+	for rows.Next() {
+		var t TitleSummary
+		var air sql.NullTime
+		var poster, orig sql.NullString
+		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &orig, &air, &poster); err != nil {
+			return nil, err
+		}
+		t.OriginalTitle = orig.String
+		t.AirDate = dateStr(air)
+		t.PosterPath = poster.String
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SearchFeaturable returns titles matching q that are NOT already featured, for
+// the "add to featured" picker. Newest first, capped at limit.
+func (s *Store) SearchFeaturable(ctx context.Context, q string, limit int) ([]TitleSummary, error) {
+	where, args := titleSearchWhere(q)
+	clause := " WHERE"
+	if where != "" {
+		clause = where + " AND"
+	}
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, tmdb_id, type, title, original_title, air_date, poster_path
+		FROM titles`+clause+` id NOT IN (SELECT title_id FROM featured_titles)
+		ORDER BY updated_at DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TitleSummary
+	for rows.Next() {
+		var t TitleSummary
+		var air sql.NullTime
+		var poster, orig sql.NullString
+		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &orig, &air, &poster); err != nil {
+			return nil, err
+		}
+		t.OriginalTitle = orig.String
+		t.AirDate = dateStr(air)
+		t.PosterPath = poster.String
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// AddFeatured appends a title to the featured list at the next position. It is
+// idempotent: featuring an already-featured title leaves it (and its position)
+// untouched. The FK rejects a title id that does not exist.
+func (s *Store) AddFeatured(ctx context.Context, titleID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var next int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(position), 0) + 1 FROM featured_titles`).Scan(&next); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO featured_titles (title_id, position) VALUES (?, ?)
+		 ON DUPLICATE KEY UPDATE position = position`, titleID, next); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RemoveFeatured drops a title from the featured list. ok is false when it was
+// not featured. Remaining positions keep their order (gaps are harmless).
+func (s *Store) RemoveFeatured(ctx context.Context, titleID int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM featured_titles WHERE title_id = ?`, titleID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// MoveFeatured shifts a featured title one slot earlier (up) or later (down) by
+// swapping positions with its neighbor. A move past either end is a no-op.
+func (s *Store) MoveFeatured(ctx context.Context, titleID int64, up bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var pos int
+	err = tx.QueryRowContext(ctx, `SELECT position FROM featured_titles WHERE title_id = ?`, titleID).Scan(&pos)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	// The adjacent row in the move direction, if any.
+	neighbor := `SELECT title_id, position FROM featured_titles WHERE position > ? ORDER BY position ASC LIMIT 1`
+	if up {
+		neighbor = `SELECT title_id, position FROM featured_titles WHERE position < ? ORDER BY position DESC LIMIT 1`
+	}
+	var nbID int64
+	var nbPos int
+	err = tx.QueryRowContext(ctx, neighbor, pos).Scan(&nbID, &nbPos)
+	if err == sql.ErrNoRows {
+		return nil // already at the end/start
+	}
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE featured_titles SET position = ? WHERE title_id = ?`, nbPos, titleID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE featured_titles SET position = ? WHERE title_id = ?`, pos, nbID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // TorrentSourceExists reports whether a torrent_sources row already exists
 // for infoHash. Used by the crawl jobs (crawl.go) to skip a torrent they've
 // already imported on a previous run.

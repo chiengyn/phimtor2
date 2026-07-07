@@ -73,7 +73,12 @@ Flat single `main` package.
     **redirects to the canonical URL** (`homeURL`): it drops empty/odd query
     params the GET filter form submits, forces page 1 in browse mode, and snaps
     an out-of-range `page` back to the last page — so the address bar always
-    shows the clean, shareable URL for the current state.
+    shows the clean, shareable URL for the current state. In browse mode it also
+    builds the **hero billboard carousel** from the admin's manually-curated
+    `featured_titles` (`FeaturedTitleIDs`, in curated order), each reloaded in full
+    via `GetTitle` for its backdrop/overview; when nothing is featured it **falls
+    back** to the first row's top (score-ranked) titles so the hero is never empty.
+    The curation itself lives in the admin (`GET /featured`), which owns the table.
   - `GET /titles/{id}` — full detail page (genres, and for TV its seasons/episodes).
   - `GET /watch/movie/{id}` and `GET /watch/episode/{id}` — the watch page.
   - `POST /api/sources/{videoID}/prepare` — viewer-mediated playback (see below).
@@ -142,6 +147,9 @@ Flat single `main` package.
     single pass over the title order. Empty rows are omitted; each row is capped at
     `rowLimit` (the carousel's heading links to the paginated grid for the rest).
   - `ListGenres` — only genres attached to at least one title (filter dropdown).
+  - `FeaturedTitleIDs(limit)` — the admin-curated hero picks, in `featured_titles.position`
+    order (joined to `titles` so a since-deleted pick drops out); empty ⇒ the home
+    hero falls back to score-ranked titles. The admin owns/writes this table.
   - `GetTitle` — full title with genres and (TV) seasons+episodes; `(nil, nil)` on
     miss.
   - `GetEpisodeContext` — resolves an episode id to its parent title and

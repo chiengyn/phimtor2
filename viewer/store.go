@@ -304,6 +304,30 @@ func capRow(ts []TitleSummary) []TitleSummary {
 	return ts
 }
 
+// FeaturedTitleIDs returns the ids of titles an admin hand-picked for the browse
+// hero billboard, in curated display order (featured_titles.position ascending),
+// capped at limit. Empty when nothing is featured, letting the caller fall back
+// to a score-based pick. Joined to titles so a since-deleted pick drops out.
+func (s *Store) FeaturedTitleIDs(ctx context.Context, limit int) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.title_id FROM featured_titles f
+		JOIN titles t ON t.id = f.title_id
+		ORDER BY f.position ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // ListGenres returns only the genres actually attached to at least one title,
 // for the discovery filter dropdown.
 func (s *Store) ListGenres(ctx context.Context) ([]Genre, error) {

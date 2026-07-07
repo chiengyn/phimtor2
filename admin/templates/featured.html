@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phimtor2 — Phim nổi bật</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0e1116; color: #e6edf3; line-height: 1.5;
+    }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 820px; margin: 0 auto; padding: 1.5rem; }
+    h2 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
+    input, button {
+      font: inherit; padding: .55rem .7rem; border-radius: 8px;
+      border: 1px solid #303b48; background: #161b22; color: #e6edf3;
+    }
+    button { background: #2563eb; border-color: #2563eb; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    button.danger { background: transparent; border-color: #5a2330; color: #ff8b94; }
+    button.danger:hover { background: #2a141a; }
+    button.ghost { background: transparent; border-color: #303b48; color: #c9d1d9; padding: .4rem .55rem; }
+    button.ghost:hover { background: #1f2733; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+    .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; vertical-align: middle; }
+    .badge.tv { background: #db61a233; color: #ff9bce; }
+    .feat-row {
+      display: flex; gap: 1rem; padding: .6rem .75rem; margin-top: .6rem;
+      border: 1px solid #222b36; border-radius: 10px; background: #11161d; align-items: center;
+    }
+    .feat-row img { width: 46px; height: 69px; object-fit: cover; border-radius: 6px; background: #222b36; flex: none; }
+    .feat-row .body { flex: 1; min-width: 0; }
+    .feat-row .rank { font-weight: 700; color: #8b98a5; width: 1.5rem; text-align: right; flex: none; }
+    .title-name { font-weight: 600; }
+    .original-title { font-size: .8rem; font-style: italic; color: #8b949e; }
+    .feat-actions { display: flex; gap: .35rem; flex: none; align-items: center; }
+    .added-chip { color: #7ee787; font-size: .85rem; white-space: nowrap; }
+    a { color: #79c0ff; }
+    #featured-search { margin-top: .5rem; }
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⭐ phimtor2 — Phim nổi bật</h1>
+    <a href="/">← Danh sách phim</a>
+  </header>
+  <main>
+    <p class="muted">Chọn thủ công các phim hiển thị ở carousel nổi bật trên trang chủ của người xem, theo đúng thứ tự bên dưới. Khi danh sách trống, trang chủ tự quay về cách chọn theo điểm đánh giá.</p>
+
+    <h2>Đang nổi bật</h2>
+    <div id="featured-list" hx-get="/api/featured" hx-trigger="featuredChanged from:body">
+      {{ template "featured-list" .Featured }}
+    </div>
+
+    <h2>Thêm phim</h2>
+    <input type="search" name="q"
+           style="width: 100%;"
+           placeholder="Tìm phim theo tên để thêm vào danh sách nổi bật…"
+           hx-get="/api/featured/search"
+           hx-target="#featured-search"
+           hx-swap="innerHTML"
+           hx-trigger="input changed delay:300ms, search">
+    <div id="featured-search"></div>
+  </main>
+</body>
+</html>
+
+{{/* featured-list: the ordered hero picks, with reorder + remove controls.
+     Reload/remove/move all go through the "featuredChanged" event, so the
+     buttons swap nothing themselves (hx-swap="none"). */}}
+{{ define "featured-list" }}
+  {{- if . -}}
+    {{- range $i, $t := . }}
+    <div class="feat-row">
+      <span class="rank">{{ inc $i }}</span>
+      <img src="{{ imgURL $t.PosterPath }}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="body">
+        <a class="title-name" href="/titles/{{ $t.ID }}">{{ $t.Title }}</a>
+        {{ if eq $t.Type "tv" }}<span class="badge tv">Phim bộ</span>{{ else }}<span class="badge">Phim lẻ</span>{{ end }}
+        {{ if and $t.OriginalTitle (ne $t.OriginalTitle $t.Title) }}<div class="original-title">{{ $t.OriginalTitle }}</div>{{ end }}
+        <div class="muted">{{ year $t.AirDate }} · TMDB #{{ $t.TMDBID }}</div>
+      </div>
+      <div class="feat-actions">
+        <button class="ghost" title="Lên" hx-post="/api/featured/{{ $t.ID }}/move?dir=up" hx-swap="none">↑</button>
+        <button class="ghost" title="Xuống" hx-post="/api/featured/{{ $t.ID }}/move?dir=down" hx-swap="none">↓</button>
+        <button class="danger" title="Bỏ khỏi nổi bật"
+                hx-delete="/api/featured/{{ $t.ID }}" hx-swap="none">Bỏ</button>
+      </div>
+    </div>
+    {{- end }}
+  {{- else -}}
+    <p class="muted">Chưa chọn phim nổi bật nào.</p>
+  {{- end -}}
+{{ end }}
+
+{{/* featured-search: matches for the add box; each row features the title in
+     place, swapping its button for an "added" chip and reloading the list. */}}
+{{ define "featured-search" }}
+  {{- if . -}}
+    {{- range . }}
+    <div class="feat-row">
+      <img src="{{ imgURL .PosterPath }}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="body">
+        <span class="title-name">{{ .Title }}</span>
+        {{ if eq .Type "tv" }}<span class="badge tv">Phim bộ</span>{{ else }}<span class="badge">Phim lẻ</span>{{ end }}
+        {{ if and .OriginalTitle (ne .OriginalTitle .Title) }}<div class="original-title">{{ .OriginalTitle }}</div>{{ end }}
+        <div class="muted">{{ year .AirDate }} · TMDB #{{ .TMDBID }}</div>
+      </div>
+      <button hx-post="/api/featured" hx-vals='{"title_id": "{{ .ID }}"}'
+              hx-target="this" hx-swap="outerHTML">+ Thêm</button>
+    </div>
+    {{- end }}
+  {{- else -}}
+    <p class="muted">Không có phim phù hợp.</p>
+  {{- end -}}
+{{ end }}

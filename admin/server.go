@@ -35,6 +35,8 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return tmdbImageBase + path
 	},
+	// inc returns i+1, for 1-based rank numbering in ranged lists.
+	"inc": func(i int) int { return i + 1 },
 	// pct renders completed/total as an integer percentage (0 when total is 0).
 	"pct": func(done, total int64) int {
 		if total <= 0 {
@@ -169,6 +171,7 @@ func (s *Server) setupRouter() {
 	r.Post("/streamers/{id}/approve", s.handleApproveStreamer)
 	r.Post("/streamers/{id}/revoke", s.handleRevokeStreamer)
 	r.Get("/crawl", s.handleCrawlPage)
+	r.Get("/featured", s.handleFeaturedPage)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
 	r.Get("/videos/{id}/play", s.handlePlayVideo)
@@ -190,6 +193,14 @@ func (s *Server) setupRouter() {
 		r.Delete("/{id}", s.handleDeleteTitle)
 	})
 	r.Post("/api/import", s.handleImport)
+
+	r.Route("/api/featured", func(r chi.Router) {
+		r.Get("/", s.handleListFeatured)
+		r.Get("/search", s.handleSearchFeaturable)
+		r.Post("/", s.handleAddFeatured)
+		r.Post("/{id}/move", s.handleMoveFeatured)
+		r.Delete("/{id}", s.handleRemoveFeatured)
+	})
 
 	r.Route("/api/videos", func(r chi.Router) {
 		r.Post("/", s.handleSaveVideo)
@@ -478,6 +489,94 @@ func (s *Server) handleCrawlPage(w http.ResponseWriter, r *http.Request) {
 		"YTSBaseURL":       s.crawler.YTSBaseURL(),
 		"SubtitlesEnabled": s.subtitlesEnabled(),
 	})
+}
+
+// handleFeaturedPage renders the featured-titles management page: the ordered
+// hero-billboard list plus a search box to add more.
+func (s *Server) handleFeaturedPage(w http.ResponseWriter, r *http.Request) {
+	featured, err := s.store.ListFeatured(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	render(w, "featured.html", map[string]any{"Featured": featured})
+}
+
+// handleListFeatured returns the ordered featured-list fragment, re-fetched
+// whenever the list changes (the "featuredChanged" event).
+func (s *Server) handleListFeatured(w http.ResponseWriter, r *http.Request) {
+	featured, err := s.store.ListFeatured(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	render(w, "featured-list", featured)
+}
+
+// handleSearchFeaturable returns the add-picker fragment: titles matching ?q=
+// that are not already featured.
+func (s *Server) handleSearchFeaturable(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		render(w, "featured-search", []TitleSummary(nil))
+		return
+	}
+	results, err := s.store.SearchFeaturable(r.Context(), q, 20)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	render(w, "featured-search", results)
+}
+
+// handleAddFeatured features a title (form field title_id). It fires
+// "featuredChanged" so the list reloads and returns the "added" chip that
+// replaces the clicked add button.
+func (s *Server) handleAddFeatured(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.FormValue("title_id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid title_id")
+		return
+	}
+	if err := s.store.AddFeatured(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("HX-Trigger", "featuredChanged")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(`<span class="added-chip">✓ Đã thêm</span>`))
+}
+
+// handleMoveFeatured shifts a featured title one slot up or down (?dir=up|down),
+// then fires "featuredChanged" so the list re-renders in the new order.
+func (s *Server) handleMoveFeatured(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := s.store.MoveFeatured(r.Context(), id, r.URL.Query().Get("dir") != "down"); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("HX-Trigger", "featuredChanged")
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleRemoveFeatured unfeatures a title and fires "featuredChanged" so the
+// list reloads without it.
+func (s *Server) handleRemoveFeatured(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if _, err := s.store.RemoveFeatured(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("HX-Trigger", "featuredChanged")
+	w.WriteHeader(http.StatusOK)
 }
 
 // parseSubtitleOptionsForm reads the "download_subtitles" checkbox and

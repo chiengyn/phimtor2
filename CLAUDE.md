@@ -10,7 +10,7 @@ viewer) share a single MySQL database; the streamer(s) and manager stand alone.
 
 | Module | Purpose | Default port | Storage | Detail |
 |--------|---------|--------------|---------|--------|
-| **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
+| **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard + featured-titles curation | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
 | **`viewer/`** | Public read-only browse/discovery + watch UI | `8082` | MySQL (read-only) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
 | **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage); **N interchangeable instances** | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
 | **`manager/`** | Control plane that load-balances torrents across streamers (token-gated; public host + internal alias) | `8083` | enrollment JSON file | [`manager/CLAUDE.md`](manager/CLAUDE.md) |

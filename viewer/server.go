@@ -447,18 +447,28 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Hero billboard carousel: the first row's top titles (the Top-10 picks
-		// when present, else the newest). Reload each in full so the hero can show
-		// its backdrop and overview, which the lightweight row summaries omit.
-		if len(data.Rows) > 0 {
-			const heroCount = 5
+		// Hero billboard carousel: the titles an admin hand-picked as "featured".
+		// When none are marked, fall back to the first row's top titles (the Top-10
+		// picks when present, else the newest) so the hero is never empty. Reload
+		// each in full so the hero can show its backdrop and overview, which the
+		// lightweight row summaries omit.
+		const heroCount = 5
+		heroIDs, err := s.store.FeaturedTitleIDs(r.Context(), heroCount)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(heroIDs) == 0 && len(data.Rows) > 0 {
 			for i, sum := range data.Rows[0].Titles {
 				if i >= heroCount {
 					break
 				}
-				if t, err := s.store.GetTitle(r.Context(), sum.ID); err == nil {
-					data.Featured = append(data.Featured, t)
-				}
+				heroIDs = append(heroIDs, sum.ID)
+			}
+		}
+		for _, id := range heroIDs {
+			if t, err := s.store.GetTitle(r.Context(), id); err == nil && t != nil {
+				data.Featured = append(data.Featured, t)
 			}
 		}
 	}

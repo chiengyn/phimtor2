@@ -112,6 +112,15 @@ Flat single `main` package. Layers, in request order:
   - `GET /watch` — the torrent watch page (`watch.html`), with `STREAMER_URL`
     and a `SubtitlesEnabled` flag injected via `<body data-*>` (the page is plain
     JS, not htmx).
+  - `GET /featured` (`featured.html`) — the **featured-titles curation page**: an
+    admin hand-picks which titles appear in the viewer's browse hero billboard and
+    in what order. It reads/writes the `featured_titles` table (see Migrations) via
+    `/api/featured`: `GET /` (ordered list fragment), `GET /search?q=` (add picker,
+    titles not yet featured), `POST /` (feature `title_id`), `POST /{id}/move?dir=up|down`
+    (reorder by swapping positions), `DELETE /{id}` (unfeature). Mutations fire
+    `HX-Trigger: featuredChanged` so the list re-fetches. The viewer reads this same
+    table (`viewer/store.go` `FeaturedTitleIDs`) for its hero, falling back to a
+    score-based pick when nothing is featured.
   - `GET /api/subtitles/search` (`?file=&query=&languages=&season=&episode=`) and
     `GET /api/subtitles/download` (`?file_id=`) — the live subtitle-provider proxy
     (`opensubtitles.go`, behind the `SubtitleProvider` interface so more providers
@@ -171,8 +180,12 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
   statement terminator** — not even inside a comment.
 - The schema (`0001_init.sql`) is `utf8mb4`/`utf8mb4_unicode_ci` throughout:
   `titles` (+`uniq_tmdb`), `genres`, `title_genres`, `seasons`, `episodes`, with
-  cascading FKs. Later migrations add `torrent_sources`/`videos` (`0003`) and
-  `subtitles` (`0004`). Both `videos` and `subtitles` use the same owner pattern:
+  cascading FKs. Later migrations add `torrent_sources`/`videos` (`0003`),
+  `subtitles` (`0004`), and `featured_titles` (`0005`). `featured_titles` is the
+  manual browse-hero curation list — `(title_id PK, position, created_at)` with a
+  cascading FK to `titles`, ordered by `position` ascending; the catalog `titles`
+  table stays untouched (deliberately a separate table, not a `titles` column).
+  Both `videos` and `subtitles` use the same owner pattern:
   exactly one of `title_id`/`episode_id` is set (a `CHECK` enforces it), FKs
   cascade. `subtitles` keeps only the file's locator (`storage_backend` +
   `storage_key`) — the bytes live in a `BlobStore`, not MySQL — plus the provider
