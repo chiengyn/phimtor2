@@ -265,22 +265,38 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 	}
 
 	var out []Row
-	// Top 10: a genuine ranking by rating (not a filter), so the numbered strip
-	// means something. Only titles that actually carry a vote qualify, and the row
-	// is dropped unless enough of them do — a "Top 10" of unrated titles would be
-	// numbering noise.
-	top := make([]TitleSummary, 0, len(all))
-	for _, t := range all {
-		if t.VoteAverage > 0 {
-			top = append(top, t)
-		}
+	// Top 10: prefer the admin's hand-picked featured titles, in their curated
+	// order (the same list that drives the hero billboard). When nothing is
+	// featured, fall back to a genuine rating ranking so the numbered strip still
+	// means something — only titles that carry a vote qualify, and the row is
+	// dropped unless enough of them do (a "Top 10" of unrated titles would be
+	// numbering noise).
+	featIDs, err := s.FeaturedTitleIDs(ctx, 10)
+	if err != nil {
+		return nil, err
 	}
-	sort.SliceStable(top, func(i, j int) bool { return top[i].VoteAverage > top[j].VoteAverage })
-	if len(top) >= 3 {
-		if len(top) > 10 {
-			top = top[:10]
+	if len(featIDs) > 0 {
+		var top []TitleSummary
+		for _, id := range featIDs {
+			if t, ok := byID[id]; ok {
+				top = append(top, t)
+			}
 		}
 		out = append(out, Row{Label: "Top 10 nổi bật hôm nay", Titles: top, Ranked: true})
+	} else {
+		top := make([]TitleSummary, 0, len(all))
+		for _, t := range all {
+			if t.VoteAverage > 0 {
+				top = append(top, t)
+			}
+		}
+		sort.SliceStable(top, func(i, j int) bool { return top[i].VoteAverage > top[j].VoteAverage })
+		if len(top) >= 3 {
+			if len(top) > 10 {
+				top = top[:10]
+			}
+			out = append(out, Row{Label: "Top 10 nổi bật hôm nay", Titles: top, Ranked: true})
+		}
 	}
 	if len(movies) > 0 {
 		out = append(out, Row{Key: "type=movie", Label: "Phim lẻ", Titles: capRow(movies)})

@@ -146,6 +146,10 @@ Flat single `main` package.
     (movies, then TV, then one row per genre), keeping each row newest-first with a
     single pass over the title order. Empty rows are omitted; each row is capped at
     `rowLimit` (the carousel's heading links to the paginated grid for the rest).
+    The leading **"Top 10 nổi bật hôm nay"** ranked strip is the admin's curated
+    `FeaturedTitleIDs` (same list/order as the hero), falling back to a
+    `vote_average` ranking when nothing is featured — so it and the hero always
+    agree.
   - `ListGenres` — only genres attached to at least one title (filter dropdown).
   - `FeaturedTitleIDs(limit)` — the admin-curated hero picks, in `featured_titles.position`
     order (joined to `titles` so a since-deleted pick drops out); empty ⇒ the home
