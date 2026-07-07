@@ -44,6 +44,16 @@
   .stat.ul b { color: #79c0ff; }
   .stat.seed b { color: #86efac; }
 
+  .piece-map { width: 100%; height: 48px; border-radius: 6px; background: #222b36; display: block; margin-bottom: 0.6rem; image-rendering: pixelated; image-rendering: crisp-edges; }
+  .piece-summary { font-size: 0.8rem; color: #8b98a5; margin-bottom: 0.6rem; }
+  .piece-summary b { color: #cbd5e1; font-weight: 600; }
+  .piece-legend { display: flex; gap: 1rem; font-size: 0.72rem; color: #8b98a5; }
+  .piece-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .piece-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .legend-done { background: #22c55e; }
+  .legend-partial { background: #eab308; }
+  .legend-missing { background: #3a4654; }
+
   .btn { cursor: pointer; border: none; border-radius: 8px; padding: 0.4rem 0.85rem; font-size: 0.85rem; font-weight: 600; }
   .btn-sub { background: #21262d; color: #e6edf3; }
   .btn-sub:hover { background: #2d333b; }
@@ -117,6 +127,17 @@
     <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
     <div class="progress-text" id="progress-text">Đang lấy thông tin…</div>
     <div class="stats" id="stats"><span class="loading-text">…</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Bản đồ mảnh</h2>
+    <canvas class="piece-map" id="pieces-canvas"></canvas>
+    <div class="piece-summary" id="pieces-summary"><span class="loading-text">…</span></div>
+    <div class="piece-legend">
+      <span><i class="legend-done"></i> Đã tải</span>
+      <span><i class="legend-partial"></i> Đang tải</span>
+      <span><i class="legend-missing"></i> Chưa tải</span>
+    </div>
   </div>
 
   <div class="card">
@@ -228,6 +249,50 @@ async function refreshStats() {
     const res = await fetch(`${streamerPublic}/api/torrents/${INFO_HASH}/stats`);
     if (res.ok) document.getElementById('stats').innerHTML = statsChips(await res.json());
   } catch(e) { /* bỏ qua lỗi poll */ }
+
+  refreshPieces();
+}
+
+// --- Piece map ------------------------------------------------------------
+
+// Poll the owning streamer's per-file pieces endpoint (public, like stats) and
+// draw a piece map. The canvas backing store is one pixel per piece — CSS
+// stretches it to width with pixelated scaling — so even a file of thousands of
+// pieces redraws cheaply on every stats poll.
+async function refreshPieces() {
+  if (!streamerPublic) return;
+  try {
+    const res = await fetch(`${streamerPublic}/api/torrents/${INFO_HASH}/files/${FILE_INDEX}/pieces`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    const p = await res.json();
+    drawPieceMap(p.pieces || '');
+    const pct = p.numPieces ? Math.round(p.piecesComplete / p.numPieces * 100) : 0;
+    document.getElementById('pieces-summary').innerHTML =
+      `<b>${p.piecesComplete || 0}</b> / ${p.numPieces || 0} mảnh (${pct}%) · mỗi mảnh ${formatBytes(p.pieceLength)}`;
+  } catch(e) {
+    document.getElementById('pieces-summary').textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+function drawPieceMap(pieces) {
+  const canvas = document.getElementById('pieces-canvas');
+  const n = pieces.length;
+  if (!n) { canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height); return; }
+  canvas.width = n;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(n, 1);
+  for (let i = 0; i < n; i++) {
+    let r, g, b;
+    switch (pieces[i]) {
+      case '2': r = 34;  g = 197; b = 94;  break; // complete
+      case '1': r = 234; g = 179; b = 8;   break; // partial
+      default:  r = 58;  g = 70;  b = 84;         // missing
+    }
+    const o = i * 4;
+    img.data[o] = r; img.data[o+1] = g; img.data[o+2] = b; img.data[o+3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 function statsChips(s) {

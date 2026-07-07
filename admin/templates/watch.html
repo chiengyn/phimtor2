@@ -88,6 +88,25 @@
   .os-lang-badge { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: #30363d; color: #c4b5fd; padding: 0.1rem 0.35rem; border-radius: 4px; flex: 0 0 auto; }
   .os-rel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #adbac7; }
   .os-dl { color: #6b7681; white-space: nowrap; }
+
+  .btn-pieces { background: #21262d; color: #adbac7; padding: 0.2rem 0.4rem; line-height: 1; }
+  .btn-pieces:hover { background: #2d333b; }
+
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; padding: 1.5rem; z-index: 50; }
+  .modal { background: #11161d; border: 1px solid #222b36; border-radius: 12px; width: 100%; max-width: 720px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; }
+  .modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+  .modal-title { font-size: 0.95rem; font-weight: 600; color: #e6edf3; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal-close { background: transparent; border: none; color: #8b98a5; font-size: 1.2rem; cursor: pointer; line-height: 1; }
+  .modal-close:hover { color: #ff8b94; }
+  .piece-map { width: 100%; height: 48px; border-radius: 6px; background: #222b36; display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+  .piece-summary { font-size: 0.8rem; color: #8b98a5; }
+  .piece-summary b { color: #cbd5e1; font-weight: 600; }
+  .piece-legend { display: flex; gap: 1rem; font-size: 0.72rem; color: #8b98a5; }
+  .piece-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .piece-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .legend-done { background: #22c55e; }
+  .legend-partial { background: #eab308; }
+  .legend-missing { background: #3a4654; }
 </style>
 </head>
 <body data-subtitles-enabled="{{ .SubtitlesEnabled }}" data-subtitle-providers="{{ .SubtitleProviders }}" data-streamer-id="{{ .StreamerID }}">
@@ -115,6 +134,22 @@
   <main class="player-pane" id="player-pane">
     <span class="empty-msg">Chọn một tệp để phát</span>
   </main>
+</div>
+
+<div class="modal-overlay" id="pieces-modal" hidden onclick="if(event.target===this)closePiecesModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="pieces-title"></span>
+      <button class="modal-close" onclick="closePiecesModal()" title="Đóng">✕</button>
+    </div>
+    <canvas class="piece-map" id="pieces-canvas"></canvas>
+    <div class="piece-summary" id="pieces-summary"></div>
+    <div class="piece-legend">
+      <span><i class="legend-done"></i> Đã tải</span>
+      <span><i class="legend-partial"></i> Đang tải</span>
+      <span><i class="legend-missing"></i> Chưa tải</span>
+    </div>
+  </div>
 </div>
 
 <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
@@ -478,11 +513,14 @@ function renderTorrents(torrents) {
       const playBtn = f.isVideo
         ? `<button class="btn btn-sm btn-play" onclick="playFile('${escHtml(t.infoHash)}', ${f.index}, '${escHtml(f.path).replace(/'/g,"\\'")}')">▶</button>`
         : `<button class="btn btn-sm" style="background:#21262d;color:#6b7681;cursor:default" disabled>▶</button>`;
+      const fileName = f.path.split('/').pop();
       return `<div class="file-row">
         ${playBtn}
-        <span class="file-name" title="${escHtml(f.path)}">${escHtml(f.path.split('/').pop())}</span>
+        <span class="file-name" title="${escHtml(f.path)}">${escHtml(fileName)}</span>
         ${getExtBadge(f.path)}
         <span class="file-size">${formatBytes(f.length)}</span>
+        <button class="btn btn-sm btn-pieces" title="Xem mảnh đã tải"
+          onclick="openPiecesModal('${escHtml(t.infoHash)}', ${f.index}, '${escHtml(fileName).replace(/'/g,"\\'")}')">🧩</button>
       </div>`;
     }).join('');
 
@@ -516,6 +554,84 @@ async function refreshTorrents() {
   } catch(e) {
     // silently ignore polling errors
   }
+}
+
+// --- Piece map -------------------------------------------------------------
+
+// The pieces modal polls the owning streamer's per-file pieces endpoint (public,
+// like stats) and draws a piece map on a canvas. The canvas backing store is one
+// pixel per piece — CSS stretches it to width with pixelated scaling — so even a
+// file of thousands of pieces redraws cheaply each poll.
+let piecesModal = { infoHash: null, fileIndex: null, timer: null };
+
+function openPiecesModal(infoHash, fileIndex, fileName) {
+  const base = streamerByHash[infoHash];
+  if (!base) { alert('Streamer cho torrent này chưa sẵn sàng.'); return; }
+  piecesModal.infoHash = infoHash;
+  piecesModal.fileIndex = fileIndex;
+  document.getElementById('pieces-title').textContent = fileName;
+  document.getElementById('pieces-summary').textContent = 'Đang tải…';
+  const canvas = document.getElementById('pieces-canvas');
+  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+  document.getElementById('pieces-modal').hidden = false;
+  refreshPieces();
+  clearInterval(piecesModal.timer);
+  piecesModal.timer = setInterval(refreshPieces, 1500);
+}
+
+function closePiecesModal() {
+  clearInterval(piecesModal.timer);
+  piecesModal.timer = null;
+  piecesModal.infoHash = null;
+  document.getElementById('pieces-modal').hidden = true;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.getElementById('pieces-modal').hidden) closePiecesModal();
+});
+
+async function refreshPieces() {
+  const { infoHash, fileIndex } = piecesModal;
+  if (infoHash === null) return;
+  const base = streamerByHash[infoHash];
+  if (!base) return;
+  try {
+    const res = await fetch(`${base}/api/torrents/${infoHash}/files/${fileIndex}/pieces`);
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || res.statusText);
+    }
+    const p = await res.json();
+    // A late poll from a modal the user already closed/switched must not draw.
+    if (piecesModal.infoHash !== infoHash || piecesModal.fileIndex !== fileIndex) return;
+    drawPieceMap(p.pieces || '');
+    const pct = p.numPieces ? Math.round(p.piecesComplete / p.numPieces * 100) : 0;
+    document.getElementById('pieces-summary').innerHTML =
+      `<b>${p.piecesComplete || 0}</b> / ${p.numPieces || 0} mảnh (${pct}%) · mỗi mảnh ${formatBytes(p.pieceLength)}`;
+  } catch(e) {
+    document.getElementById('pieces-summary').textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+function drawPieceMap(pieces) {
+  const canvas = document.getElementById('pieces-canvas');
+  const n = pieces.length;
+  if (!n) { canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height); return; }
+  canvas.width = n;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(n, 1);
+  for (let i = 0; i < n; i++) {
+    let r, g, b;
+    switch (pieces[i]) {
+      case '2': r = 34;  g = 197; b = 94;  break; // complete
+      case '1': r = 234; g = 179; b = 8;   break; // partial
+      default:  r = 58;  g = 70;  b = 84;         // missing
+    }
+    const o = i * 4;
+    img.data[o] = r; img.data[o+1] = g; img.data[o+2] = b; img.data[o+3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 // Poll every 3 seconds

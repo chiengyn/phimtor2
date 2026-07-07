@@ -45,6 +45,7 @@ func (s *Server) setupRouter() {
 		// Public data plane: anonymous browsers (admin watch page, viewer) hit
 		// these directly for the owning streamer's stats + stream.
 		r.Get("/{infoHash}/stats", s.handleTorrentStats)
+		r.Get("/{infoHash}/files/{fileIndex}/pieces", s.handleFilePieces)
 		r.Get("/{infoHash}/files/{fileIndex}/stream", s.handleStream)
 
 		// Internal control plane: only the manager calls these (server-side, with
@@ -145,6 +146,24 @@ func (s *Server) handleTorrentStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// handleFilePieces returns the per-piece download map for one file (see
+// FilePieces). Public data plane, like stats: the browser polls the owning
+// streamer directly to render a piece map while the file downloads.
+func (s *Server) handleFilePieces(w http.ResponseWriter, r *http.Request) {
+	infoHash := chi.URLParam(r, "infoHash")
+	fileIndex, err := strconv.Atoi(chi.URLParam(r, "fileIndex"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid file index")
+		return
+	}
+	pieces, ok := s.manager.GetFilePieces(infoHash, fileIndex)
+	if !ok {
+		writeError(w, http.StatusNotFound, "torrent or file not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, pieces)
 }
 
 func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {

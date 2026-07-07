@@ -20,7 +20,8 @@ is **backend-first** and runs as **N interchangeable instances** behind the
 shared MySQL catalog.
 
 **Route split (`server.go`).** Only the **data plane** is public: `GET /up`,
-`GET …/{infoHash}/stats`, and `GET …/{infoHash}/files/{fileIndex}/stream`
+`GET …/{infoHash}/stats`, `GET …/{infoHash}/files/{fileIndex}/pieces` (per-file
+download map), and `GET …/{infoHash}/files/{fileIndex}/stream`
 (browsers hit the owning streamer directly for these — hence the permissive
 CORS). The **control plane** (add/list/get/delete, plus `GET /api/load`) is gated by an `internalAuth`
 bearer that is the streamer's **own `controlToken`** (its self-generated identity,
@@ -54,7 +55,11 @@ The API: `GET /api/torrents` (list), `POST /api/torrents` (magnet JSON or
 metered by `countingResponseWriter` in `handleStream` — plus torrent count,
 polled by the manager for bandwidth-aware placement) — all **internal**
 (token-gated) — plus
-the **public** `GET /api/torrents/{infoHash}/stats` and
+the **public** `GET /api/torrents/{infoHash}/stats`,
+`GET /api/torrents/{infoHash}/files/{fileIndex}/pieces` (a compact per-piece
+download map — one char per piece: `0` missing, `1` partial, `2` complete —
+built from `File.State()`, so a multi-file torrent reports only that file's
+pieces; the admin watch page renders it as a piece map), and
 `GET /api/torrents/{infoHash}/files/{fileIndex}/stream`.
 
 ## Commands

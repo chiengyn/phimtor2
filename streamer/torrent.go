@@ -61,6 +61,23 @@ type FileInfo struct {
 	IsVideo        bool   `json:"isVideo"`
 }
 
+// FilePieces is the per-piece download map for one file within a torrent. Pieces
+// is one character per piece spanning the file, in order: '0' missing, '1'
+// partial (some but not all bytes obtained), '2' complete. It stays compact
+// (one byte per piece) so the admin watch page can poll it and render a piece
+// map without shipping an object per piece. The first/last entries may cover
+// only part of their piece — a shared piece straddling an adjacent file — but
+// their state is still that whole piece's.
+type FilePieces struct {
+	InfoHash       string `json:"infoHash"`
+	FileIndex      int    `json:"fileIndex"`
+	NumPieces      int    `json:"numPieces"`
+	PiecesComplete int    `json:"piecesComplete"`
+	PieceLength    int64  `json:"pieceLength"`
+	Length         int64  `json:"length"`
+	Pieces         string `json:"pieces"`
+}
+
 var videoExtensions = map[string]bool{
 	".mp4": true, ".mkv": true, ".avi": true, ".webm": true,
 	".mov": true, ".m4v": true, ".wmv": true, ".flv": true,
@@ -412,6 +429,50 @@ func (m *TorrentManager) GetStats(infoHash string) (TorrentStats, bool) {
 	}
 
 	return st, true
+}
+
+// GetFilePieces snapshots the per-piece download state of a single file within a
+// torrent (see FilePieces). The bool is false when no such torrent/file is
+// tracked, or when the torrent's metadata hasn't arrived yet (piece layout
+// unknown). File.State() already returns exactly the pieces spanning this file,
+// with the byte-length each contributes, so a multi-file torrent reports only
+// the watched file's pieces — not the whole torrent's.
+func (m *TorrentManager) GetFilePieces(infoHash string, fileIndex int) (FilePieces, bool) {
+	t, ok := m.GetTorrent(infoHash)
+	if !ok || t.Info() == nil {
+		return FilePieces{}, false
+	}
+	files := t.Files()
+	if fileIndex < 0 || fileIndex >= len(files) {
+		return FilePieces{}, false
+	}
+	f := files[fileIndex]
+
+	states := f.State()
+	var b strings.Builder
+	b.Grow(len(states))
+	complete := 0
+	for _, ps := range states {
+		switch {
+		case ps.Complete:
+			b.WriteByte('2')
+			complete++
+		case ps.Partial:
+			b.WriteByte('1')
+		default:
+			b.WriteByte('0')
+		}
+	}
+
+	return FilePieces{
+		InfoHash:       infoHash,
+		FileIndex:      fileIndex,
+		NumPieces:      len(states),
+		PiecesComplete: complete,
+		PieceLength:    t.Info().PieceLength,
+		Length:         f.Length(),
+		Pieces:         b.String(),
+	}, true
 }
 
 // LoadStats summarizes an instance's current load for the manager's placement
