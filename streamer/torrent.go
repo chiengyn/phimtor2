@@ -287,6 +287,32 @@ func (m *TorrentManager) PrioritizeSeek(infoHash string, fileIndex int, byteOffs
 	}
 }
 
+// prioritizeAhead raises the pieces just ahead of a viewer's playhead (piece) to
+// High so the near-future keeps downloading before the far tail. In download-all
+// mode File.Download() has marked the whole file Normal so it all still lands
+// eventually; this just keeps the swarm's bandwidth focused on what's about to be
+// played, so direct-play doesn't re-buffer while pieces far ahead are also in
+// flight. The window covers roughly one readahead's worth of pieces, capped so a
+// tiny piece length can't fan out into hundreds of High requests. Pieces already
+// complete cost nothing, so re-crossing them (e.g. after a seek back) is a no-op.
+func (m *TorrentManager) prioritizeAhead(t *torrent.Torrent, piece int) {
+	if t.Info() == nil {
+		return
+	}
+	pieceLen := t.Info().PieceLength
+	if pieceLen <= 0 {
+		return
+	}
+	window := int(m.readahead/pieceLen) + 1
+	if window > 32 {
+		window = 32
+	}
+	n := t.NumPieces()
+	for i := piece; i < piece+window && i < n; i++ {
+		t.Piece(i).SetPriority(torrent.PiecePriorityHigh)
+	}
+}
+
 func (m *TorrentManager) AddMagnet(magnetURI string) (string, error) {
 	t, err := m.client.AddMagnet(magnetURI)
 	if err != nil {
@@ -581,9 +607,11 @@ func (m *TorrentManager) GetFileReader(infoHash string, fileIndex int) (io.ReadS
 			m.activeReaders.Add(-1)
 			m.markReaderClosed(infoHash)
 		},
+		onAdvance:   func(piece int) { m.prioritizeAhead(t, piece) },
 		pieceLength: t.Info().PieceLength,
 		fileOffset:  f.Offset(),
 		ih:          t.InfoHash(),
+		lastPiece:   -1,
 	}
 	// Register the reader's playhead with the storage so eviction protects this
 	// viewer's window (no-op when the backend doesn't track readers).
@@ -660,21 +688,34 @@ func (m *TorrentManager) Close() {
 // active-reader count accurate.
 type trackedReader struct {
 	io.ReadSeekCloser
-	tracker     readerTracker // may be nil
-	onDone      func()        // decrements the manager's active-reader count
+	tracker     readerTracker    // may be nil
+	onDone      func()           // decrements the manager's active-reader count
+	onAdvance   func(piece int)  // raises priority of the pieces just ahead (may be nil)
 	ih          metainfo.Hash
 	id          uint64
 	fileOffset  int64 // torrent-wide byte offset of this file's first byte
 	pieceLength int64
 	pos         int64 // current read offset within the file
+	lastPiece   int   // last piece index onAdvance was fired for (-1 = none yet)
 	closed      bool
 }
 
 func (tr *trackedReader) note() {
-	if tr.tracker == nil || tr.pieceLength <= 0 {
+	if tr.pieceLength <= 0 {
 		return
 	}
-	tr.tracker.NoteReaderPos(tr.ih, tr.id, int((tr.fileOffset+tr.pos)/tr.pieceLength))
+	piece := int((tr.fileOffset + tr.pos) / tr.pieceLength)
+	if tr.tracker != nil {
+		tr.tracker.NoteReaderPos(tr.ih, tr.id, piece)
+	}
+	// When the playhead crosses into a new piece, boost the near-ahead window so
+	// the pieces about to be played download before the far tail (which
+	// File.Download keeps pulling at Normal in the background). Fired only on a
+	// piece change so a steady stream of reads doesn't re-prioritize every call.
+	if tr.onAdvance != nil && piece != tr.lastPiece {
+		tr.lastPiece = piece
+		tr.onAdvance(piece)
+	}
 }
 
 func (tr *trackedReader) Read(p []byte) (int, error) {

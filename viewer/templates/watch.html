@@ -423,8 +423,57 @@ async function playSource(videoID, opts = {}) {
 	const ready = await waitForStreamReady(data.infoHash, videoID);
 	if (!ready) return; // timed out, or the user switched sources mid-wait
 	const src = `${streamerBase}/api/torrents/${data.infoHash}/files/${data.fileIndex}/stream`;
+	// Prebuffer the head of the file before attaching the <video>. Reading these
+	// first bytes ourselves both drives the streamer's download (download-all mode
+	// only starts fetching once the stream is opened) and guarantees the player
+	// attaches to a stream that can play immediately — instead of hanging on an
+	// empty stream while the swarm warms up, then failing to recover when data
+	// finally arrives. Best-effort: on timeout it attaches anyway.
+	await prebufferStream(src, videoID);
+	if (activeVideoID !== videoID) return; // user switched sources during prebuffer
 	buildPlayer(src, opts.resumeAt || 0);
 	setStatus('');
+}
+
+// How much of the file's head to bank before starting playback, and how long to
+// wait for it before giving up and attaching the player anyway.
+const PREBUFFER_BYTES = 2 * 1024 * 1024;
+const PREBUFFER_TIMEOUT_MS = 45000;
+
+// prebufferStream pulls the first PREBUFFER_BYTES of the file from the streamer
+// so the player starts on real, already-buffered data. It reads the bytes itself
+// (rather than letting the <video> element do it) because a media element
+// attached to a not-yet-downloading stream can hang indefinitely and never
+// recover once bytes arrive; a plain fetch just reads what's there and drives the
+// download as it goes. Bails if the user switches sources mid-buffer; on
+// timeout/error it resolves quietly and the caller attaches the player regardless
+// (the element will buffer on its own).
+async function prebufferStream(streamURL, videoID) {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), PREBUFFER_TIMEOUT_MS);
+	try {
+		const res = await fetch(streamURL, {
+			headers: { Range: `bytes=0-${PREBUFFER_BYTES - 1}` },
+			signal: controller.signal,
+		});
+		if (!res.ok || !res.body) return;
+		const reader = res.body.getReader();
+		let got = 0;
+		for (;;) {
+			if (activeVideoID !== videoID) { controller.abort(); return; }
+			const { done, value } = await reader.read();
+			if (done) break;
+			got += value.length;
+			const pct = Math.min(99, Math.round(got / PREBUFFER_BYTES * 100));
+			setPlayerStatus(`Đang tải bộ đệm đầu phim… ${pct}%`);
+			if (got >= PREBUFFER_BYTES) { controller.abort(); break; }
+		}
+	} catch(e) {
+		/* aborted (timeout / source switch) or a network blip — fall through and
+		   let the player buffer the rest on its own. */
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 // waitForStreamReady polls the streamer's stats until the torrent has fetched its
