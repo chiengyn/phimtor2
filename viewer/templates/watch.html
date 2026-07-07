@@ -427,18 +427,20 @@ async function playSource(videoID, opts = {}) {
 	setStatus('');
 }
 
-// waitForStreamReady polls the streamer's stats until the torrent has fetched
-// metadata (totalBytes>0) AND buffered the first chunk (bytesCompleted ≥
-// STREAM_READY_MIN_BYTES). The streamer pins the first PREFIX_MB of each video
-// file to high priority on add, so this prefix downloads on its own — the
-// browser doesn't need to hit the stream endpoint first — which is why gating on
-// downloaded bytes here doesn't deadlock. Waiting for real data (not just
-// metadata) avoids attaching the <video> the instant the file is "servable" but
-// still empty, which would stall on the first read.
+// waitForStreamReady polls the streamer's stats until the torrent has fetched its
+// metadata (totalBytes>0), then returns so the caller can attach the <video>.
+//
+// It deliberately does NOT wait for downloaded bytes. The streamer's download-all
+// storage mode fetches nothing until a reader opens the file (File.Download() on
+// the first stream request), so gating on bytesCompleted would deadlock: stats
+// never move because we never attach the <video> that would start the download.
+// Attaching at metadata is safe — the player's own stream request drives the
+// download and the element buffers until the first frames arrive (exactly how the
+// admin player works). We can't buffer before attaching without hitting the stream,
+// and hitting the stream is what starts the download.
 // It bails if the user switches to another source mid-wait, and gives up (with a
 // user-facing error) after STREAM_READY_TIMEOUT_MS.
 const STREAM_READY_TIMEOUT_MS = 60000;
-const STREAM_READY_MIN_BYTES = 1024 * 1024; // 1 MB
 async function waitForStreamReady(infoHash, videoID) {
 	const start = Date.now();
 	while (Date.now() - start < STREAM_READY_TIMEOUT_MS) {
@@ -447,8 +449,7 @@ async function waitForStreamReady(infoHash, videoID) {
 			const res = await fetch(`${streamerBase}/api/torrents/${infoHash}/stats`);
 			if (res.ok) {
 				const s = await res.json();
-				// totalBytes>0 ⇒ metadata in; bytesCompleted ⇒ first chunk buffered.
-				if (s.totalBytes > 0 && s.bytesCompleted >= STREAM_READY_MIN_BYTES) return true;
+				if (s.totalBytes > 0) return true; // metadata in — safe to attach
 			}
 		} catch(e) { /* transient network blip — keep polling */ }
 		const secs = Math.round((Date.now() - start) / 1000);
