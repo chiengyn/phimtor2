@@ -12,9 +12,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 )
 
 const tmdbImageBase = "https://image.tmdb.org/t/p/"
@@ -103,6 +107,11 @@ func (s *Server) funcMap() template.FuncMap {
 		"abs":        s.abs,
 		"jsonLD":     s.titleJSONLD,
 		"siteJSONLD": s.siteJSONLD,
+		// URL builders for slugged detail/watch links, so templates and
+		// server-side SEO output produce identical "<slug>-<id>" paths.
+		"titlePath":        titlePath,
+		"watchMoviePath":   watchMoviePath,
+		"watchEpisodePath": watchEpisodePath,
 		// discordURL exposes the configured support-channel invite link (empty
 		// when unset, so templates can hide the link).
 		"discordURL": func() string { return s.discordURL },
@@ -130,6 +139,83 @@ func (s *Server) abs(path string) string {
 		path = "/" + path
 	}
 	return s.publicURL + path
+}
+
+// --- SEO slugs -------------------------------------------------------------
+
+// nonSlugChar matches any run of characters that aren't ASCII lowercase letters
+// or digits; slugify collapses each such run to a single hyphen.
+var nonSlugChar = regexp.MustCompile(`[^a-z0-9]+`)
+
+// diacriticFolder strips Unicode combining marks (accents) so Vietnamese/Latin
+// letters fold to their base ASCII form: it decomposes (NFD), drops the marks,
+// then recomposes (NFC). đ/Đ don't decompose, so slugify special-cases them.
+var diacriticFolder = transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+
+// slugify turns a title into an SEO/URL-friendly ASCII slug, e.g.
+// "Người Nhện: Trở Về Nhà" → "nguoi-nhen-tro-ve-nha". Vietnamese diacritics are
+// folded to ASCII, everything is lowercased, and any run of non-alphanumeric
+// characters becomes a single hyphen (leading/trailing hyphens trimmed). An
+// unsluggable name (only punctuation/CJK) yields "".
+func slugify(s string) string {
+	s = strings.ReplaceAll(s, "đ", "d")
+	s = strings.ReplaceAll(s, "Đ", "D")
+	if folded, _, err := transform.String(diacriticFolder, s); err == nil {
+		s = folded
+	}
+	s = strings.ToLower(s)
+	s = nonSlugChar.ReplaceAllString(s, "-")
+	return strings.Trim(s, "-")
+}
+
+// titleSlug builds a title's slug from its localized name, falling back to the
+// original (usually native/English) title when the localized name is empty.
+func titleSlug(name, original string) string {
+	if slug := slugify(name); slug != "" {
+		return slug
+	}
+	return slugify(original)
+}
+
+// parseIDFromSlug extracts the numeric id trailing a "<slug>-<id>" path segment.
+// The id is always appended as "-<id>", so it is the part after the final "-";
+// a bare "<id>" (the legacy URL form) has no hyphen and parses whole.
+func parseIDFromSlug(s string) (int64, error) {
+	if i := strings.LastIndex(s, "-"); i >= 0 {
+		s = s[i+1:]
+	}
+	return strconv.ParseInt(s, 10, 64)
+}
+
+// joinSlugID composes a "<prefix>/<slug>-<id>" path; when the slug is empty it
+// drops the hyphen and emits "<prefix>/<id>" so the URL never starts a segment
+// with a stray "-".
+func joinSlugID(prefix, slug string, id int64) string {
+	if slug == "" {
+		return fmt.Sprintf("%s/%d", prefix, id)
+	}
+	return fmt.Sprintf("%s/%s-%d", prefix, slug, id)
+}
+
+// titlePath / watchMoviePath / watchEpisodePath build the canonical slugged URLs
+// for a title's detail and watch pages. They are exposed to templates via
+// funcMap so markup and server-side SEO output construct identical URLs.
+func titlePath(id int64, name, original string) string {
+	return joinSlugID("/titles", titleSlug(name, original), id)
+}
+
+func watchMoviePath(id int64, name, original string) string {
+	return joinSlugID("/watch/movie", titleSlug(name, original), id)
+}
+
+func watchEpisodePath(id int64, epNum int, titleName string) string {
+	slug := titleSlug(titleName, "")
+	if slug != "" {
+		slug = fmt.Sprintf("%s-tap-%d", slug, epNum)
+	} else {
+		slug = fmt.Sprintf("tap-%d", epNum)
+	}
+	return joinSlugID("/watch/episode", slug, id)
 }
 
 // yearOf extracts the 4-digit year from a "YYYY-MM-DD" date string.
@@ -476,7 +562,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
 		s.renderNotFound(w)
 		return
@@ -572,7 +658,7 @@ func jsonOrEmpty(v any) string {
 }
 
 func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
 		s.renderNotFound(w)
 		return
@@ -599,7 +685,7 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 	data := watchData{
 		Heading:       title.Title,
 		Sub:           yearOf(title.AirDate),
-		BackHref:      fmt.Sprintf("/titles/%d", title.ID),
+		BackHref:      titlePath(title.ID, title.Title, title.OriginalTitle),
 		OwnerKind:     "title",
 		OwnerID:       title.ID,
 		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
@@ -610,7 +696,7 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
 		s.renderNotFound(w)
 		return
@@ -646,7 +732,7 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 	data := watchData{
 		Heading:       ec.TitleName,
 		Sub:           sub,
-		BackHref:      fmt.Sprintf("/titles/%d", ec.TitleID),
+		BackHref:      titlePath(ec.TitleID, ec.TitleName, ""),
 		OwnerKind:     "episode",
 		OwnerID:       id,
 		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
@@ -827,7 +913,7 @@ func (s *Server) titleJSONLD(t *Title) template.JS {
 	if t == nil {
 		return ""
 	}
-	url := s.abs(fmt.Sprintf("/titles/%d", t.ID))
+	url := s.abs(titlePath(t.ID, t.Title, t.OriginalTitle))
 
 	work := map[string]any{
 		"@context": "https://schema.org",
@@ -925,8 +1011,8 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	b.WriteString("  <url><loc>" + base + "/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>\n")
 	for _, e := range entries {
 		b.WriteString(fmt.Sprintf(
-			"  <url><loc>%s/titles/%d</loc><lastmod>%s</lastmod><changefreq>weekly</changefreq></url>\n",
-			base, e.ID, e.UpdatedAt.Format("2006-01-02")))
+			"  <url><loc>%s%s</loc><lastmod>%s</lastmod><changefreq>weekly</changefreq></url>\n",
+			base, titlePath(e.ID, e.Title, e.OriginalTitle), e.UpdatedAt.Format("2006-01-02")))
 	}
 	b.WriteString("</urlset>\n")
 

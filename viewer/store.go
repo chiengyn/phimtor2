@@ -127,10 +127,13 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter, limit, offset int
 	return out, rows.Err()
 }
 
-// SitemapEntry is one indexable title for the XML sitemap.
+// SitemapEntry is one indexable title for the XML sitemap. Title/OriginalTitle
+// feed the SEO slug in the emitted <loc>.
 type SitemapEntry struct {
-	ID        int64
-	UpdatedAt time.Time
+	ID            int64
+	Title         string
+	OriginalTitle string
+	UpdatedAt     time.Time
 }
 
 // SitemapTitles lists every title with its last-modified time, newest first,
@@ -138,7 +141,7 @@ type SitemapEntry struct {
 // emitted with a valid <lastmod>.
 func (s *Store) SitemapTitles(ctx context.Context) ([]SitemapEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, updated_at FROM titles ORDER BY updated_at DESC`)
+		`SELECT id, title, original_title, updated_at FROM titles ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -147,10 +150,12 @@ func (s *Store) SitemapTitles(ctx context.Context) ([]SitemapEntry, error) {
 	var out []SitemapEntry
 	for rows.Next() {
 		var e SitemapEntry
+		var origTitle sql.NullString
 		var updated sql.NullTime
-		if err := rows.Scan(&e.ID, &updated); err != nil {
+		if err := rows.Scan(&e.ID, &e.Title, &origTitle, &updated); err != nil {
 			return nil, err
 		}
+		e.OriginalTitle = origTitle.String
 		if updated.Valid {
 			e.UpdatedAt = updated.Time
 		} else {

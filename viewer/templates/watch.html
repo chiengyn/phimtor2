@@ -283,7 +283,7 @@
 		<div class="ep-nav">
 			{{range .Episodes}}
 			<a class="ep-chip{{if eq .ID $.OwnerID}} active{{end}}"
-				href="/watch/episode/{{.ID}}"
+				href="{{watchEpisodePath .ID .EpisodeNumber $.Heading}}"
 				title="{{if .Name}}{{.Name}}{{else}}Tập {{.EpisodeNumber}}{{end}}">{{.EpisodeNumber}}</a>
 			{{end}}
 		</div>

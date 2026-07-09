@@ -8,7 +8,7 @@
 		<div class="row-track">
 			{{if .Ranked}}
 				{{range $i, $t := .Titles}}
-				<a class="rank-card" href="/titles/{{$t.ID}}" aria-label="Hạng {{inc $i}}: {{$t.Title}}">
+				<a class="rank-card" href="{{titlePath $t.ID $t.Title $t.OriginalTitle}}" aria-label="Hạng {{inc $i}}: {{$t.Title}}">
 					<span class="rank-num" aria-hidden="true">{{inc $i}}</span>
 					<div class="rank-poster">
 						{{$p := img "w342" $t.PosterPath}}

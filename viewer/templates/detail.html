@@ -2,11 +2,11 @@
 {{define "head_extra"}}
 <meta name="description" content="{{if .Overview}}{{truncate 160 .Overview}}{{else}}Xem {{.Title}}{{with year .AirDate}} ({{.}}){{end}} {{if eq .Type "tv"}}phim bộ{{else}}phim lẻ{{end}} online, phụ đề tiếng Việt, chất lượng cao tại phimnet.{{end}}">
 <meta name="robots" content="index, follow">
-<link rel="canonical" href="{{abs (printf "/titles/%d" .ID)}}">
+<link rel="canonical" href="{{abs (titlePath .ID .Title .OriginalTitle)}}">
 <meta property="og:type" content="video.{{if eq .Type "tv"}}tv_show{{else}}movie{{end}}">
 <meta property="og:title" content="{{.Title}}{{with year .AirDate}} ({{.}}){{end}}">
 {{if .Overview}}<meta property="og:description" content="{{truncate 200 .Overview}}">{{end}}
-<meta property="og:url" content="{{abs (printf "/titles/%d" .ID)}}">
+<meta property="og:url" content="{{abs (titlePath .ID .Title .OriginalTitle)}}">
 {{$og := img "w1280" .BackdropPath}}{{if not $og}}{{$og = img "w780" .PosterPath}}{{end}}{{if $og}}<meta property="og:image" content="{{$og}}">{{end}}
 <script type="application/ld+json">{{jsonLD .}}</script>
 {{end}}
@@ -28,7 +28,7 @@
 				{{with .Runtime}}<span>{{.}} phút</span>{{end}}
 			</div>
 			{{if .Genres}}<div class="genres">{{range .Genres}}<span class="genre-chip">{{.Name}}</span>{{end}}</div>{{end}}
-			{{if ne .Type "tv"}}<a class="watch-btn" href="/watch/movie/{{.ID}}">▶ Xem phim</a>{{end}}
+			{{if ne .Type "tv"}}<a class="watch-btn" href="{{watchMoviePath .ID .Title .OriginalTitle}}">▶ Xem phim</a>{{end}}
 			{{if .Overview}}<p class="overview">{{.Overview}}</p>{{end}}
 		</div>
 	</div>
@@ -50,7 +50,7 @@
 						<div class="ep-title">{{if .Name}}{{.Name}}{{else}}Tập {{.EpisodeNumber}}{{end}}</div>
 						{{if .Overview}}<div class="ep-overview">{{.Overview}}</div>{{end}}
 					</div>
-					<a class="watch-btn-sm" href="/watch/episode/{{.ID}}">▶ Xem</a>
+					<a class="watch-btn-sm" href="{{watchEpisodePath .ID .EpisodeNumber $.Title}}">▶ Xem</a>
 				</div>
 				{{end}}
 			</div>

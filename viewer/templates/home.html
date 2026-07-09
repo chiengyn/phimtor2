@@ -32,11 +32,11 @@
 					{{if $f.Overview}}<p class="hero-overview">{{truncate 220 $f.Overview}}</p>{{end}}
 					<div class="hero-actions">
 						{{if eq $f.Type "tv"}}
-						<a class="btn-play" href="/titles/{{$f.ID}}"><span class="ico">▶</span> Xem ngay</a>
+						<a class="btn-play" href="{{titlePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">▶</span> Xem ngay</a>
 						{{else}}
-						<a class="btn-play" href="/watch/movie/{{$f.ID}}"><span class="ico">▶</span> Phát</a>
+						<a class="btn-play" href="{{watchMoviePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">▶</span> Phát</a>
 						{{end}}
-						<a class="btn-info" href="/titles/{{$f.ID}}"><span class="ico">ⓘ</span> Thông tin</a>
+						<a class="btn-info" href="{{titlePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">ⓘ</span> Thông tin</a>
 					</div>
 				</div>
 			</div>

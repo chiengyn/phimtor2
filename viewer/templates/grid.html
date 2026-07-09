@@ -1,5 +1,5 @@
 {{define "card"}}
-<a class="card" href="/titles/{{.ID}}">
+<a class="card" href="{{titlePath .ID .Title .OriginalTitle}}">
 	<div class="poster">
 		{{$p := img "w342" .PosterPath}}
 		{{if $p}}<img src="{{$p}}" alt="{{.Title}}" loading="lazy">{{else}}<div class="poster-empty">{{.Title}}</div>{{end}}
