@@ -46,3 +46,4 @@ manager/manager
 .idea/
 .vscode/
 .codegraph/
+.claude/
