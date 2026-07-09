@@ -505,6 +505,9 @@ type watchData struct {
 	VideosJSON    string // JSON array, injected via a data-* attribute
 	SubtitlesJSON string // JSON array, injected via a data-* attribute
 	HasVideo      bool
+	// Same-season episode navigation (episode watch page only; empty for movies).
+	SeasonNumber int
+	Episodes     []Episode
 }
 
 // lockedResolutions are video qualities currently reserved for future paid
@@ -631,6 +634,11 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	eps, err := s.store.EpisodesInSeasonOf(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	sub := fmt.Sprintf("Phần %d · Tập %d", ec.SeasonNumber, ec.EpisodeNumber)
 	if ec.EpisodeName != "" {
 		sub += ": " + ec.EpisodeName
@@ -644,6 +652,8 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
 		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
 		HasVideo:      len(videos) > 0,
+		SeasonNumber:  ec.SeasonNumber,
+		Episodes:      eps,
 	}
 	s.render(w, s.watch, "layout", data)
 }

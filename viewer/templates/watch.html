@@ -75,6 +75,18 @@
 	.chip .chip-sub { color: var(--muted); }
 	.chip .chip-lock { color: var(--muted); font-size: 0.72rem; }
 
+	/* Same-season episode navigation strip. */
+	.ep-nav { display: flex; flex-wrap: wrap; gap: 8px; }
+	.ep-chip {
+		display: inline-flex; align-items: center; justify-content: center;
+		min-width: 40px; height: 40px; padding: 0 10px;
+		background: var(--surface); border: 1px solid #3a3a3a; border-radius: var(--radius);
+		color: var(--text); font-size: 0.9rem; font-weight: 600; text-decoration: none;
+		transition: border-color 0.15s ease, background 0.15s ease;
+	}
+	.ep-chip:hover { border-color: var(--muted); }
+	.ep-chip.active { border-color: var(--accent); background: rgba(229,9,20,0.18); color: var(--accent); cursor: default; }
+
 	/* Subtitle list. */
 	.sub-section { margin-top: 22px; }
 	.sub-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
@@ -234,6 +246,19 @@
 	<div class="status-msg" id="status-msg"></div>
 	{{else}}
 	<p class="no-source">Chưa có nguồn phát cho nội dung này.</p>
+	{{end}}
+
+	{{if .Episodes}}
+	<div class="ctrl-group">
+		<span class="ctrl-label">Phần {{.SeasonNumber}}</span>
+		<div class="ep-nav">
+			{{range .Episodes}}
+			<a class="ep-chip{{if eq .ID $.OwnerID}} active{{end}}"
+				href="/watch/episode/{{.ID}}"
+				title="{{if .Name}}{{.Name}}{{else}}Tập {{.EpisodeNumber}}{{end}}">{{.EpisodeNumber}}</a>
+			{{end}}
+		</div>
+	</div>
 	{{end}}
 </section>
 

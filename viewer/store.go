@@ -525,6 +525,39 @@ func (s *Store) GetEpisodeContext(ctx context.Context, episodeID int64) (*Episod
 	return &ec, nil
 }
 
+// EpisodesInSeasonOf returns all episodes sharing the given episode's season,
+// ordered by episode number, for same-season navigation on the watch page.
+func (s *Store) EpisodesInSeasonOf(ctx context.Context, episodeID int64) ([]Episode, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.id, e.episode_number, e.name, e.overview, e.air_date, e.runtime, e.still_path
+		FROM episodes e
+		WHERE e.season_id = (SELECT season_id FROM episodes WHERE id = ?)
+		ORDER BY e.episode_number`, episodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Episode
+	for rows.Next() {
+		var ep Episode
+		var overview, still sql.NullString
+		var air sql.NullTime
+		var runtime sql.NullInt64
+		if err := rows.Scan(&ep.ID, &ep.EpisodeNumber, &ep.Name, &overview, &air, &runtime, &still); err != nil {
+			return nil, err
+		}
+		ep.Overview = overview.String
+		ep.AirDate = dateStr(air)
+		if runtime.Valid {
+			r := int(runtime.Int64)
+			ep.Runtime = &r
+		}
+		ep.StillPath = still.String
+		out = append(out, ep)
+	}
+	return out, rows.Err()
+}
+
 func dateStr(t sql.NullTime) string {
 	if !t.Valid {
 		return ""
