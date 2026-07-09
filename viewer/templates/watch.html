@@ -87,6 +87,24 @@
 	.ep-chip:hover { border-color: var(--muted); }
 	.ep-chip.active { border-color: var(--accent); background: rgba(229,9,20,0.18); color: var(--accent); cursor: default; }
 
+	/* Keyboard-shortcut legend + the on-screen toast shown when a key fires. */
+	.watch .player { position: relative; }
+	.kbd-toast {
+		position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+		background: rgba(0,0,0,0.78); color: #fff; padding: 12px 20px; border-radius: var(--radius);
+		font-size: 1.05rem; font-weight: 700; white-space: nowrap;
+		pointer-events: none; opacity: 0; transition: opacity 0.15s ease; z-index: 5;
+	}
+	.kbd-toast.show { opacity: 1; }
+	.shortcuts { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+	.shortcut { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.8rem; }
+	.shortcut kbd {
+		display: inline-flex; align-items: center; justify-content: center;
+		min-width: 22px; height: 22px; padding: 0 6px;
+		background: var(--surface-2); border: 1px solid #3a3a3a; border-bottom-width: 2px;
+		border-radius: 5px; font-family: inherit; font-size: 0.78rem; font-weight: 600; color: var(--text);
+	}
+
 	/* Subtitle list. */
 	.sub-section { margin-top: 22px; }
 	.sub-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
@@ -188,6 +206,17 @@
 	<div class="ctrl-group">
 		<span class="ctrl-label">Nguồn phát</span>
 		<div class="source-chips" id="source-chips"></div>
+	</div>
+
+	<div class="ctrl-group">
+		<span class="ctrl-label">Phím tắt</span>
+		<div class="shortcuts">
+			<span class="shortcut"><kbd>Space</kbd> Phát / Dừng</span>
+			<span class="shortcut"><kbd>←</kbd><kbd>→</kbd> Tua 10 giây</span>
+			<span class="shortcut"><kbd>↑</kbd><kbd>↓</kbd> Âm lượng</span>
+			<span class="shortcut"><kbd>M</kbd> Tắt tiếng</span>
+			<span class="shortcut"><kbd>F</kbd> Toàn màn hình</span>
+		</div>
 	</div>
 
 	<div class="sub-section">
@@ -609,7 +638,9 @@ function buildPlayer(streamURL, resumeAt) {
 		setStatus('');
 	});
 
-	player = new Plyr('#player', { captions: { active: true, update: true }, autoplay: true });
+	// Our own document-level keydown handler drives the shortcuts, so turn Plyr's
+	// built-in keyboard off to avoid double-handling (e.g. Space firing twice).
+	player = new Plyr('#player', { captions: { active: true, update: true }, autoplay: true, keyboard: { focused: false, global: false } });
 	// On phones, rotate to landscape when going fullscreen (and release on exit).
 	player.on('enterfullscreen', lockLandscape);
 	player.on('exitfullscreen', unlockOrientation);
@@ -632,6 +663,82 @@ function unlockOrientation() {
 	const o = screen.orientation;
 	if (o && typeof o.unlock === 'function') { try { o.unlock(); } catch(e) {} }
 }
+
+// --- Keyboard shortcuts ---------------------------------------------------
+// Document-level player shortcuts (seek, volume, play/pause, mute, fullscreen)
+// so the keys work without first clicking the player. Plyr's own keyboard is
+// left off (see buildPlayer) so nothing double-fires. Ignored while the user is
+// typing in a form field (e.g. the subtitle-style inputs) or holding a modifier.
+const SEEK_STEP = 10;     // seconds per ← / → press
+const VOLUME_STEP = 0.1;  // 10% per ↑ / ↓ press
+
+let kbdToastTimer = null;
+// showKbdToast flashes a short label over the player so the user gets feedback
+// on what a key did. The toast lives inside #player-wrap, which buildPlayer
+// rebuilds on a source switch, so it is (re)created lazily each time.
+function showKbdToast(text) {
+	const wrap = document.getElementById('player-wrap');
+	if (!wrap) return;
+	let toast = wrap.querySelector('.kbd-toast');
+	if (!toast) {
+		toast = document.createElement('div');
+		toast.className = 'kbd-toast';
+		wrap.appendChild(toast);
+	}
+	toast.textContent = text;
+	toast.classList.add('show');
+	if (kbdToastTimer) clearTimeout(kbdToastTimer);
+	kbdToastTimer = setTimeout(() => toast.classList.remove('show'), 700);
+}
+
+function isTypingTarget(el) {
+	if (!el) return false;
+	const tag = el.tagName;
+	return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
+
+function volumePct() { return Math.round(player.volume * 100); }
+
+document.addEventListener('keydown', (e) => {
+	if (!player) return;
+	if (isTypingTarget(e.target)) return;
+	if (e.ctrlKey || e.metaKey || e.altKey) return;
+	let handled = true;
+	switch (e.key) {
+		case ' ':
+		case 'k': case 'K':
+			player.togglePlay();
+			showKbdToast(player.playing ? '❚❚' : '▶');
+			break;
+		case 'ArrowLeft':
+			player.rewind(SEEK_STEP);
+			showKbdToast('⏪ ' + SEEK_STEP + 's');
+			break;
+		case 'ArrowRight':
+			player.forward(SEEK_STEP);
+			showKbdToast('⏩ ' + SEEK_STEP + 's');
+			break;
+		case 'ArrowUp':
+			player.muted = false;
+			player.volume = Math.min(1, player.volume + VOLUME_STEP);
+			showKbdToast('🔊 ' + volumePct() + '%');
+			break;
+		case 'ArrowDown':
+			player.volume = Math.max(0, player.volume - VOLUME_STEP);
+			showKbdToast('🔉 ' + volumePct() + '%');
+			break;
+		case 'm': case 'M':
+			player.muted = !player.muted;
+			showKbdToast(player.muted ? '🔇 Tắt tiếng' : '🔊 ' + volumePct() + '%');
+			break;
+		case 'f': case 'F':
+			player.fullscreen.toggle();
+			break;
+		default:
+			handled = false;
+	}
+	if (handled) e.preventDefault();
+});
 
 // --- Stats / progress (debug only) ----------------------------------------
 
