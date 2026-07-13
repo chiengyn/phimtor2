@@ -121,6 +121,7 @@
 {{ define "video-row" }}
 <div class="torrent-row">
   <span class="badge res">{{ .Resolution }}</span>
+  {{ if not .HasTorrentFile }}<span class="badge magnet-only" title="Chỉ có magnet — chưa lưu tệp .torrent">Magnet</span>{{ end }}
   <div class="torrent-meta">
     <div class="torrent-name">{{ .Name }}</div>
     <div class="muted">{{ .FilePath }} · {{ filesize .FileSize }}</div>

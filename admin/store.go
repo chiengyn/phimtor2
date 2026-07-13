@@ -825,6 +825,7 @@ func (s *Store) DeleteVideo(ctx context.Context, id int64) (bool, error) {
 func (s *Store) loadVideosForTitle(ctx context.Context, titleID int64) ([]Video, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT v.id, v.source_id, v.title_id, v.name, v.resolution, src.info_hash, src.magnet,
+		       src.torrent_file IS NOT NULL AS has_torrent_file,
 		       v.file_index, v.file_path, v.file_size, v.created_at
 		FROM videos v
 		JOIN torrent_sources src ON src.id = v.source_id
@@ -838,7 +839,7 @@ func (s *Store) loadVideosForTitle(ctx context.Context, titleID int64) ([]Video,
 		var v Video
 		var tid sql.NullInt64
 		if err := rows.Scan(&v.ID, &v.SourceID, &tid, &v.Name, &v.Resolution, &v.InfoHash, &v.Magnet,
-			&v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt); err != nil {
+			&v.HasTorrentFile, &v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		if tid.Valid {
@@ -855,6 +856,7 @@ func (s *Store) loadVideosForTitle(ctx context.Context, titleID int64) ([]Video,
 func (s *Store) loadVideosForEpisodes(ctx context.Context, titleID int64) (map[int64][]Video, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT v.id, v.source_id, v.episode_id, v.name, v.resolution, src.info_hash, src.magnet,
+		       src.torrent_file IS NOT NULL AS has_torrent_file,
 		       v.file_index, v.file_path, v.file_size, v.created_at
 		FROM videos v
 		JOIN torrent_sources src ON src.id = v.source_id
@@ -870,7 +872,7 @@ func (s *Store) loadVideosForEpisodes(ctx context.Context, titleID int64) (map[i
 		var v Video
 		var eid sql.NullInt64
 		if err := rows.Scan(&v.ID, &v.SourceID, &eid, &v.Name, &v.Resolution, &v.InfoHash, &v.Magnet,
-			&v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt); err != nil {
+			&v.HasTorrentFile, &v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		if eid.Valid {
