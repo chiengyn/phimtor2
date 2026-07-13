@@ -69,6 +69,21 @@ unset).
   **Revoke** an approved one (`POST /streamers/{id}/approve`, `.../revoke` proxy to
   the manager). Streamers self-enroll with a self-generated identity and stay
   pending until approved here.
+- Torrent-file fast start (`manager.go`, `harvest.go`): a torrent added by
+  **magnet only** makes the streamer resolve its metadata over DHT before it can
+  stream — a slow cold start. To avoid it, when a watch-page add carries a magnet
+  whose source has stored `.torrent` bytes (`torrent_sources.torrent_file`), the
+  admin **rewrites the add into a `.torrent` upload** (`handleStreamerAdd`) so the
+  streamer loads the metainfo directly; the magnet rides along so the manager can
+  still dedupe placement by infohash. Magnet-only sources (flagged with the
+  "Magnet" badge in the video list) are backfilled two ways: a background
+  **harvester** (`TORRENT_HARVEST_INTERVAL_MIN`, default 5; `0` disables) pulls the
+  metainfo streamers have already resolved for **live** torrents
+  (`/admin/instances` → manager `GET /api/torrents/{hash}/metainfo`) and stores it,
+  and a per-source **"Lấy .torrent"** button (`POST /api/videos/{id}/fetch-torrent`)
+  forces it on demand. Backfill is idempotent (`torrent_file IS NULL` guard), so the
+  two never clobber each other; once stored, the badge clears and the next play is
+  fast.
 - OpenSubtitles (env-only, like the other secrets; no flags): `OPENSUBTITLES_API_KEY`
   (required to enable subtitle search/download), `OPENSUBTITLES_USER_AGENT`, and
   optional `OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD` (a login token

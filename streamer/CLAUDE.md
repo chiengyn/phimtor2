@@ -23,7 +23,8 @@ shared MySQL catalog.
 `GET …/{infoHash}/stats`, `GET …/{infoHash}/files/{fileIndex}/pieces` (per-file
 download map), and `GET …/{infoHash}/files/{fileIndex}/stream`
 (browsers hit the owning streamer directly for these — hence the permissive
-CORS). The **control plane** (add/list/get/delete, plus `GET /api/load`) is gated by an `internalAuth`
+CORS). The **control plane** (add/list/get/delete, `GET …/{infoHash}/metainfo`,
+plus `GET /api/load`) is gated by an `internalAuth`
 bearer that is the streamer's **own `controlToken`** (its self-generated identity,
 see `identity.go`) — only the manager holds it, having received it at registration.
 
@@ -50,7 +51,11 @@ It is **API-only** — there is no built-in UI (the watch page lives in the admi
 and it no longer runs standalone (it must register with a manager and be approved).
 
 The API: `GET /api/torrents` (list), `POST /api/torrents` (magnet JSON or
-`.torrent` multipart), `GET`/`DELETE /api/torrents/{infoHash}`, and `GET
+`.torrent` multipart — the file part is preferred, skipping the DHT metadata
+fetch), `GET`/`DELETE /api/torrents/{infoHash}`,
+`GET /api/torrents/{infoHash}/metainfo` (the torrent's resolved metadata as raw
+bencoded `.torrent` bytes via `TorrentManager.Metainfo`, so the admin can persist
+it and backfill a magnet-only source — `409` until metadata resolves), and `GET
 /api/load` (instance-wide viewer egress rate — HTTP bytes/sec served to browsers,
 metered by `countingResponseWriter` in `handleStream` — plus torrent count,
 polled by the manager for bandwidth-aware placement) — all **internal**

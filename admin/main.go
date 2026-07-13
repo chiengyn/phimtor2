@@ -65,6 +65,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Background backfill of .torrent files for magnet-only sources, from the
+	// metainfo streamers have already resolved for live torrents.
+	harvester := newHarvester(store, manager, time.Duration(cfg.HarvestIntervalMin)*time.Minute)
+	go harvester.run(ctx)
+
 	go func() {
 		log.Printf("phimtor2-admin listening on http://%s", addr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

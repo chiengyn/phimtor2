@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"strings"
 
@@ -57,6 +60,7 @@ func (s *Server) setupRouter() {
 		r.Post("/api/torrents", s.handleAddTorrent)
 		r.Get("/api/torrents", s.handleListTorrents)
 		r.Get("/api/torrents/{infoHash}", s.handleGetTorrent)
+		r.Get("/api/torrents/{infoHash}/metainfo", s.handleGetMetainfo)
 		r.Delete("/api/torrents/{infoHash}", s.handleDeleteTorrent)
 		// Instance-scoped add/list (the per-streamer watch page): force placement
 		// on / list only this instance, bypassing load balancing.
@@ -246,15 +250,49 @@ func readAddBody(w http.ResponseWriter, r *http.Request) (body []byte, contentTy
 		return nil, "", "", false
 	}
 	contentType = r.Header.Get("Content-Type")
-	if contentType == "application/json" {
+	switch {
+	case contentType == "application/json":
 		var jb struct {
 			Magnet string `json:"magnet"`
 		}
 		if json.Unmarshal(body, &jb) == nil {
 			magnet = jb.Magnet
 		}
+	case strings.HasPrefix(contentType, "multipart/form-data"):
+		// A .torrent upload carries the magnet in a "magnet" form field so we can
+		// still read the infohash off it and dedupe placement (a second viewer of
+		// the same title must land on the streamer that already owns it). Parse it
+		// out of the buffered copy — the forwarded body bytes stay untouched.
+		magnet = multipartMagnet(contentType, body)
 	}
 	return body, contentType, magnet, true
+}
+
+// multipartMagnet best-effort reads the "magnet" field out of a buffered
+// multipart/form-data body. A miss (no boundary, no field, malformed) just
+// returns "" — dedupe is best-effort and the add still proceeds.
+func multipartMagnet(contentType string, body []byte) string {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return ""
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return ""
+	}
+	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			return ""
+		}
+		if part.FormName() == "magnet" {
+			val, _ := io.ReadAll(io.LimitReader(part, 8<<10))
+			part.Close()
+			return string(val)
+		}
+		part.Close()
+	}
 }
 
 func (s *Server) writeAddResult(w http.ResponseWriter, res map[string]string, err error) {
@@ -299,6 +337,22 @@ func (s *Server) handleGetTorrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entry)
+}
+
+// handleGetMetainfo streams the owning streamer's resolved .torrent bytes back to
+// the admin, which persists them to backfill magnet-only sources. A 409 means the
+// streamer hasn't resolved the torrent's metadata yet (try again later); a 404
+// means no instance currently holds it.
+func (s *Server) handleGetMetainfo(w http.ResponseWriter, r *http.Request) {
+	hash := chi.URLParam(r, "infoHash")
+	data, status := s.reg.getMetainfo(r.Context(), hash)
+	if status != http.StatusOK {
+		writeError(w, status, "metainfo unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-bittorrent")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
