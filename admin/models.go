@@ -67,18 +67,22 @@ type Episode struct {
 // source via JOIN. The raw .torrent bytes live on the source, never on the
 // video, and are never sent to the browser.
 type Video struct {
-	ID         int64     `json:"id"`
-	SourceID   int64     `json:"source_id,omitempty"`
-	TitleID    *int64    `json:"title_id,omitempty"`
-	EpisodeID  *int64    `json:"episode_id,omitempty"`
-	Name       string    `json:"name"`
-	Resolution string    `json:"resolution"` // "2160p" | "1080p" | "720p"
-	InfoHash   string    `json:"info_hash"`
-	Magnet     string    `json:"magnet"`
-	FileIndex  int       `json:"file_index"`
-	FilePath   string    `json:"file_path"`
-	FileSize   int64     `json:"file_size"`
-	CreatedAt  time.Time `json:"created_at,omitempty"`
+	ID         int64  `json:"id"`
+	SourceID   int64  `json:"source_id,omitempty"`
+	TitleID    *int64 `json:"title_id,omitempty"`
+	EpisodeID  *int64 `json:"episode_id,omitempty"`
+	Name       string `json:"name"`
+	Resolution string `json:"resolution"` // "2160p" | "1080p" | "720p"
+	InfoHash   string `json:"info_hash"`
+	Magnet     string `json:"magnet"`
+	// HasTorrentFile is true when the source has the raw .torrent bytes stored
+	// (torrent_file IS NOT NULL); magnet-only sources are false. The bytes
+	// themselves are never sent to the browser, only this flag.
+	HasTorrentFile bool      `json:"has_torrent_file"`
+	FileIndex      int       `json:"file_index"`
+	FilePath       string    `json:"file_path"`
+	FileSize       int64     `json:"file_size"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
 }
 
 // Subtitle is one persisted subtitle file attached to a movie or a single TV
