@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -205,6 +206,7 @@ func (s *Server) setupRouter() {
 	r.Route("/api/videos", func(r chi.Router) {
 		r.Post("/", s.handleSaveVideo)
 		r.Post("/batch", s.handleSaveVideoBatch)
+		r.Post("/{id}/fetch-torrent", s.handleFetchTorrentFile)
 		r.Delete("/{id}", s.handleDeleteVideo)
 	})
 
@@ -223,14 +225,14 @@ func (s *Server) setupRouter() {
 	// directly. managerPath maps /api/streamer/* → the manager's /api/*.
 	r.Route("/api/streamer/torrents", func(r chi.Router) {
 		r.Get("/", s.handleStreamerProxy)
-		r.Post("/", s.handleStreamerProxy)
+		r.Post("/", s.handleStreamerAdd)
 		r.Get("/{hash}", s.handleStreamerProxy)
 		r.Delete("/{hash}", s.handleStreamerProxy)
 	})
 	// Instance-scoped add/list for the per-streamer watch page (?streamer=<id>).
 	r.Route("/api/streamer/instances/{id}/torrents", func(r chi.Router) {
 		r.Get("/", s.handleStreamerProxy)
-		r.Post("/", s.handleStreamerProxy)
+		r.Post("/", s.handleStreamerAdd)
 	})
 
 	s.router = r
@@ -241,6 +243,38 @@ func (s *Server) setupRouter() {
 func (s *Server) handleStreamerProxy(w http.ResponseWriter, r *http.Request) {
 	managerPath := strings.Replace(r.URL.Path, "/api/streamer/", "/api/", 1)
 	s.manager.proxy(w, r, managerPath)
+}
+
+// handleStreamerAdd forwards an add to the manager, but first upgrades a plain
+// magnet add into a .torrent upload when the pasted magnet's source has stored
+// bytes: attaching the metainfo lets the streamer skip the slow DHT metadata
+// fetch. A direct .torrent file upload (operator-supplied) or a magnet with no
+// stored file is forwarded unchanged. The magnet rides along in the multipart
+// body so the manager can still dedupe placement by infohash.
+func (s *Server) handleStreamerAdd(w http.ResponseWriter, r *http.Request) {
+	managerPath := strings.Replace(r.URL.Path, "/api/streamer/", "/api/", 1)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxMetainfoBytes))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "read body")
+		return
+	}
+	contentType := r.Header.Get("Content-Type")
+	if contentType == "application/json" {
+		var jb struct {
+			Magnet string `json:"magnet"`
+		}
+		if json.Unmarshal(body, &jb) == nil && jb.Magnet != "" {
+			if hash := infohashFromMagnet(jb.Magnet); hash != "" {
+				if file, ferr := s.store.TorrentFileByInfoHash(r.Context(), hash); ferr == nil && len(file) > 0 {
+					if mBody, mCT, berr := buildTorrentMultipart(jb.Magnet, file); berr == nil {
+						s.manager.postBody(w, r.Context(), managerPath, mCT, mBody)
+						return
+					}
+				}
+			}
+		}
+	}
+	s.manager.postBody(w, r.Context(), managerPath, contentType, body)
 }
 
 // handleStreamers renders the streamers dashboard: each registered streamer with
@@ -833,6 +867,76 @@ func (s *Server) handleFetchYTSTorrents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	renderMsg(w, "ok", "Không có torrent mới — tất cả nguồn YTS đã được nhập.")
+}
+
+// handleFetchTorrentFile backfills a magnet-only source's .torrent bytes on
+// demand (detail-page button next to the "Magnet" badge). It makes a streamer
+// resolve the magnet's metadata (idempotent add), briefly polls the resolved
+// metainfo through the manager, and stores it — clearing the magnet-only flag.
+// If the metadata hasn't resolved within the poll window the torrent is now live,
+// so the background harvester finishes the job; the operator can just retry.
+func (s *Server) handleFetchTorrentFile(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		renderMsg(w, "err", "ID không hợp lệ")
+		return
+	}
+	infoHash, magnet, hasFile, err := s.store.VideoSource(r.Context(), id)
+	if err != nil {
+		renderMsg(w, "err", "Lỗi: "+err.Error())
+		return
+	}
+	if infoHash == "" {
+		renderMsg(w, "err", "Không tìm thấy video")
+		return
+	}
+	if hasFile {
+		w.Header().Set("HX-Trigger", "torrentsChanged")
+		renderMsg(w, "ok", "Đã có tệp .torrent.")
+		return
+	}
+	// Kick off metadata resolution on a streamer (idempotent), then poll for it.
+	if err := s.manager.addTorrent(r.Context(), magnet); err != nil {
+		renderMsg(w, "err", "Lỗi: "+err.Error())
+		return
+	}
+	data, err := s.pollMetainfo(r.Context(), infoHash)
+	if err != nil {
+		if errors.Is(err, errMetainfoNotReady) {
+			renderMsg(w, "ok", "Đang tải metadata torrent — hệ thống sẽ tự lưu khi sẵn sàng.")
+			return
+		}
+		renderMsg(w, "err", "Lỗi: "+err.Error())
+		return
+	}
+	if err := s.store.BackfillTorrentFile(r.Context(), infoHash, data); err != nil {
+		renderMsg(w, "err", "Lỗi lưu: "+err.Error())
+		return
+	}
+	w.Header().Set("HX-Trigger", "torrentsChanged")
+	renderMsg(w, "ok", "Đã lưu tệp .torrent.")
+}
+
+// pollMetainfo fetches a torrent's metainfo, retrying while the streamer is still
+// resolving it. It is bounded so a stuck magnet can't hold the request open;
+// returns errMetainfoNotReady if the metadata never resolves in that window.
+func (s *Server) pollMetainfo(ctx context.Context, infoHash string) ([]byte, error) {
+	const attempts = 10
+	for i := 0; i < attempts; i++ {
+		data, err := s.manager.getMetainfo(ctx, infoHash)
+		if err == nil {
+			return data, nil
+		}
+		if !errors.Is(err, errMetainfoNotReady) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return nil, errMetainfoNotReady
 }
 
 // handleListTitleVideos renders the video-region fragment that the detail page

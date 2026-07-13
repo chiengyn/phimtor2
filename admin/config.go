@@ -39,6 +39,11 @@ type Config struct {
 	ManagerInternalURL   string
 	ManagerInternalToken string
 
+	// HarvestIntervalMin is how often (minutes) the background harvester backfills
+	// stored .torrent bytes for magnet-only sources from the metainfo streamers
+	// have already resolved for live torrents. 0 disables the harvester.
+	HarvestIntervalMin int
+
 	// OpenSubtitles integration (env-only, since these include secrets). When
 	// OpenSubtitlesAPIKey is empty the subtitle search/download endpoints report
 	// "not configured". Username/Password are optional and only raise the
@@ -91,6 +96,8 @@ func loadConfig() Config {
 		ManagerInternalURL:   envStr("MANAGER_INTERNAL_URL", "http://localhost:8083"),
 		ManagerInternalToken: envStr("MANAGER_INTERNAL_TOKEN", ""),
 
+		HarvestIntervalMin: envInt("TORRENT_HARVEST_INTERVAL_MIN", 5),
+
 		OpenSubtitlesAPIKey:    envStr("OPENSUBTITLES_API_KEY", ""),
 		OpenSubtitlesUserAgent: envStr("OPENSUBTITLES_USER_AGENT", "phimtor2 v1.0"),
 		OpenSubtitlesUsername:  envStr("OPENSUBTITLES_USERNAME", ""),
@@ -120,6 +127,7 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.YTSBaseURL, "yts-base-url", cfg.YTSBaseURL, "Base URL of YTS's movie API (used by the crawl jobs)")
 	flag.StringVar(&cfg.AdminUser, "admin-user", cfg.AdminUser, "HTTP Basic auth user")
 	flag.StringVar(&cfg.ManagerInternalURL, "manager-url", cfg.ManagerInternalURL, "Base URL of the streamer manager (control plane)")
+	flag.IntVar(&cfg.HarvestIntervalMin, "harvest-interval-min", cfg.HarvestIntervalMin, "How often (minutes) to backfill .torrent files for magnet-only sources; 0 disables")
 	flag.StringVar(&cfg.SubtitleStorageBackend, "subtitle-storage", cfg.SubtitleStorageBackend, "Subtitle storage backend: local | s3")
 	flag.StringVar(&cfg.SubtitleStorageDir, "subtitle-dir", cfg.SubtitleStorageDir, "Local subtitle storage directory")
 	flag.Parse()

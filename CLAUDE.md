@@ -21,8 +21,12 @@ server (admin/viewer) to add/prepare a torrent; that server calls the **manager*
 server-side (`MANAGER_INTERNAL_URL` + bearer token), which picks a streamer, adds
 the torrent there, and returns the owning streamer's **public URL**. The browser
 then hits *that* streamer directly for **stats + stream** (the only public
-streamer routes; add/list/get/delete are internal, gated by the streamer's own
-self-generated identity token). Streamers **self-enroll** with the manager: an
+streamer routes; add/list/get/delete/metainfo are internal, gated by the
+streamer's own self-generated identity token). When the source has a stored
+`.torrent` file the app sends it on add (instead of the magnet) so the streamer
+skips the slow DHT metadata fetch; magnet-only sources are backfilled by the admin
+(background harvest + a manual button) from the metainfo streamers resolve once a
+torrent is live. Streamers **self-enroll** with the manager: an
 unknown streamer is **pending** until an operator approves it in the admin
 Streamers dashboard (the manager pins its identity fingerprint), then it
 heartbeats. Subtitle search (OpenSubtitles) is proxied by the admin. The streamer

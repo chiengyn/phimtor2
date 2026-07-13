@@ -55,6 +55,7 @@ func (s *Server) setupRouter() {
 			r.Get("/", s.handleListTorrents)
 			r.Post("/", s.handleAddTorrent)
 			r.Get("/{infoHash}", s.handleGetTorrent)
+			r.Get("/{infoHash}/metainfo", s.handleGetMetainfo)
 			r.Delete("/{infoHash}", s.handleRemoveTorrent)
 		})
 	})
@@ -136,6 +137,26 @@ func (s *Server) handleGetTorrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// handleGetMetainfo returns the torrent's resolved metainfo as raw bencoded
+// .torrent bytes so the admin can persist it and backfill a magnet-only source.
+// A 409 means the torrent's metadata hasn't been fetched from the swarm yet
+// (there is nothing to bencode); a 404 means no such torrent is tracked.
+func (s *Server) handleGetMetainfo(w http.ResponseWriter, r *http.Request) {
+	infoHash := chi.URLParam(r, "infoHash")
+	data, ok, hasInfo := s.manager.Metainfo(infoHash)
+	if !ok {
+		writeError(w, http.StatusNotFound, "torrent not found")
+		return
+	}
+	if !hasInfo {
+		writeError(w, http.StatusConflict, "torrent metadata not resolved yet")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-bittorrent")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleTorrentStats(w http.ResponseWriter, r *http.Request) {

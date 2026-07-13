@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,11 +32,21 @@ func newManagerClient(internalURL, token string) *managerClient {
 	}
 }
 
-// addTorrent registers a magnet via the manager and returns its info hash plus
-// the owning streamer's public base URL. The manager is idempotent — re-adding a
-// tracked magnet returns the existing placement.
-func (c *managerClient) addTorrent(ctx context.Context, magnet string) (infoHash, streamerPublicURL string, err error) {
-	body, err := json.Marshal(map[string]string{"magnet": magnet})
+// addTorrent registers a source via the manager and returns its info hash plus
+// the owning streamer's public base URL. When torrentFile is non-nil it is sent
+// as a multipart .torrent upload (with the magnet alongside so the manager can
+// still dedupe by infohash), letting the streamer load the metainfo directly and
+// skip the DHT metadata fetch; otherwise a plain magnet is sent. The manager is
+// idempotent — re-adding a tracked source returns the existing placement.
+func (c *managerClient) addTorrent(ctx context.Context, magnet string, torrentFile []byte) (infoHash, streamerPublicURL string, err error) {
+	var body []byte
+	var contentType string
+	if len(torrentFile) > 0 {
+		body, contentType, err = buildTorrentMultipart(magnet, torrentFile)
+	} else {
+		contentType = "application/json"
+		body, err = json.Marshal(map[string]string{"magnet": magnet})
+	}
 	if err != nil {
 		return "", "", err
 	}
@@ -43,7 +54,7 @@ func (c *managerClient) addTorrent(ctx context.Context, magnet string) (infoHash
 	if err != nil {
 		return "", "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -92,6 +103,32 @@ func (c *managerClient) deleteTorrent(ctx context.Context, infoHash string) erro
 		return fmt.Errorf("manager delete torrent: %s", resp.Status)
 	}
 	return nil
+}
+
+// buildTorrentMultipart builds a multipart/form-data body carrying the raw
+// .torrent bytes in a "torrent" file part plus the magnet in a "magnet" field.
+// The streamer prefers the file part (skipping DHT metadata resolution); the
+// magnet rides along so the manager can still read the infohash off it to dedupe
+// placement onto the streamer that already owns the torrent.
+func buildTorrentMultipart(magnet string, torrentFile []byte) (body []byte, contentType string, err error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if magnet != "" {
+		if err = mw.WriteField("magnet", magnet); err != nil {
+			return nil, "", err
+		}
+	}
+	fw, err := mw.CreateFormFile("torrent", "source.torrent")
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err = fw.Write(torrentFile); err != nil {
+		return nil, "", err
+	}
+	if err = mw.Close(); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), mw.FormDataContentType(), nil
 }
 
 // managerErrMsg best-effort extracts the {"error":...} message from a failed

@@ -766,7 +766,7 @@ func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, "nguồn này hiện không khả dụng")
 		return
 	}
-	infoHash, streamerPublicURL, err := s.manager.addTorrent(r.Context(), video.Magnet)
+	infoHash, streamerPublicURL, err := s.manager.addTorrent(r.Context(), video.Magnet, video.TorrentFile)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return

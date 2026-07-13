@@ -120,12 +120,18 @@ Flat single `main` package.
   started from `main.go` (`server.watcher.run`) and stops on shutdown.
 
 - **Manager client** (`manager.go`): a tiny server-side HTTP client against the
-  manager (with the internal bearer token): `addTorrent(magnet) → (infoHash,
-  streamerPublicURL)` and `deleteTorrent(infoHash)` (used by the watch-session
-  reaper above). The manager picks a streamer on add; the returned public URL
-  flows through the prepare response so the browser streams from the right
-  instance. Keeping these on the server means only the streamers' stats + stream
-  endpoints are browser-reachable; everything else is internal.
+  manager (with the internal bearer token): `addTorrent(magnet, torrentFile) →
+  (infoHash, streamerPublicURL)` and `deleteTorrent(infoHash)` (used by the
+  watch-session reaper above). `GetVideo` loads the source's stored `.torrent`
+  bytes (`torrent_sources.torrent_file`) into `Video.TorrentFile` — the only load
+  that does; the list queries skip the blob — and `handlePrepareSource` passes them
+  along. When present, `addTorrent` sends a **multipart `.torrent` upload** (with
+  the magnet alongside so the manager can still dedupe by infohash) so the streamer
+  skips the slow DHT metadata fetch; otherwise a plain magnet. The admin writes and
+  backfills those bytes (viewer is read-only). The manager picks a streamer on add;
+  the returned public URL flows through the prepare response so the browser streams
+  from the right instance. Keeping these on the server means only the streamers'
+  stats + stream endpoints are browser-reachable; everything else is internal.
 
 - **Subtitle blob store** (`blobstore.go`): a **read-only** port of admin's store
   (`Get` only, `local` + `s3`); `handleSubtitleFile` routes a subtitle row to

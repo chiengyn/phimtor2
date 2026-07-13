@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -386,6 +387,28 @@ func (m *TorrentManager) GetTorrentInfo(infoHash string) (TorrentInfo, bool) {
 		return TorrentInfo{}, false
 	}
 	return buildTorrentInfo(infoHash, t), true
+}
+
+// Metainfo returns the torrent's resolved metadata as raw bencoded .torrent
+// bytes, for the admin to persist and backfill a magnet-only source. ok is false
+// when no such torrent is tracked; hasInfo is false when the metadata hasn't been
+// fetched from the swarm yet (nothing to bencode — the caller should retry later).
+func (m *TorrentManager) Metainfo(infoHash string) (data []byte, ok, hasInfo bool) {
+	m.mu.RLock()
+	t, tracked := m.torrents[infoHash]
+	m.mu.RUnlock()
+	if !tracked {
+		return nil, false, false
+	}
+	if t.Info() == nil {
+		return nil, true, false
+	}
+	var buf bytes.Buffer
+	mi := t.Metainfo()
+	if err := mi.Write(&buf); err != nil {
+		return nil, true, false
+	}
+	return buf.Bytes(), true, true
 }
 
 // buildTorrentInfo snapshots one torrent's structure. Before metadata arrives

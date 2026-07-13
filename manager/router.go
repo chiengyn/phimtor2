@@ -149,6 +149,31 @@ func (r *Registry) getTorrent(ctx context.Context, hash string) (torrentEntry, b
 	return entry, true
 }
 
+// getMetainfo fetches the bencoded .torrent from the streamer that owns the
+// torrent. It returns the streamer's status code so the caller can tell "not
+// ready yet" (409, metadata still resolving) from "gone" (404, no owner): only a
+// 200 carries bytes.
+func (r *Registry) getMetainfo(ctx context.Context, hash string) ([]byte, int) {
+	in, ok := r.resolveOwner(ctx, hash)
+	if !ok {
+		return nil, http.StatusNotFound
+	}
+	resp, err := in.do(ctx, http.MethodGet, "/api/torrents/"+hash+"/metainfo", "", nil)
+	if err != nil {
+		return nil, http.StatusBadGateway
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return nil, resp.StatusCode
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAddBody))
+	if err != nil {
+		return nil, http.StatusBadGateway
+	}
+	return data, http.StatusOK
+}
+
 // deleteTorrent routes a delete to the owner. It is idempotent: a torrent no
 // instance owns is already in the desired state, so this still succeeds.
 func (r *Registry) deleteTorrent(ctx context.Context, hash string) error {

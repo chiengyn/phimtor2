@@ -625,20 +625,31 @@ func (s *Store) VideosForEpisode(ctx context.Context, episodeID int64) ([]Video,
 	return s.queryVideos(ctx, "v.episode_id = ?", episodeID)
 }
 
-// GetVideo loads one video by id (with its source's info_hash and magnet), used
-// by the prepare endpoint to add the torrent to the streamer. Returns (nil, nil)
-// when no such video exists.
+// GetVideo loads one video by id (with its source's info_hash, magnet, and — when
+// stored — the raw .torrent bytes), used by the prepare endpoint to add the
+// torrent to the streamer. Unlike the list queries it also selects the
+// torrent_file blob so playback can hand the streamer the metainfo directly and
+// skip the DHT metadata fetch. Returns (nil, nil) when no such video exists.
 func (s *Store) GetVideo(ctx context.Context, id int64) (*Video, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+videoColumns+`
+	row := s.db.QueryRowContext(ctx, `SELECT `+videoColumns+`, src.torrent_file
 		FROM videos v
 		JOIN torrent_sources src ON src.id = v.source_id
 		WHERE v.id = ?`, id)
-	v, err := scanVideo(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
+	var v Video
+	var titleID, episodeID sql.NullInt64
+	if err := row.Scan(&v.ID, &v.SourceID, &titleID, &episodeID, &v.Name, &v.Resolution,
+		&v.InfoHash, &v.Magnet, &v.FileIndex, &v.FilePath, &v.FileSize, &v.CreatedAt,
+		&v.TorrentFile); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
 		return nil, err
+	}
+	if titleID.Valid {
+		v.TitleID = &titleID.Int64
+	}
+	if episodeID.Valid {
+		v.EpisodeID = &episodeID.Int64
 	}
 	return &v, nil
 }

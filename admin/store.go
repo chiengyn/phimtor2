@@ -667,6 +667,81 @@ func upsertTorrentSource(ctx context.Context, q execQuerier, infoHash, magnet st
 	return id, nil
 }
 
+// TorrentFileByInfoHash returns the stored raw .torrent bytes for a source, or
+// nil when the source is magnet-only (or unknown). Used to attach the file to a
+// watch-page add so the streamer can skip the DHT metadata fetch.
+func (s *Store) TorrentFileByInfoHash(ctx context.Context, infoHash string) ([]byte, error) {
+	var data []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT torrent_file FROM torrent_sources WHERE info_hash = ?`, infoHash).Scan(&data)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// VideoSource returns a video's torrent-source identity (info_hash + magnet) and
+// whether the raw .torrent bytes are already stored, by video id. infoHash is ""
+// when no such video exists. Used by the manual backfill button.
+func (s *Store) VideoSource(ctx context.Context, id int64) (infoHash, magnet string, hasTorrentFile bool, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT src.info_hash, src.magnet, src.torrent_file IS NOT NULL
+		FROM videos v JOIN torrent_sources src ON src.id = v.source_id
+		WHERE v.id = ?`, id).Scan(&infoHash, &magnet, &hasTorrentFile)
+	if err == sql.ErrNoRows {
+		return "", "", false, nil
+	}
+	return infoHash, magnet, hasTorrentFile, err
+}
+
+// BackfillTorrentFile stores the resolved .torrent bytes for a previously
+// magnet-only source. The WHERE guard keeps it idempotent — it only fills a gap
+// and never overwrites bytes already present, so a concurrent harvest and manual
+// fetch can't clobber each other.
+func (s *Store) BackfillTorrentFile(ctx context.Context, infoHash string, data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("empty torrent file")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE torrent_sources SET torrent_file = ? WHERE info_hash = ? AND torrent_file IS NULL`,
+		data, infoHash)
+	return err
+}
+
+// MagnetOnlyInfoHashes filters the given infohashes down to those whose source
+// still has no stored .torrent bytes, so the harvester only fetches metainfo for
+// sources that actually need it. Returns an empty slice for an empty input.
+func (s *Store) MagnetOnlyInfoHashes(ctx context.Context, hashes []string) ([]string, error) {
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(hashes))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]interface{}, len(hashes))
+	for i, h := range hashes {
+		args[i] = h
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT info_hash FROM torrent_sources
+		 WHERE torrent_file IS NULL AND info_hash IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
 // insertVideo writes one videos row, sharing the given source. Exactly one of
 // v.TitleID / v.EpisodeID must be non-nil (mirrors chk_video_owner). On return
 // v.ID and v.SourceID are set.

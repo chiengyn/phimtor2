@@ -127,6 +127,13 @@
     <div class="muted">{{ .FilePath }} · {{ filesize .FileSize }}</div>
   </div>
   <a class="btn-play" href="/videos/{{ .ID }}/play" title="Phát video">▶ Phát</a>
+  {{ if not .HasTorrentFile }}
+  <button hx-post="/api/videos/{{ .ID }}/fetch-torrent"
+          hx-target="#video-msg"
+          hx-swap="innerHTML"
+          hx-disabled-elt="this"
+          title="Tải và lưu tệp .torrent để khởi động nhanh hơn">Lấy .torrent</button>
+  {{ end }}
   <button class="danger"
           hx-delete="/api/videos/{{ .ID }}"
           hx-confirm="Xóa video này?"

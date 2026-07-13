@@ -86,8 +86,14 @@ Flat single `main` package, mirroring `streamer/`.
     per-instance `sessionToken` (validated in-handler — they can't share the join
     token's group).
   - **Control** (`MANAGER_INTERNAL_TOKEN`): `POST /api/torrents` (place + add →
-    `{infoHash, streamerPublicURL}`), `GET /api/torrents` (aggregated, each entry
+    `{infoHash, streamerPublicURL}`; a `.torrent` upload carries the magnet in a
+    `magnet` form field so `readAddBody` can still read the infohash off it to
+    dedupe placement — a multipart add without it would skip the dedupe and could
+    double-place the same title), `GET /api/torrents` (aggregated, each entry
     annotated with its owner's `streamerPublicURL`), `GET /api/torrents/{hash}`,
+    `GET /api/torrents/{hash}/metainfo` (routes to the owner and streams back its
+    resolved bencoded `.torrent` so the admin can backfill a magnet-only source;
+    `409` while metadata is still resolving, `404` if no instance holds it),
     `DELETE /api/torrents/{hash}`, `GET /admin/instances` (dashboard status), and
     the enrollment routes `GET /admin/enrollments`,
     `POST /admin/enrollments/{id}/approve`, `DELETE /admin/enrollments/{id}`.
