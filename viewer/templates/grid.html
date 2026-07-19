@@ -5,6 +5,7 @@
 		{{if $p}}<img src="{{$p}}" alt="{{.Title}}" loading="lazy">{{else}}<div class="poster-empty">{{.Title}}</div>{{end}}
 		<span class="card-play" aria-hidden="true">▶</span>
 		{{if gt .VoteAverage 0.0}}<span class="card-score" aria-hidden="true">{{rating .VoteAverage}}</span>{{end}}
+		{{if .HasVietsub}}<span class="card-vietsub" aria-hidden="true">Vietsub</span>{{end}}
 	</div>
 	<div class="card-body">
 		<div class="card-title">{{.Title}}</div>

@@ -52,6 +52,10 @@ type TitleSummary struct {
 	AirDate       string
 	PosterPath    string
 	VoteAverage   float64
+	// HasVietsub marks a movie with a saved Vietnamese subtitle (the card's
+	// "Vietsub" chip). Movie-only by design: the SELECT gates on type so TV
+	// cards never carry it.
+	HasVietsub bool
 }
 
 // TitleFilter narrows the discovery list. Zero values mean "no constraint".
@@ -99,7 +103,7 @@ func (s *Store) CountTitles(ctx context.Context, f TitleFilter) (int, error) {
 // first; offset skips earlier pages.
 func (s *Store) ListTitles(ctx context.Context, f TitleFilter, limit, offset int) ([]TitleSummary, error) {
 	clause, args := titleFilterClause(f)
-	query := `SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average FROM titles` +
+	query := `SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average, (type = 'movie' AND has_vietsub) FROM titles` +
 		clause + " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
@@ -115,7 +119,7 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter, limit, offset int
 		var origTitle, poster sql.NullString
 		var air sql.NullTime
 		var vote sql.NullFloat64
-		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote); err != nil {
+		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote, &t.HasVietsub); err != nil {
 			return nil, err
 		}
 		t.OriginalTitle = origTitle.String
@@ -195,7 +199,7 @@ func (r Row) Href() template.URL {
 func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 	// Load every title once, newest first.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average FROM titles ORDER BY updated_at DESC`)
+		`SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average, (type = 'movie' AND has_vietsub) FROM titles ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +213,7 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 		var origTitle, poster sql.NullString
 		var air sql.NullTime
 		var vote sql.NullFloat64
-		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote); err != nil {
+		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote, &t.HasVietsub); err != nil {
 			return nil, err
 		}
 		t.OriginalTitle = origTitle.String

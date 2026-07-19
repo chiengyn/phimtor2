@@ -983,6 +983,25 @@ func (s *Store) AddSubtitle(ctx context.Context, sub *Subtitle) error {
 		return err
 	}
 	sub.ID = id
+	if sub.TitleID != nil {
+		return s.refreshTitleVietsub(ctx, *sub.TitleID)
+	}
+	return nil
+}
+
+// refreshTitleVietsub recomputes the denormalized titles.has_vietsub flag from
+// the subtitle rows (recompute-from-truth, so it is idempotent and handles
+// deleting one of several Vietnamese subtitles). updated_at is preserved so a
+// flag flip doesn't reorder the viewer's newest-first browse lists.
+func (s *Store) refreshTitleVietsub(ctx context.Context, titleID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE titles
+		SET has_vietsub = EXISTS (SELECT 1 FROM subtitles WHERE title_id = ? AND language = 'vi'),
+		    updated_at = updated_at
+		WHERE id = ?`, titleID, titleID)
+	if err != nil {
+		return fmt.Errorf("refresh has_vietsub for title %d: %w", titleID, err)
+	}
 	return nil
 }
 
@@ -1035,6 +1054,11 @@ func (s *Store) DeleteSubtitle(ctx context.Context, id int64) (*Subtitle, error)
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM subtitles WHERE id = ?`, id); err != nil {
 		return nil, err
+	}
+	if sub.TitleID != nil {
+		if err := s.refreshTitleVietsub(ctx, *sub.TitleID); err != nil {
+			return nil, err
+		}
 	}
 	return sub, nil
 }

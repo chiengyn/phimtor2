@@ -277,6 +277,13 @@ main { width: 100%; }
 	background: rgba(0,0,0,0.66); color: var(--text);
 }
 .card-score::before { content: "★"; color: var(--accent); }
+/* "Vietsub" badge (bottom-right): the movie has a Vietnamese subtitle saved. */
+.card-vietsub {
+	position: absolute; bottom: 8px; right: 8px; z-index: 2;
+	font-size: 0.66rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+	padding: 3px 7px; border-radius: 3px;
+	background: var(--accent); color: #fff;
+}
 .card-play {
 	position: absolute; inset: 0; z-index: 2;
 	display: flex; align-items: center; justify-content: center;
