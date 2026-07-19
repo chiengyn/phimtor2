@@ -61,9 +61,11 @@ jobs:
           ssh-private-key: ${{ secrets.KAMAL_SSH_PRIVATE_KEY }}
 
       - name: Seed known_hosts
+        # Unhashed entries (no -H): net-ssh, which Kamal uses, can misreport a
+        # hashed known_hosts line as a host-key mismatch.
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -H "${{ vars.SERVER_IP }}" >> ~/.ssh/known_hosts
+          ssh-keyscan "${{ vars.SERVER_IP }}" >> ~/.ssh/known_hosts
 
       - name: Deploy
         env:
