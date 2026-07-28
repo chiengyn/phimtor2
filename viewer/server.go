@@ -316,13 +316,16 @@ func filterFromQuery(r *http.Request) TitleFilter {
 	if id, err := strconv.Atoi(q.Get("genre")); err == nil && id > 0 {
 		f.GenreID = id
 	}
+	if q.Get("vietsub") == "1" {
+		f.Vietsub = true
+	}
 	return f
 }
 
 // active reports whether any constraint is set (so the home page shows the grid
 // rather than the browse rows).
 func (f TitleFilter) active() bool {
-	return f.Query != "" || f.GenreID > 0 || f.Type != ""
+	return f.Query != "" || f.GenreID > 0 || f.Type != "" || f.Vietsub
 }
 
 // pageFromQuery reads the 1-based page number; anything missing or < 1 is page 1.
@@ -347,6 +350,9 @@ func homeURL(f TitleFilter, page int) string {
 	}
 	if f.Type != "" {
 		v.Set("type", f.Type)
+	}
+	if f.Vietsub {
+		v.Set("vietsub", "1")
 	}
 	if page > 1 {
 		v.Set("page", strconv.Itoa(page))

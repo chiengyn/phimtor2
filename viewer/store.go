@@ -63,6 +63,7 @@ type TitleFilter struct {
 	Query   string // free-text match against the (localized) title or original title
 	GenreID int    // TMDB genre id; 0 = any
 	Type    string // "movie" | "tv"; anything else = any
+	Vietsub bool   // when set, only movies carrying a Vietnamese subtitle
 }
 
 // titleFilterClause builds the shared WHERE clause (and its args) for the
@@ -83,6 +84,11 @@ func titleFilterClause(f TitleFilter) (string, []any) {
 	if f.Type == "movie" || f.Type == "tv" {
 		where = append(where, "type = ?")
 		args = append(args, f.Type)
+	}
+	if f.Vietsub {
+		// Vietsub is a movie-only flag (has_vietsub is set only on movies), so
+		// gating on it also implies the movie type.
+		where = append(where, "type = 'movie' AND has_vietsub")
 	}
 	if len(where) == 0 {
 		return "", nil
@@ -207,7 +213,7 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 
 	var order []int64 // title ids in newest-first order
 	byID := map[int64]TitleSummary{}
-	var all, movies, tv []TitleSummary
+	var all, movies, tv, vietsub []TitleSummary
 	for rows.Next() {
 		var t TitleSummary
 		var origTitle, poster sql.NullString
@@ -228,6 +234,9 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 			movies = append(movies, t)
 		case "tv":
 			tv = append(tv, t)
+		}
+		if t.HasVietsub {
+			vietsub = append(vietsub, t)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -306,6 +315,12 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 			}
 			out = append(out, Row{Label: "Top 10 nổi bật hôm nay", Titles: top, Ranked: true})
 		}
+	}
+	// Latest movies that carry a Vietnamese subtitle (has_vietsub), placed right
+	// below the Top 10 featured row; its heading links to the vietsub=1 grid for
+	// the full list.
+	if len(vietsub) > 0 {
+		out = append(out, Row{Key: "vietsub=1", Label: "Phim lẻ Vietsub mới cập nhật", Titles: capRow(vietsub)})
 	}
 	if len(movies) > 0 {
 		out = append(out, Row{Key: "type=movie", Label: "Phim lẻ", Titles: capRow(movies)})
