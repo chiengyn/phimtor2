@@ -1,18 +1,33 @@
+{{/* The card is a <div>, not an <a>, so the bookmark <button> can live inside it
+     (a button may not nest in a link). The whole card stays clickable via the
+     stretched .card-link::after overlay; the button sits above that overlay.
+     The data-bm-* attributes are the snapshot bookmarks.js stores, so a saved
+     title can be re-rendered on /bookmarks with no server round-trip. */}}
 {{define "card"}}
-<a class="card" href="{{titlePath .ID .Title .OriginalTitle}}">
+{{$p := img "w342" .PosterPath}}
+<div class="card">
 	<div class="poster">
-		{{$p := img "w342" .PosterPath}}
 		{{if $p}}<img src="{{$p}}" alt="{{.Title}}" loading="lazy">{{else}}<div class="poster-empty">{{.Title}}</div>{{end}}
 		<span class="card-play" aria-hidden="true">▶</span>
 		{{if gt .VoteAverage 0.0}}<span class="card-score" aria-hidden="true">{{rating .VoteAverage}}</span>{{end}}
 		{{if .HasVietsub}}<span class="card-vietsub" aria-hidden="true">Vietsub</span>{{end}}
+		<button class="card-bookmark" type="button" data-bm-toggle
+			data-bm-id="{{.ID}}"
+			data-bm-href="{{titlePath .ID .Title .OriginalTitle}}"
+			data-bm-title="{{.Title}}"
+			data-bm-original="{{.OriginalTitle}}"
+			data-bm-poster="{{$p}}"
+			data-bm-year="{{year .AirDate}}"
+			data-bm-type="{{.Type}}"
+			data-bm-score="{{.VoteAverage}}"
+			data-bm-vietsub="{{.HasVietsub}}"><span class="bm-icon" aria-hidden="true"></span></button>
 	</div>
 	<div class="card-body">
-		<div class="card-title">{{.Title}}</div>
+		<div class="card-title"><a class="card-link" href="{{titlePath .ID .Title .OriginalTitle}}">{{.Title}}</a></div>
 		{{if and .OriginalTitle (ne .OriginalTitle .Title)}}<div class="card-original">{{.OriginalTitle}}</div>{{end}}
 		<div class="card-meta">{{with year .AirDate}}{{.}} · {{end}}{{if eq .Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}}</div>
 	</div>
-</a>
+</div>
 {{end}}
 
 {{define "grid"}}<div class="grid">{{range .Titles}}{{template "card" .}}{{else}}<p class="empty">Không tìm thấy phim nào.</p>{{end}}</div>{{with .Pager}}{{if .Show}}{{template "pager" .}}{{end}}{{end}}{{end}}

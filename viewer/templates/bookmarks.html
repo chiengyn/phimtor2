@@ -1,0 +1,21 @@
+{{define "head_title"}}Phim đã lưu – phimnet{{end}}
+{{define "head_extra"}}
+<meta name="description" content="Danh sách phim bạn đã lưu để xem sau trên phimnet.">
+{{/* The list lives in this browser only, so there is nothing for a crawler to
+     index — and no URL that would reproduce it. Kept out of sitemap.xml too. */}}
+<meta name="robots" content="noindex, nofollow">
+{{end}}
+{{define "content"}}
+<section class="bookmarks wrap">
+	<div class="bookmarks-head">
+		<h1>Phim đã lưu</h1>
+		<button class="clear-btn" type="button" id="bookmark-clear" hidden>Xoá tất cả</button>
+	</div>
+	{{/* Filled by /static/bookmarks.js from localStorage — the server sends no
+	     data here, so the list works without any account or DB read. */}}
+	<div class="grid" id="bookmark-grid"></div>
+	<p class="empty" id="bookmark-empty" hidden>
+		Bạn chưa lưu phim nào. Bấm vào biểu tượng dấu trang trên áp phích phim để lưu xem sau.
+	</p>
+</section>
+{{end}}

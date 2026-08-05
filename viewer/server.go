@@ -24,12 +24,13 @@ import (
 const tmdbImageBase = "https://image.tmdb.org/t/p/"
 
 type Server struct {
-	store    *Store
-	router   chi.Router
-	home     *template.Template
-	detail   *template.Template
-	watch    *template.Template
-	notFound *template.Template
+	store     *Store
+	router    chi.Router
+	home      *template.Template
+	detail    *template.Template
+	watch     *template.Template
+	bookmarks *template.Template
+	notFound  *template.Template
 
 	// manager is the server-side client the viewer uses to add torrents via the
 	// streamer manager (the browser never adds directly). The manager returns the
@@ -260,6 +261,9 @@ func (s *Server) parseTemplates() error {
 	if s.watch, err = parse("layout.html", "watch.html"); err != nil {
 		return err
 	}
+	if s.bookmarks, err = parse("layout.html", "bookmarks.html"); err != nil {
+		return err
+	}
 	if s.notFound, err = parse("layout.html", "404.html"); err != nil {
 		return err
 	}
@@ -283,6 +287,7 @@ func (s *Server) setupRouter() {
 
 	r.Get("/", s.handleHome)
 	r.Get("/titles/{id}", s.handleDetail)
+	r.Get("/bookmarks", s.handleBookmarks)
 	r.Get("/watch/movie/{id}", s.handleWatchMovie)
 	r.Get("/watch/episode/{id}", s.handleWatchEpisode)
 
@@ -583,6 +588,13 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, s.detail, "layout", title)
+}
+
+// handleBookmarks serves the "xem sau" list page. The list itself lives in the
+// visitor's localStorage (there are no accounts and the viewer never writes), so
+// this is a static shell that static/bookmarks.js fills in on load.
+func (s *Server) handleBookmarks(w http.ResponseWriter, _ *http.Request) {
+	s.render(w, s.bookmarks, "layout", nil)
 }
 
 // watchData drives the watch page. Videos and subtitles are serialized to JSON

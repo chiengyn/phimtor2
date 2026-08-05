@@ -13,6 +13,9 @@
 	--wrap: 1500px;
 	--header-h: 68px;
 	--ease: cubic-bezier(0.2, 0, 0.2, 1);
+	/* Bookmark glyph, outline + filled, used as a mask so it takes currentColor. */
+	--bm-outline: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2zm0 15l-5-2.18L7 18V5h10v13z'/%3E%3C/svg%3E");
+	--bm-filled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z'/%3E%3C/svg%3E");
 }
 
 * { box-sizing: border-box; }
@@ -74,10 +77,31 @@ main { width: 100%; }
 	transition: color 0.2s var(--ease);
 }
 .site-nav a:hover { color: var(--muted); }
-/* Discord support link: a brand-coloured pill pinned to the header's right edge.
-   Kept outside .site-nav so it survives the mobile breakpoint that hides the nav. */
+/* Right-hand header cluster (saved list + Discord), pinned to the header's right
+   edge. Kept outside .site-nav so it survives the mobile breakpoint that hides
+   the nav. */
+.header-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.saved-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	padding: 8px 15px;
+	border-radius: 999px;
+	border: 1px solid rgba(255,255,255,0.28);
+	color: #e5e5e5;
+	font-size: 0.9rem;
+	font-weight: 600;
+	white-space: nowrap;
+	transition: border-color 0.2s var(--ease), color 0.2s var(--ease);
+}
+.saved-link:hover { border-color: var(--text); color: var(--text); }
+.saved-count {
+	min-width: 20px; padding: 0 6px; border-radius: 999px;
+	background: var(--accent); color: #fff;
+	font-size: 0.72rem; font-weight: 700; line-height: 20px; text-align: center;
+}
+.saved-count[hidden] { display: none; }
 .discord-link {
-	margin-left: auto;
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
@@ -292,6 +316,32 @@ main { width: 100%; }
 	opacity: 0; transition: opacity 0.25s var(--ease);
 }
 .card:hover .card-play { opacity: 1; }
+/* The card is a <div> (so the bookmark <button> can sit inside it); this overlay
+   restores "the whole card is one link". It sits above the decorative badges but
+   below .card-bookmark, which must stay clickable. */
+.card-link::after { content: ""; position: absolute; inset: 0; z-index: 3; }
+/* Save-for-later toggle, top-left of the poster. Revealed on hover on pointer
+   devices; always visible on touch (see the (hover: none) block below). */
+.card-bookmark {
+	position: absolute; top: 6px; left: 6px; z-index: 4;
+	width: 32px; height: 32px; padding: 0;
+	display: flex; align-items: center; justify-content: center;
+	border: none; border-radius: 50%; cursor: pointer;
+	background: rgba(0,0,0,0.66); color: var(--text);
+	opacity: 0; transition: opacity 0.25s var(--ease), background 0.2s var(--ease);
+}
+.card:hover .card-bookmark,
+.card-bookmark:focus-visible,
+.card-bookmark.is-saved { opacity: 1; }
+.card-bookmark:hover { background: rgba(0,0,0,0.85); }
+.card-bookmark.is-saved { background: var(--accent); }
+.bm-icon {
+	display: block; width: 17px; height: 17px; flex: 0 0 auto;
+	background: currentColor;
+	-webkit-mask: var(--bm-outline) center / contain no-repeat;
+	mask: var(--bm-outline) center / contain no-repeat;
+}
+.is-saved .bm-icon { -webkit-mask-image: var(--bm-filled); mask-image: var(--bm-filled); }
 .card-body { padding: 9px 2px 0; }
 .card-title {
 	font-weight: 600; font-size: 0.92rem; line-height: 1.3;
@@ -437,10 +487,24 @@ main { width: 100%; }
 .genre-chip { background: rgba(255,255,255,0.1); padding: 5px 14px; border-radius: 999px; font-size: 0.82rem; }
 .overview { margin-top: 18px; max-width: 70ch; color: #d2d2d2; }
 
-/* --- Watch buttons (detail) --------------------------------------------- */
+/* --- Watch + save buttons (detail) -------------------------------------- */
+/* The row always renders (a series has no single watch CTA, but it can still be
+   saved), so the container owns the top margin rather than .watch-btn. */
+.detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 24px; }
+.save-btn {
+	display: inline-flex; align-items: center; gap: 10px;
+	border: 1px solid rgba(255,255,255,0.4); cursor: pointer;
+	background: rgba(255,255,255,0.08); color: var(--text);
+	font-family: inherit; font-weight: 600; font-size: 1.05rem;
+	padding: 13px 26px; border-radius: var(--radius);
+	transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.save-btn:hover { background: rgba(255,255,255,0.16); border-color: var(--text); }
+.save-btn.is-saved { background: var(--accent); border-color: var(--accent); }
+.save-btn.is-saved:hover { background: var(--accent-hover); }
+.save-btn .bm-icon { width: 19px; height: 19px; }
 .watch-btn {
 	display: inline-flex; align-items: center; gap: 10px;
-	margin-top: 24px;
 	background: #fff; color: #000;
 	font-weight: 700; font-size: 1.05rem; padding: 13px 32px; border-radius: var(--radius);
 	transition: background 0.15s var(--ease);
@@ -485,6 +549,24 @@ main { width: 100%; }
 .player video { width: 100%; max-height: 78vh; display: block; }
 .watch-sub { color: var(--text); margin: 0 0 10px; }
 
+/* --- Bookmarks page ----------------------------------------------------- */
+/* The grid itself reuses .grid/.card, built client-side from localStorage. */
+/* The header is sticky (it keeps its space in flow), so this is breathing room,
+   not a header offset. */
+.bookmarks { padding: 34px 4% 64px; }
+.bookmarks-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+.bookmarks-head h1 { margin: 0; font-size: clamp(1.5rem, 3.4vw, 2.1rem); font-weight: 800; letter-spacing: -0.02em; }
+.clear-btn {
+	margin-left: auto; cursor: pointer;
+	border: 1px solid rgba(255,255,255,0.3); border-radius: var(--radius);
+	background: none; color: var(--muted);
+	font-family: inherit; font-size: 0.86rem; padding: 8px 16px;
+	transition: color 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.clear-btn:hover { color: var(--text); border-color: var(--accent); }
+.clear-btn[hidden] { display: none; }
+.bookmarks .empty { max-width: 44ch; margin: 0 auto; }
+
 /* --- Footer ------------------------------------------------------------- */
 .site-footer {
 	border-top: 1px solid var(--surface-2);
@@ -516,6 +598,8 @@ main { width: 100%; }
 	.row-chevron { opacity: 1; transform: none; }
 	.card-play { display: none; }
 	.row-arrow { display: none; }
+	/* No hover to reveal it, so the save toggle is always on show. */
+	.card-bookmark { opacity: 1; }
 	/* No hover-zoom here, so drop the breakout/inset (also avoids a sliver of
 	   horizontal overflow when the page gutter is narrower than the inset). */
 	.row-rail { margin: 0; }
@@ -535,6 +619,12 @@ main { width: 100%; }
 	.site-header { gap: 18px; }
 	.brand { font-size: 1.35rem; }
 	.site-nav { display: none; }
+	/* The nav is gone, so the saved pill shrinks to its icon + count badge. */
+	.header-actions { gap: 8px; }
+	.saved-link { padding: 8px 12px; }
+	.saved-label { display: none; }
+	.discord-link span { display: none; }
+	.discord-link { padding: 8px 12px; }
 
 	.hero { min-height: 70vh; }
 	.hero-overview { -webkit-line-clamp: 4; font-size: 0.96rem; }
@@ -559,7 +649,9 @@ main { width: 100%; }
 	.detail-info { flex: 1 1 100%; }
 	.meta-row { gap: 10px; margin: 12px 0; }
 	.overview { margin-top: 14px; }
+	.detail-actions { gap: 10px; }
 	.watch-btn { display: flex; width: 100%; justify-content: center; font-size: 1rem; padding: 13px; }
+	.save-btn { display: flex; width: 100%; justify-content: center; font-size: 1rem; padding: 13px; }
 
 	.seasons { margin-top: 36px; }
 	.season-head { padding: 13px 14px; font-size: 0.96rem; }

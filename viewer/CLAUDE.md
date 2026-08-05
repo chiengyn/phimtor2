@@ -12,8 +12,10 @@ discovery / watch UI over the movie/TV metadata that [`admin/`](../admin/CLAUDE.
 imports. It renders Go `html/template` pages in Vietnamese. The browse/discovery
 flow is **fully server-rendered with no JS framework**: filtering is a GET
 `<form>` and pagination is plain `<a>` links, so every state has a real,
-shareable URL (search/genre/type/page all live in the query string). Only the
-Plyr-based watch page carries page-specific JS.
+shareable URL (search/genre/type/page all live in the query string). The only
+JS is plain vanilla, no build step: the Plyr-based watch page's inline script,
+small inline carousel helpers, and `static/bookmarks.js` (loaded site-wide from
+`layout.html`, see *Bookmarks* below).
 
 It is **strictly read-only**: it never writes and **never runs migrations** —
 [`admin/`](../admin/CLAUDE.md) is the sole owner of the schema. The viewer assumes
@@ -80,6 +82,9 @@ Flat single `main` package.
     back** to the first row's top (score-ranked) titles so the hero is never empty.
     The curation itself lives in the admin (`GET /featured`), which owns the table.
   - `GET /titles/{id}` — full detail page (genres, and for TV its seasons/episodes).
+  - `GET /bookmarks` — the "xem sau" list. A **static shell** (`handleBookmarks`
+    renders it with `nil` data); the list is filled client-side from
+    localStorage. `noindex` and deliberately absent from `sitemap.xml`.
   - `GET /watch/movie/{id}` and `GET /watch/episode/{id}` — the watch page.
   - `POST /api/sources/{videoID}/prepare` — viewer-mediated playback (see below).
   - `GET /api/subtitles/{id}/file` — serves a saved subtitle file read-only from
@@ -87,7 +92,7 @@ Flat single `main` package.
   - `POST /api/watch/heartbeat` and `POST /api/watch/leave` — watch-session
     liveness (see *Watch-session reaping* below); drop a torrent once its last
     viewer goes away.
-  - `/static/*` — static assets (`style.css`).
+  - `/static/*` — static assets (`style.css`, `bookmarks.js`).
   Unknown / bad ids render the `404.html` page (not a bare error).
 
 - **Watch page plays real torrents, viewer-mediated.** `handleWatchMovie`/
@@ -104,6 +109,22 @@ Flat single `main` package.
   video exists. Saved subtitles are listed as chips (first auto-loaded); the user
   can also load a local `.srt`/`.vtt`. There is no OpenSubtitles search here (the
   viewer is read-only and holds no provider key).
+
+- **Bookmarks / "xem sau"** (`static/bookmarks.js`, `templates/bookmarks.html`).
+  There are no accounts and the viewer never writes, so the watch-later list lives
+  **entirely in the visitor's `localStorage`** under the key `phimnet.bookmarks`
+  (same convention as the watch page's `phimnet.subStyle`): a newest-first JSON
+  array, capped at 500, of **full card snapshots** (`id`, `href`, `title`,
+  `original`, `poster` URL, `year`, `type`, `score`, `vietsub`, `savedAt`). Storing
+  the snapshot — not just the id — is what lets `/bookmarks` re-render the grid with
+  **no server round trip and no new store query**. Save buttons are rendered by the
+  `card` partial and `detail.html` as `[data-bm-toggle]` elements carrying that
+  snapshot in `data-bm-*` attributes; one delegated `click` listener on `document`
+  handles all of them, including the cards the script builds itself. Because the
+  `card` partial must hold a `<button>` (which may not nest in an `<a>`), `.card` is
+  a `<div>` and the whole-card link is the stretched `.card-link::after` overlay —
+  keep `buildCard` in the JS in sync with that partial's classes. Every storage
+  access is `try/catch`-guarded so blocked storage degrades to "nothing saved".
 
 - **Watch-session reaping** (`watchtracker.go`, `manager.go`
   `deleteTorrent`). So a torrent doesn't linger after the user leaves (wasting the

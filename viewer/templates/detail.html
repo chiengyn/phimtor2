@@ -28,7 +28,23 @@
 				{{with .Runtime}}<span>{{.}} phút</span>{{end}}
 			</div>
 			{{if .Genres}}<div class="genres">{{range .Genres}}<span class="genre-chip">{{.Name}}</span>{{end}}</div>{{end}}
-			{{if ne .Type "tv"}}<a class="watch-btn" href="{{watchMoviePath .ID .Title .OriginalTitle}}">▶ Xem phim</a>{{end}}
+			{{/* The watch CTA only exists for movies (a series is watched per
+			     episode below), but the save button applies to both, so they share
+			     an always-rendered row. data-bm-vietsub is "false" here: the detail
+			     Title has no HasVietsub field — only the listing TitleSummary does. */}}
+			<div class="detail-actions">
+				{{if ne .Type "tv"}}<a class="watch-btn" href="{{watchMoviePath .ID .Title .OriginalTitle}}">▶ Xem phim</a>{{end}}
+				<button class="save-btn" type="button" data-bm-toggle
+					data-bm-id="{{.ID}}"
+					data-bm-href="{{titlePath .ID .Title .OriginalTitle}}"
+					data-bm-title="{{.Title}}"
+					data-bm-original="{{.OriginalTitle}}"
+					data-bm-poster="{{img "w342" .PosterPath}}"
+					data-bm-year="{{year .AirDate}}"
+					data-bm-type="{{.Type}}"
+					data-bm-score="{{.VoteAverage}}"
+					data-bm-vietsub="false"><span class="bm-icon" aria-hidden="true"></span><span class="bm-label">Lưu xem sau</span></button>
+			</div>
 			{{if .Overview}}<p class="overview">{{.Overview}}</p>{{end}}
 		</div>
 	</div>
