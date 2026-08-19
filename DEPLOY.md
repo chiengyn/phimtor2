@@ -187,9 +187,13 @@ job fills those from the GitHub secrets above, exactly like `.env` does locally.
   instances of the *same* config at once. Kamal's rolling deploy (start new →
   health-check → stop old) therefore fails with `open prefix completion: timeout`.
   Before redeploying a streamer, stop the running one
-  (`docker stop <phimtor2-streamer-1-web-...>`) — a few seconds of downtime for
-  *that* instance; the other instances keep serving. (admin/viewer/manager redeploy
-  normally.)
+  (`docker stop <phimtor2-streamer-1-web-...>`, or `kamal app stop -c
+  config/deploy.streamer.yml`) — a few seconds of downtime for *that* instance; the
+  other instances keep serving. (admin/viewer/manager redeploy normally.)
+  The **CD workflow does this for you**: `.github/workflows/deploy.yml`'s
+  `streamer()` runs `kamal app stop` before `kamal deploy`. If the deploy then
+  fails, that instance is left stopped — the run output says so and names the
+  recovery command.
 - **Health checks.** Each service exposes an unauthenticated `GET /up` (admin's is
   exempt from Basic auth) that kamal-proxy uses before cutting traffic over.
 - **Persistence.** MariaDB data, the subtitle store, and the streamer's torrent

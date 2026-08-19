@@ -93,7 +93,21 @@ jobs:
           manager()  { kamal deploy -c config/deploy.manager.yml --skip-push; }
           # Streamer instance 1 is the base config; add instances as destinations,
           # e.g. `kamal deploy -c config/deploy.streamer.yml -d s2 --skip-push`.
-          streamer() { kamal deploy -c config/deploy.streamer.yml --skip-push; }
+          #
+          # A streamer holds an EXCLUSIVE lock on the piece-completion DB in its
+          # /data volume, so Kamal's rolling deploy (boot new -> health-check ->
+          # stop old) can never go green: the new container cannot open the DB
+          # while the old one still holds it, and the deploy times out. Stop the
+          # old container first, as DEPLOY.md prescribes. That costs a few seconds
+          # of downtime for this instance; other instances keep serving.
+          streamer() {
+            local cfg=config/deploy.streamer.yml
+            kamal app stop -c "$cfg" || true   # nothing to stop on a first deploy
+            if ! kamal deploy -c "$cfg" --skip-push; then
+              echo "::error::Streamer deploy failed AFTER the old container was stopped - this instance is DOWN. Re-run this workflow, or boot a known-good version with: kamal app boot -c $cfg"
+              return 1
+            fi
+          }
           case "${{ inputs.service }}" in
             # admin first (DB + migrations); manager before streamer so it can
             # register on boot.
