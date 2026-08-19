@@ -207,11 +207,12 @@ async function start() {
 
   const src = `${streamerPublic}/api/torrents/${INFO_HASH}/files/${FILE_INDEX}/stream`;
   const video = document.getElementById('player');
-  const source = document.createElement('source');
-  source.src = src;
-  video.appendChild(source);
+  // A .mkv is demuxed in the page and remuxed to fragmented MP4 so it stays
+  // seekable, falling back to the streamer's transcode when the codecs inside
+  // cannot be decoded (see static/mkvattach.js). Plyr wraps the element either way.
+  const { attachSource } = await import('/static/mkvattach.js');
+  attachSource(video, src, FILE_PATH, { onStatus: (m) => setStatus(m) });
   player = new Plyr('#player', { captions: { active: true, update: true }, autoplay: true });
-  video.play().catch(() => {});
 
   setStatus('');
   if (SUBTITLES_ENABLED) document.getElementById('os-btn').hidden = false;

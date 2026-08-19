@@ -25,8 +25,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 
 COPY --from=build /out/phimtor2-admin /app/phimtor2-admin
-# The UI templates are embedded in the binary (server.go), so no static assets
-# need to be copied alongside it.
+# The UI templates AND the browser modules under static/ are embedded in the
+# binary (server.go), so no assets need to be copied alongside it.
 COPY --from=build --chown=65532:65532 /out/data /data
 
 # Saved subtitles (SUBTITLE_STORAGE_BACKEND=local, the default) are written

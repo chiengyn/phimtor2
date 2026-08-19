@@ -104,6 +104,11 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range")
+		// The watch page reads the raw stream itself (client-side remux), so it needs
+		// the response's size/range metadata. Cross-origin JS can only see headers
+		// that are explicitly exposed — without this a 206 arrives with a
+		// Content-Range the reader cannot read, and it can't determine the file size.
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -273,7 +278,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// the manager balances new torrents on.
 	cw := &countingResponseWriter{ResponseWriter: w, manager: s.manager}
 
-	if needsTranscode(fileInfo.Path) {
+	// raw=1 opts out of transcoding: the caller wants the container's own bytes,
+	// range-seekable, because it remuxes them itself in the browser. Without it the
+	// behaviour is unchanged, so any client that doesn't ask keeps the old path.
+	raw := r.URL.Query().Get("raw") == "1"
+
+	if !raw && needsTranscode(fileInfo.Path) {
 		if err := transcodeStream(r.Context(), reader, cw); err != nil {
 			// Response may have already started; can't write error header
 			return
@@ -284,7 +294,18 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// Direct play: the browser seeks by issuing a Range request at the new offset.
 	// Boost the seek target's priority so the post-seek buffer fills ahead of
 	// background work (ServeContent then streams the range as usual).
-	if start, ok := rangeStart(r.Header.Get("Range")); ok {
+	//
+	// Only real playback seeks qualify: a bounded request for a sliver of bytes is
+	// some client reading structure, not a viewer jumping, and PrioritizeSeek raises
+	// pieces to High without ever lowering them again.
+	//
+	// Measured caveat: the watch page's demuxer (Mediabunny) issues *open-ended*
+	// ranges even for its container probes — including reads near EOF for the
+	// Matroska cues — so this filter does not catch those, and they do pin a window
+	// High. That stays cheap in practice because the probe is a handful of requests
+	// per file, and on a large file the cues land inside the already-pinned
+	// SUFFIX_MB tail. Revisit only if stale High windows show up in piece maps.
+	if start, size, ok := rangeStart(r.Header.Get("Range")); ok && (size < 0 || size >= seekRangeMinBytes) {
 		s.manager.PrioritizeSeek(infoHash, fileIndex, start)
 	}
 
@@ -292,28 +313,44 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(cw, r, fileInfo.Path, time.Time{}, reader)
 }
 
-// rangeStart returns the start byte offset of a single "bytes=<start>-..." Range
-// header. It returns false for an absent, multi-range, or suffix ("bytes=-N")
-// header and for a start of 0 — so only real forward seeks trigger the extra
-// prioritization, not the initial full-file request.
-func rangeStart(header string) (int64, bool) {
+// seekRangeMinBytes is the smallest bounded range treated as a playback seek
+// rather than a demuxer metadata probe. A player buffering forward asks for far
+// more than this; a container parser reading an index or a track header asks for
+// far less.
+const seekRangeMinBytes = 1 << 20 // 1 MiB
+
+// rangeStart returns the start byte offset and the requested span of a single
+// "bytes=<start>-[end]" Range header. The span is -1 for an open-ended range
+// (the shape a media element uses to stream forward from a seek point). It
+// returns false for an absent, multi-range, or suffix ("bytes=-N") header and for
+// a start of 0 — so only real forward seeks trigger the extra prioritization, not
+// the initial full-file request.
+func rangeStart(header string) (start, size int64, ok bool) {
 	const prefix = "bytes="
 	if !strings.HasPrefix(header, prefix) {
-		return 0, false
+		return 0, 0, false
 	}
 	spec := header[len(prefix):]
 	if strings.ContainsRune(spec, ',') {
-		return 0, false // multi-range: leave it to ServeContent
+		return 0, 0, false // multi-range: leave it to ServeContent
 	}
 	dash := strings.IndexByte(spec, '-')
 	if dash <= 0 {
-		return 0, false // suffix range or malformed
+		return 0, 0, false // suffix range or malformed
 	}
 	n, err := strconv.ParseInt(spec[:dash], 10, 64)
 	if err != nil || n <= 0 {
-		return 0, false
+		return 0, 0, false
 	}
-	return n, true
+	rest := spec[dash+1:]
+	if rest == "" {
+		return n, -1, true // open-ended: streaming forward from here
+	}
+	end, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil || end < n {
+		return n, -1, true // malformed end; treat as open-ended
+	}
+	return n, end - n + 1, true
 }
 
 // countingResponseWriter wraps an http.ResponseWriter to meter bytes written to a

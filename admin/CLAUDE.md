@@ -37,9 +37,10 @@ go run .                       # run (listens on :8081, needs MySQL + env)
 go vet ./...
 ```
 
-The UI templates (`templates/*.html`) are **embedded** in the binary
-(`//go:embed` in `server.go`), so the binary is self-contained and not
-cwd-dependent. Targets Go 1.26.
+The UI templates (`templates/*.html`) and the browser modules
+(`static/*.js`) are both **embedded** in the binary (`//go:embed` in `server.go`,
+served at `/static/*` behind the same basic auth as everything else), so the
+binary is self-contained and not cwd-dependent. Targets Go 1.26.
 
 ## Configuration (`config.go`)
 
@@ -160,6 +161,33 @@ Flat single `main` package. Layers, in request order:
     OpenSubtitles **search** section on the first two is gated by the
     `SubtitlesEnabled` flag; the **manual upload** section is always shown.
 
+- **Playing `.mkv`** (`static/mkvplayer.js`, `static/mkvattach.js`). Browsers do
+  not demux Matroska, and the streamer's ffmpeg fallback returns a chunked fMP4
+  that ignores `Range`, so a `.mkv` used to be unseekable. All three player
+  surfaces — the watch page's `playFile`, the play page's `start()`, and
+  add_torrent's `previewPlay` — now go through **`attachSource`** in
+  `static/mkvattach.js`:
+  - Browser-native containers (`.mp4/.m4v/.webm/.ogg`) are attached directly, as
+    before. The extension list mirrors `browserNativeExts` in the streamer's
+    `transcode.go` — change one, change the other.
+  - Anything else is fetched from the streamer's **`?raw=1`** endpoint, demuxed in
+    the page by `static/mkvplayer.js` (Mediabunny, lazily `import()`ed from a
+    pinned CDN so an `.mp4` never pays for it), remuxed — not re-encoded — into
+    fragmented MP4 and fed to a `MediaSource`. Seeking restarts the muxer at the
+    preceding keyframe, so a scrub is an ordinary range request.
+  - Codecs the browser cannot decode (AC3/E-AC3/DTS audio, HEVC without a hardware
+    decoder) throw `UnsupportedMediaError` up front, and `attachSource` falls back
+    **once** to the plain (no `?raw=1`) URL — the ffmpeg path.
+
+  Unlike the viewer, which must sniff the raw stream's `Content-Type` because its
+  browser-facing DTO omits the file path, every admin surface already knows the
+  path, so the decision here is a cheap extension check with no extra request.
+
+  **`static/mkvplayer.js` is a byte-for-byte copy of `viewer/static/mkvplayer.js`**
+  — the two services duplicate rather than share (same convention as `pickVideoFile`
+  and the `videoExtensions` tables). Keep them in sync; `mkvattach.js` is
+  admin-only glue.
+
 - **Ref parsing** (`ref.go`): `parseRef` turns the admin's input into a
   `(mediaType, id)` pair. A themoviedb.org link carries its own type
   (`/movie/27205`, `/tv/1399`); a bare numeric id requires the UI's type dropdown.
@@ -213,6 +241,8 @@ share a package.
 
 ## Docker
 
-`Dockerfile` builds a static `CGO_ENABLED=0` amd64 binary on a distroless base,
-copying `static/` next to it under `WORKDIR /app`. Brought up together with MySQL
-via the repo-root `docker-compose.yml`.
+`Dockerfile` builds a static `CGO_ENABLED=0` amd64 binary on a distroless base
+under `WORKDIR /app`. Nothing is copied alongside it: both `templates/*.html` and
+`static/*.js` are `//go:embed`ed into the binary (`server.go`), so it is
+self-contained and cwd-independent. Brought up together with MySQL via the
+repo-root `docker-compose.yml`.

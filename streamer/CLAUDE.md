@@ -195,24 +195,37 @@ Flat single `main` package. The pieces that only make sense read together:
   returns both the head (`PREFIX_MB`) and tail (`SUFFIX_MB`) pieces of each video,
   so the moov-atom tail is pinned on disk and never evicted, just like the head.
 
-- **Streaming + transcode** (`server.go` `handleStream`, `transcode.go`):
-  browser-native containers (`.mp4/.webm/.ogg`) are served directly via
-  `http.ServeContent` (range/seek support). Anything else is piped through an
-  **`ffmpeg` subprocess** (codec copy + AAC, fragmented MP4) — so transcoding
-  requires `ffmpeg` on PATH at runtime (the Docker image bundles it). Each stream
-  reader is wrapped in a `trackedReader` (`torrent.go`) that reports its playhead
-  to the storage and gets **adaptive readahead** — the per-reader readahead is
-  divided down as more readers open (floor `minReadaheadBytes`) so N concurrent
-  viewers don't each reserve the full `READAHEAD_MB`.
+- **Streaming, raw mode + transcode** (`server.go` `handleStream`,
+  `transcode.go`): browser-native containers (`.mp4/.m4v/.webm/.ogg`) are served
+  directly via `http.ServeContent` (range/seek support). Anything else is piped
+  through an **`ffmpeg` subprocess** (codec copy + AAC, fragmented MP4) — so
+  transcoding requires `ffmpeg` on PATH at runtime (the Docker image bundles it).
+  Each stream reader is wrapped in a `trackedReader` (`torrent.go`) that reports
+  its playhead to the storage and gets **adaptive readahead** — the per-reader
+  readahead is divided down as more readers open (floor `minReadaheadBytes`) so N
+  concurrent viewers don't each reserve the full `READAHEAD_MB`.
 
-  **Seeking.** Direct-play files seek natively: the browser sends a `Range`
-  request at the new offset and `handleStream` calls `PrioritizeSeek` to boost the
-  target pieces so the post-seek buffer fills ahead of background work (the
-  dominant latency is still the swarm fetching those cold pieces). The transcode
-  path is **not** seekable — it ignores `Range` and always streams sequentially
-  from byte 0 (chunked, unknown-length fMP4), so a seek into a `.mkv` waits for
-  the stream to reach that point. Real transcoded seeking needs HLS or a
-  time-seek (`-ss`) protocol; deliberately not built yet.
+  **`?raw=1` bypasses the transcode** and serves the container's own bytes down
+  the same `ServeContent` path, with `detectContentType` reporting the true
+  container (`video/x-matroska` and friends). It exists for callers that remux in
+  the browser — see the viewer's `static/mkvplayer.js`. Because the raw path *is*
+  the direct-play path, egress metering (`countingResponseWriter`) and
+  `PrioritizeSeek` apply to it unchanged. `corsMiddleware` sets
+  **`Access-Control-Expose-Headers`** for this: a cross-origin JS reader cannot
+  see `Content-Range`/`Content-Length` without it and so cannot size the file.
+
+  **Seeking.** Direct-play and raw files seek natively: the browser (or the page's
+  demuxer) sends a `Range` request at the new offset and `handleStream` calls
+  `PrioritizeSeek` to boost the target pieces so the post-seek buffer fills ahead
+  of background work (the dominant latency is still the swarm fetching those cold
+  pieces). Small *bounded* ranges are treated as structure reads and skip
+  `PrioritizeSeek` — note Mediabunny issues open-ended ranges even when probing,
+  so this does not filter it; see the comment in `handleStream`. The transcode
+  path is still **not** seekable — it ignores `Range` and always streams
+  sequentially from byte 0 (chunked, unknown-length fMP4). That now only affects
+  files the browser cannot decode after remuxing (AC3/E-AC3/DTS audio, HEVC with
+  no hardware decoder), since everything else takes the raw path. Real transcoded
+  seeking needs HLS or a time-seek (`-ss`) protocol; deliberately not built yet.
 
 **Subtitles** are *not* handled here anymore. The watch UI and the
 OpenSubtitles proxy moved to [`admin/`](../admin/CLAUDE.md); the admin matches

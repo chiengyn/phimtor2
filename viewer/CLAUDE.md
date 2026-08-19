@@ -14,8 +14,10 @@ flow is **fully server-rendered with no JS framework**: filtering is a GET
 `<form>` and pagination is plain `<a>` links, so every state has a real,
 shareable URL (search/genre/type/page all live in the query string). The only
 JS is plain vanilla, no build step: the Plyr-based watch page's inline script,
-small inline carousel helpers, and `static/bookmarks.js` (loaded site-wide from
-`layout.html`, see *Bookmarks* below).
+small inline carousel helpers, `static/bookmarks.js` (loaded site-wide from
+`layout.html`, see *Bookmarks* below), and `static/mkvplayer.js` (an ES module the
+watch page `import()`s only when it meets a container the browser cannot demux —
+see *Playing `.mkv`* below).
 
 It is **strictly read-only**: it never writes and **never runs migrations** —
 [`admin/`](../admin/CLAUDE.md) is the sole owner of the schema. The viewer assumes
@@ -109,6 +111,43 @@ Flat single `main` package.
   video exists. Saved subtitles are listed as chips (first auto-loaded); the user
   can also load a local `.srt`/`.vtt`. There is no OpenSubtitles search here (the
   viewer is read-only and holds no provider key).
+
+- **Playing `.mkv`** (`static/mkvplayer.js`, `templates/watch.html`). Browsers do
+  not demux Matroska, and the streamer's ffmpeg fallback produces a chunked
+  fMP4 that ignores `Range` — so seeking a `.mkv` used to be impossible. The page
+  now runs a three-rung ladder:
+  1. `prebufferStream` fetches the head of the streamer's **`?raw=1`** stream (a
+     real range read) and reads its `Content-Type` — that is how the page learns
+     the true container without any new server-side DTO field.
+  2. `needsClientRemux` sends anything that isn't `video/mp4|webm|ogg` to
+     `attachClientRemux`, which lazily `import()`s `static/mkvplayer.js`. That
+     module demuxes the container with **Mediabunny** (pinned CDN ESM import;
+     ~650 KB, never fetched for an `.mp4`), remuxes the encoded packets — no
+     re-encoding — into fragmented MP4, and appends them to a `MediaSource`.
+     Seeking restarts the muxer at `getKeyPacket(t)`, so a scrub becomes an
+     ordinary range request the streamer can prioritize.
+  3. Codecs the browser cannot decode (AC3/E-AC3/DTS audio, HEVC without a
+     hardware decoder) are caught up front by `canDecode()`, which throws
+     `UnsupportedMediaError`; `fallbackToTranscode` then re-points the element at
+     the plain (no `?raw=1`) URL — the old ffmpeg path. The fallback is
+     **one-shot** per source so the two paths cannot ping-pong.
+
+  The `<video>` `error` handler also inspects `video.error.code`:
+  `MEDIA_ERR_SRC_NOT_SUPPORTED` (4) is a codec problem, not a transport one, so it
+  goes straight to the fallback instead of the reload/re-prepare loop that would
+  otherwise report it as a missing-seeder error.
+
+  Because MSE only replaces the element's `src`, Plyr, the WebVTT `<track>`
+  subtitles and the resume-position logic are all unaffected. Embedded ASS/SSA
+  subtitle tracks inside the `.mkv` are now reachable in principle but are **not**
+  surfaced yet.
+
+  **`static/mkvplayer.js` is duplicated byte-for-byte into `admin/static/`** (where
+  it is `//go:embed`ed) — the two services duplicate rather than share, as they
+  already do for their query layers. Keep the two copies in sync. The admin wraps
+  it in its own `static/mkvattach.js` glue, which decides by file **extension**
+  rather than by sniffed `Content-Type`, because admin pages know the file path
+  and this one does not.
 
 - **Bookmarks / "xem sau"** (`static/bookmarks.js`, `templates/bookmarks.html`).
   There are no accounts and the viewer never writes, so the watch-later list lives

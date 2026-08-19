@@ -9,8 +9,13 @@ import (
 	"strings"
 )
 
+// browserNativeExts are the containers a browser's <video> can demux on its own,
+// so they stream straight through ServeContent with working range/seek. Anything
+// else either takes the client-side remux path (see handleStream's raw mode) or
+// falls back to the ffmpeg transcode below.
 var browserNativeExts = map[string]bool{
 	".mp4":  true,
+	".m4v":  true,
 	".webm": true,
 	".ogg":  true,
 	".ogv":  true,
@@ -21,6 +26,11 @@ func needsTranscode(path string) bool {
 	return !browserNativeExts[ext]
 }
 
+// detectContentType names the real container. The browser-native ones let the
+// <video> element pick its demuxer; the rest matter because the watch page reads
+// this header off the raw-mode response to decide whether it must remux the file
+// itself (anything that isn't mp4/webm/ogg) — so reporting the true container
+// here, not a blanket video/mp4, is load-bearing.
 func detectContentType(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
@@ -30,8 +40,20 @@ func detectContentType(path string) string {
 		return "video/webm"
 	case ".ogg", ".ogv":
 		return "video/ogg"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".mov":
+		return "video/quicktime"
+	case ".ts", ".m2ts":
+		return "video/mp2t"
+	case ".wmv":
+		return "video/x-ms-wmv"
+	case ".flv":
+		return "video/x-flv"
 	default:
-		return "video/mp4"
+		return "application/octet-stream"
 	}
 }
 

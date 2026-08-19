@@ -249,7 +249,9 @@ async function removeTorrent(infoHash) {
   await refreshTorrents();
 }
 
-function playFile(infoHash, fileIndex, fileName) {
+let attachController = null;
+
+async function playFile(infoHash, fileIndex, fileName) {
   const base = streamerByHash[infoHash];
   if (!base) { alert('Streamer cho torrent này chưa sẵn sàng.'); return; }
   const src = `${base}/api/torrents/${infoHash}/files/${fileIndex}/stream`;
@@ -258,6 +260,7 @@ function playFile(infoHash, fileIndex, fileName) {
   currentVideo = { infoHash, fileIndex, fileName };
 
   if (player) { player.destroy(); player = null; }
+  if (attachController) { try { attachController.destroy(); } catch(e) {} attachController = null; }
   clearSubtitle();
 
   const osButton = SUBTITLES_ENABLED
@@ -268,7 +271,6 @@ function playFile(infoHash, fileIndex, fileName) {
   pane.innerHTML = `
     <span id="player-title">${escHtml(fileName)}</span>
     <video id="player" controls autoplay playsinline>
-      <source src="${src}" />
       Trình duyệt của bạn không hỗ trợ video HTML5.
     </video>
     <div class="subtitle-bar">
@@ -289,6 +291,14 @@ function playFile(infoHash, fileIndex, fileName) {
   `;
 
   player = new Plyr('#player', { captions: { active: true, update: true } });
+
+  // A .mkv is demuxed in the page and remuxed to fragmented MP4 so it stays
+  // seekable, falling back to the streamer's transcode when its codecs cannot be
+  // decoded (see static/mkvattach.js).
+  const video = document.getElementById('player');
+  const { attachSource } = await import('/static/mkvattach.js');
+  if (currentSrc !== src) return; // another file was picked while the module loaded
+  attachController = await attachSource(video, src, fileName, {});
 }
 
 function resetPlayer() {
@@ -296,6 +306,7 @@ function resetPlayer() {
   currentVideo = null;
   osResults = [];
   if (player) { player.destroy(); player = null; }
+  if (attachController) { try { attachController.destroy(); } catch(e) {} attachController = null; }
   clearSubtitle();
   const pane = document.getElementById('player-pane');
   pane.innerHTML = '<span class="empty-msg">Chọn một tệp để phát</span>';

@@ -374,11 +374,18 @@ function guessEpisodeId(p) {
   return ep ? String(ep.id) : '';
 }
 
-function previewPlay(index) {
+let previewAttach = null;
+
+async function previewPlay(index) {
   const video = document.getElementById('player');
   video.classList.remove('hidden');
-  video.src = `${streamerPublic}/api/torrents/${infoHash}/files/${index}/stream`;
-  video.play().catch(() => {});
+  if (previewAttach) { try { previewAttach.destroy(); } catch(e) {} previewAttach = null; }
+  const src = `${streamerPublic}/api/torrents/${infoHash}/files/${index}/stream`;
+  // Pass the path so mkvattach can tell a browser-native container from one it
+  // has to remux in the page (.mkv and friends).
+  const f = files.find(x => x.index === index);
+  const { attachSource } = await import('/static/mkvattach.js');
+  previewAttach = await attachSource(video, src, f ? f.path : '', {});
 }
 
 function chooseFile(index) {

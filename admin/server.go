@@ -25,6 +25,12 @@ import (
 //go:embed templates/*.html
 var templatesFS embed.FS
 
+// Static browser modules (the client-side remuxer and its glue) are embedded too,
+// so the binary stays self-contained and cwd-independent like the templates.
+//
+//go:embed static/*.js
+var staticFS embed.FS
+
 // tmdbImageBase is the CDN prefix for the poster thumbnails the UI renders.
 const tmdbImageBase = "https://image.tmdb.org/t/p/w200"
 
@@ -165,6 +171,11 @@ func (s *Server) setupRouter() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
+
+	// Browser modules served straight out of the embedded FS. They sit behind
+	// basicAuth like everything else; the browser replays the credentials for
+	// same-origin subresource and dynamic-import requests.
+	r.Handle("/static/*", http.FileServer(http.FS(staticFS)))
 
 	r.Get("/", s.handleIndex)
 	r.Get("/watch", s.handleWatch)
