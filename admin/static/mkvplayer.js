@@ -199,6 +199,26 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 			try { done.onAppended(); } catch (err) { /* calibration is best-effort */ }
 		}
 		drainQueue();
+		unstickSeek();
+	}
+
+	// Chrome will not finish a seek whose target lands exactly on the start of a
+	// buffered range — it wants a frame that strictly contains the instant, so the
+	// element sits in seeking/HAVE_METADATA forever even though data is arriving.
+	// Calibration keeps the range starting before the target, but a seek to a time
+	// that *is* the first keyframe (0, most often) still hits it. Nudge just inside.
+	function unstickSeek() {
+		if (destroyed || !video.seeking || video.readyState >= 2) return;
+		const ranges = video.buffered;
+		const t = video.currentTime;
+		for (let i = 0; i < ranges.length; i++) {
+			const start = ranges.start(i);
+			if (start >= t && start - t < SEEK_TOLERANCE_SEC && ranges.end(i) - start > 0.1) {
+				// Re-enters onSeeking, which sees the new target as buffered and no-ops.
+				video.currentTime = start + 0.05;
+				return;
+			}
+		}
 	}
 
 	// --- muxing session ----------------------------------------------------
@@ -216,6 +236,10 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 		// Held so it can be re-appended if the timeline needs calibrating (below).
 		let firstSegment = null;
 		let calibrated = startTime === 0;
+		// The pump starts at the last keyframe at or *before* startTime, which can be
+		// a full GOP earlier. Calibration has to compare against that timestamp, not
+		// the seek target — see calibrateTimeline.
+		const anchor = { time: startTime };
 
 		const output = new MB.Output({
 			// The bytes are consumed through the box callbacks below, which is what
@@ -238,7 +262,7 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 					pendingMoof = null;
 					const isFirst = firstSegment === null;
 					if (isFirst) firstSegment = segment;
-					enqueue(segment, isFirst ? { onAppended: () => calibrateTimeline(gen, startTime, segment, () => calibrated, (v) => { calibrated = v; }) } : undefined);
+					enqueue(segment, isFirst ? { onAppended: () => calibrateTimeline(gen, anchor.time, segment, () => calibrated, (v) => { calibrated = v; }) } : undefined);
 				},
 			}),
 		});
@@ -260,14 +284,14 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 		session = current;
 
 		// Pump packets in the background; the caller does not await this.
-		pumpPackets({ output, videoSource, audioSource, startTime, cancelled }).catch((err) => {
+		pumpPackets({ output, videoSource, audioSource, startTime, anchor, cancelled }).catch((err) => {
 			if (!cancelled()) console.warn('[mkvplayer] pump failed', err);
 		});
 
 		return current;
 	}
 
-	async function pumpPackets({ output, videoSource, audioSource, startTime, cancelled }) {
+	async function pumpPackets({ output, videoSource, audioSource, startTime, anchor, cancelled }) {
 		const videoSink = new MB.EncodedPacketSink(videoTrack);
 		const audioSink = audioTrack ? new MB.EncodedPacketSink(audioTrack) : null;
 
@@ -277,6 +301,9 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 			? await videoSink.getKeyPacket(startTime)
 			: await videoSink.getFirstPacket();
 		if (!vPacket) return;
+		// Recorded before the first add(), so it is always set by the time the muxer
+		// emits a segment and calibrateTimeline runs.
+		anchor.time = vPacket.timestamp;
 
 		// Start audio at the video keyframe's timestamp so the tracks stay aligned
 		// instead of the audio running ahead of the first decodable picture.
@@ -331,16 +358,23 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 	// absolute timestamps or timestamps rebased to zero, depending on the muxer. We
 	// cannot know which without looking, so after the first media segment of a
 	// seeked session lands we check where it actually appeared on the timeline and,
-	// if it was rebased, set timestampOffset and replay that segment. Costs one
-	// extra append per seek and makes the player correct either way.
-	function calibrateTimeline(gen, startTime, segment, isCalibrated, setCalibrated) {
+	// if it was rebased, set timestampOffset and replay that segment.
+	//
+	// The comparison MUST be against the keyframe the session started from, not the
+	// seek target: the muxer writes the keyframe's own timestamp, which sits up to a
+	// GOP earlier. Measuring against the target instead shifts the whole rest of the
+	// timeline forward by that gap (desyncing subtitles and the scrubber) and pins
+	// the buffer's start exactly on currentTime, which Chrome refuses to treat as
+	// seekable — the seek then never completes and playback stops dead.
+	// Mediabunny 1.55 preserves absolute timestamps, so in practice this is a no-op.
+	function calibrateTimeline(gen, anchorTime, segment, isCalibrated, setCalibrated) {
 		if (destroyed || gen !== generation || isCalibrated() || !sourceBuffer) return;
 		setCalibrated(true);
 
 		const ranges = sourceBuffer.buffered;
 		if (!ranges.length) return;
 		const landedAt = ranges.start(ranges.length - 1);
-		const drift = startTime - landedAt;
+		const drift = anchorTime - landedAt;
 		if (Math.abs(drift) < 1) return; // timestamps were preserved; nothing to do
 
 		try {
