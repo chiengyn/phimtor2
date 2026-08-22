@@ -71,9 +71,21 @@
 	.chip.active { border-color: var(--accent); background: rgba(229,9,20,0.18); }
 	.chip.locked { cursor: not-allowed; opacity: 0.55; }
 	.chip.locked:hover { border-color: #3a3a3a; }
+	/* A member-locked source IS reachable — you just have to sign in — so it stays
+	   fully legible and clickable, unlike the dimmed paid-tier chip above. */
+	.chip.member { cursor: pointer; opacity: 1; text-decoration: none; }
+	.chip.member:hover { border-color: var(--accent); background: rgba(229,9,20,0.10); }
 	.chip .badge { font-weight: 700; font-size: 0.72rem; color: var(--accent); }
 	.chip .chip-sub { color: var(--muted); }
 	.chip .chip-lock { color: var(--muted); font-size: 0.72rem; }
+	.chip.member .chip-lock { color: var(--text); }
+
+	/* Sign-in prompt painted into the player slot when the visitor picked (or
+	   only has) a member-gated source. */
+	.login-gate { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+	.login-gate .login-gate-lock { font-size: 1.8rem; line-height: 1; }
+	.login-gate .login-gate-text { color: var(--text); font-size: 1rem; max-width: 34ch; }
+	.login-gate .login-gate-hint { color: var(--muted); font-size: 0.85rem; max-width: 40ch; }
 
 	/* Same-season episode navigation strip. */
 	.ep-nav { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -186,7 +198,8 @@
 	data-owner-kind="{{.OwnerKind}}"
 	data-owner-id="{{.OwnerID}}"
 	data-videos="{{.VideosJSON}}"
-	data-subs="{{.SubtitlesJSON}}">
+	data-subs="{{.SubtitlesJSON}}"
+	data-login-url="{{.LoginURL}}">
 	<a href="{{.BackHref}}" class="back-link">← Quay lại</a>
 	<div class="watch-meta-top">
 		<h1>{{.Heading}}</h1>
@@ -307,6 +320,10 @@ if (!Array.isArray(VIDEOS)) VIDEOS = [];
 let SAVED_SUBS = [];
 try { SAVED_SUBS = JSON.parse(D.subs || '[]'); } catch(e) { SAVED_SUBS = []; }
 if (!Array.isArray(SAVED_SUBS)) SAVED_SUBS = [];
+// Sign-in link back to this page. Empty when the visitor is already signed in
+// or accounts are disabled — in which case the server never marks a source
+// 'member' either, so nothing below ever needs it.
+const LOGIN_URL = D.loginUrl || '';
 
 let player = null;
 let currentInfoHash = null;
@@ -424,24 +441,81 @@ function videoLabel(v) {
 }
 
 // renderSourceChips shows every source as a chip (even a single one) and
-// highlights the active one.
+// highlights the active one. A gated source is still listed — the point is that
+// the user sees the quality exists — but says why it is locked.
 function renderSourceChips() {
 	const box = document.getElementById('source-chips');
 	box.innerHTML = VIDEOS.map(v => {
 		const sub = videoLabel(v);
+		const badge = `<span class="badge">${escHtml(v.resolution || 'SD')}</span>
+			${sub ? `<span class="chip-sub">${escHtml(sub)}</span>` : ''}`;
+		// Reserved for signed-in accounts: a real link, so it is keyboard- and
+		// middle-click-friendly, and lands back here after Google.
+		if (v.lock === 'member') {
+			return `<a class="chip locked member" href="${escHtml(LOGIN_URL)}"
+				title="Đăng nhập để xem chất lượng ${escHtml(v.resolution || 'này')}">
+				${badge}
+				<span class="chip-lock">🔒 Đăng nhập</span>
+			</a>`;
+		}
 		// 4K sources are reserved for paid users for now: shown but not playable.
 		if (v.available === false) {
 			return `<span class="chip locked" title="Sắp ra mắt cho người dùng trả phí">
-				<span class="badge">${escHtml(v.resolution || 'SD')}</span>
-				${sub ? `<span class="chip-sub">${escHtml(sub)}</span>` : ''}
+				${badge}
 				<span class="chip-lock">🔒 Sắp ra mắt</span>
 			</span>`;
 		}
 		return `<span class="chip${v.id === activeVideoID ? ' active' : ''}" onclick="playSource(${v.id})">
-			<span class="badge">${escHtml(v.resolution || 'SD')}</span>
-			${sub ? `<span class="chip-sub">${escHtml(sub)}</span>` : ''}
+			${badge}
 		</span>`;
 	}).join('');
+}
+
+// showLoginGate paints the player slot with a sign-in prompt for a member-gated
+// source. Built with DOM nodes rather than innerHTML so the player placeholder
+// stays a text-only surface (setPlayerStatus deliberately uses textContent) —
+// this must not become the one path that injects markup into it.
+function showLoginGate(v) {
+	const wrap = document.getElementById('player-wrap');
+	if (player) { try { player.destroy(); } catch(e) {} player = null; }
+	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
+	if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+	hideLoadNotice();
+	wrap.innerHTML = '';
+
+	const ph = document.createElement('div');
+	ph.className = 'player-placeholder';
+	const box = document.createElement('div');
+	box.className = 'login-gate';
+
+	const lock = document.createElement('div');
+	lock.className = 'login-gate-lock';
+	lock.textContent = '🔒';
+
+	const text = document.createElement('div');
+	text.className = 'login-gate-text';
+	text.textContent = 'Đăng nhập để xem chất lượng ' + ((v && v.resolution) || '1080p');
+
+	const hint = document.createElement('div');
+	hint.className = 'login-gate-hint';
+	hint.textContent = 'Tài khoản miễn phí. Chất lượng 720p xem được ngay không cần đăng nhập.';
+
+	box.append(lock, text, hint);
+
+	if (LOGIN_URL) {
+		const a = document.createElement('a');
+		a.className = 'login-link';
+		a.href = LOGIN_URL;
+		a.innerHTML = '<svg class="google-icon" viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62Z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18Z"/><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33Z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58Z"/></svg>';
+		// Not .login-label: the mobile breakpoint hides that class in the header.
+		const label = document.createElement('span');
+		label.textContent = 'Đăng nhập với Google';
+		a.append(label);
+		box.append(a);
+	}
+
+	ph.append(box);
+	wrap.append(ph);
 }
 
 // playSource asks the viewer to add the chosen source to the streamer (the
@@ -449,7 +523,12 @@ function renderSourceChips() {
 async function playSource(videoID, opts = {}) {
 	if (!opts.force && videoID === activeVideoID && player) return;
 	const v = VIDEOS.find(x => x.id === videoID);
-	if (v && v.available === false) return; // gated source — not playable yet
+	// A member-gated source should sell the account, not fail silently. The chip
+	// itself is an <a href> so a click already navigates to sign-in; this branch
+	// only catches programmatic calls, and must never tear down a live stream to
+	// show the prompt.
+	if (v && v.lock === 'member') { if (!player) showLoginGate(v); return; }
+	if (v && v.available === false) return; // paid-tier source — not playable yet
 	setStatus('');
 	showLoadNotice();
 	showPlayerStatus('Đang chuẩn bị nguồn phát…');
@@ -457,6 +536,9 @@ async function playSource(videoID, opts = {}) {
 	let data;
 	try {
 		const res = await fetch(`/api/sources/${videoID}/prepare`, { method: 'POST' });
+		// 401 means this quality needs an account — the session expired mid-watch,
+		// or the chip data is stale. Offer sign-in instead of a transport error.
+		if (res.status === 401) { showLoginGate(v); return; }
 		if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
 		data = await res.json();
 	} catch(e) {
@@ -1082,12 +1164,17 @@ function resetSubStyle() {
 	renderSourceChips();
 	renderSubList();
 	console.info('phimnet: nhập streamDebug() vào console để xem tiến trình tải & số liệu gỡ lỗi.');
-	// Default = latest added playable source. The store orders newest first, so
-	// the first available (non-gated, e.g. 1080p) entry is the latest 1080p.
-	const defaultVideo = VIDEOS.find(v => v.available !== false);
+	// Default = latest added source this visitor may actually play. The store
+	// orders newest first, so an anonymous visitor lands on the newest 720p and a
+	// signed-in one on the newest non-4K source.
+	const defaultVideo = VIDEOS.find(v => !v.lock);
+	const memberVideo = VIDEOS.find(v => v.lock === 'member');
 	if (defaultVideo) {
 		await playSource(defaultVideo.id);
 		if (SAVED_SUBS.length) applySavedSubtitle(SAVED_SUBS[0].id);
+	} else if (memberVideo) {
+		// Nothing free here — every source needs an account. Ask for one.
+		showLoginGate(memberVideo);
 	} else if (VIDEOS.length) {
 		showPlayerStatus('Các nguồn 4K hiện chưa khả dụng.', true);
 	}

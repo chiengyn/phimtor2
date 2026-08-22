@@ -147,6 +147,34 @@ Flat single `main` package.
   can also load a local `.srt`/`.vtt`. There is no OpenSubtitles search here (the
   viewer is read-only and holds no provider key).
 
+- **Quality tiers** (`server.go`, `resolutionLock`). Sources are always *listed*
+  — seeing that a better quality exists is the whole point — but not always
+  playable. Three tiers, from one predicate:
+
+  | | anonymous | signed in |
+  |---|---|---|
+  | 720p | plays | plays |
+  | 1080p (`memberResolutions`) | 🔒 sign-in chip | plays |
+  | 2160p (`lockedResolutions`) | 🔒 "sắp ra mắt" | 🔒 "sắp ra mắt" |
+
+  1080p is gated to push registration; 4K is held back for the future paid tier
+  (`User.Plan` is the seam for that, and is still read nowhere). `resolutionLock`
+  returns `lockNone`/`lockMember`/`lockPaid` and is the **single source of
+  truth** for the chip copy, the default-source pick, and the enforcement.
+  - **The chips are client-rendered and bypassable — `handlePrepareSource` is
+    the only thing that actually enforces this.** It answers `401` for a member
+    lock and `403` for a paid one; the page turns that `401` into the sign-in
+    gate, which is also how a session expiring mid-watch recovers.
+  - `resolutionLock` is a **method on `*Server`** because the member tier must be
+    inert when accounts are disabled (`s.google.enabled()`). Without that clause
+    a `GOOGLE_CLIENT_ID=""` deploy — the documented rollback — would strand every
+    visitor at 720p with no login button to escape it. **Test that config
+    whenever you touch this.**
+  - `watchData` carries `LoginURL` because `layout.html` invokes the page body as
+    `{{block "content" .Data}}`: inside `watch.html` neither `.User` nor
+    `$.LoginURL` is in scope. `s.loginURL(r)` builds it for both the envelope and
+    the watch handlers.
+
 - **Playing `.mkv`** (`static/mkvplayer.js`, `templates/watch.html`). Browsers do
   not demux Matroska, and the streamer's ffmpeg fallback produces a chunked
   fMP4 that ignores `Range` — so seeking a `.mkv` used to be impossible. The page

@@ -769,31 +769,66 @@ type watchData struct {
 	VideosJSON    string // JSON array, injected via a data-* attribute
 	SubtitlesJSON string // JSON array, injected via a data-* attribute
 	HasVideo      bool
+	// LoginURL is the sign-in link back to this page, "" when the visitor is
+	// already signed in or accounts are disabled. It must live here rather than
+	// be read off the pageData envelope: layout.html invokes the page body as
+	// {{block "content" .Data}}, so inside watch.html neither .User nor
+	// $.LoginURL is in scope — the handler's view model is the only contract.
+	LoginURL string
 	// Same-season episode navigation (episode watch page only; empty for movies).
 	SeasonNumber int
 	Episodes     []Episode
 }
 
-// lockedResolutions are video qualities currently reserved for future paid
-// users: the viewer still lists them (so users can see the source exists) but
-// refuses to play them. 4K (2160p) is gated for now — remove the entry here to
-// re-enable playback. resolutionAvailable is the single source of truth used by
-// both the watch page (chip + default selection) and the prepare endpoint.
+// lockedResolutions are video qualities reserved for the future PAID tier: the
+// viewer still lists them (so users can see the source exists) but nobody can
+// play them yet. 4K (2160p) is gated for now — remove the entry here to
+// re-enable playback.
 var lockedResolutions = map[string]bool{"2160p": true}
 
-func resolutionAvailable(res string) bool {
-	return !lockedResolutions[res]
+// memberResolutions are qualities reserved for signed-in ACCOUNTS. Anonymous
+// visitors see the chip and are offered sign-in instead — this is the
+// registration nudge, not a paywall. Everything not listed here (720p) stays
+// freely playable, so the site is still usable without an account.
+var memberResolutions = map[string]bool{"1080p": true}
+
+// Why a source is not playable for this visitor. The empty string means it is.
+const (
+	lockNone   = ""
+	lockPaid   = "paid"
+	lockMember = "member"
+)
+
+// resolutionLock reports why res is not playable for this visitor, or lockNone.
+// It is the single source of truth used by both the watch page (chip + default
+// selection) and the prepare endpoint.
+//
+// It is a method on *Server, not a bare function, because the member tier must
+// be OFF entirely when accounts are disabled: with no GOOGLE_CLIENT_ID there are
+// no /auth/google/* routes and no login button, so gating 1080p there would
+// strand every visitor at 720p with no way to unlock it. Turning the accounts
+// env vars off stays the clean rollback (see CLAUDE.md).
+func (s *Server) resolutionLock(res string, signedIn bool) string {
+	switch {
+	case lockedResolutions[res]:
+		return lockPaid
+	case memberResolutions[res] && !signedIn && s.google.enabled():
+		return lockMember
+	}
+	return lockNone
 }
 
 // watchVideo is the browser-facing subset of a Video (no magnet — the viewer
-// adds it to the streamer server-side). Available is false for sources gated
-// behind lockedResolutions, so the browser can show but not play them.
+// adds it to the streamer server-side). Available is false for any gated
+// source, so the browser can show but not play it; Lock says which gate, so the
+// page can offer sign-in for a member source and "coming soon" for a paid one.
 type watchVideo struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	Resolution string `json:"resolution"`
 	FileSize   int64  `json:"file_size"`
 	Available  bool   `json:"available"`
+	Lock       string `json:"lock"`
 }
 
 // watchSubtitle is the browser-facing subset of a Subtitle.
@@ -805,10 +840,14 @@ type watchSubtitle struct {
 	DownloadCount int    `json:"download_count"`
 }
 
-func toWatchVideos(vs []Video) []watchVideo {
+func (s *Server) toWatchVideos(vs []Video, signedIn bool) []watchVideo {
 	out := make([]watchVideo, 0, len(vs))
 	for _, v := range vs {
-		out = append(out, watchVideo{ID: v.ID, Name: v.Name, Resolution: v.Resolution, FileSize: v.FileSize, Available: resolutionAvailable(v.Resolution)})
+		lock := s.resolutionLock(v.Resolution, signedIn)
+		out = append(out, watchVideo{
+			ID: v.ID, Name: v.Name, Resolution: v.Resolution, FileSize: v.FileSize,
+			Available: lock == lockNone, Lock: lock,
+		})
 	}
 	return out
 }
@@ -850,6 +889,7 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		s.renderNotFound(w, r)
 		return
 	}
+	signedIn := userFrom(r.Context()) != nil
 	videos, err := s.store.VideosForTitle(r.Context(), title.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -866,9 +906,10 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		BackHref:      titlePath(title.ID, title.Title, title.OriginalTitle),
 		OwnerKind:     "title",
 		OwnerID:       title.ID,
-		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
+		VideosJSON:    jsonOrEmpty(s.toWatchVideos(videos, signedIn)),
 		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
 		HasVideo:      len(videos) > 0,
+		LoginURL:      s.loginURL(r),
 	}
 	s.render(w, r, s.watch, data)
 }
@@ -888,6 +929,7 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		s.renderNotFound(w, r)
 		return
 	}
+	signedIn := userFrom(r.Context()) != nil
 	videos, err := s.store.VideosForEpisode(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -913,9 +955,10 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		BackHref:      titlePath(ec.TitleID, ec.TitleName, ""),
 		OwnerKind:     "episode",
 		OwnerID:       id,
-		VideosJSON:    jsonOrEmpty(toWatchVideos(videos)),
+		VideosJSON:    jsonOrEmpty(s.toWatchVideos(videos, signedIn)),
 		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
 		HasVideo:      len(videos) > 0,
+		LoginURL:      s.loginURL(r),
 		SeasonNumber:  ec.SeasonNumber,
 		Episodes:      eps,
 	}
@@ -940,8 +983,15 @@ func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "video not found")
 		return
 	}
-	if !resolutionAvailable(video.Resolution) {
+	// The chips are rendered client-side and trivially bypassable, so this is the
+	// check that actually enforces the tiers. 401 vs 403 is what lets the page
+	// tell "sign in and you can" apart from "nobody can yet".
+	switch s.resolutionLock(video.Resolution, userFrom(r.Context()) != nil) {
+	case lockPaid:
 		writeJSONError(w, http.StatusForbidden, "nguồn này hiện không khả dụng")
+		return
+	case lockMember:
+		writeJSONError(w, http.StatusUnauthorized, "Đăng nhập để xem chất lượng "+video.Resolution)
 		return
 	}
 	infoHash, streamerPublicURL, err := s.manager.addTorrent(r.Context(), video.Magnet, video.TorrentFile)
@@ -1232,10 +1282,19 @@ func (s *Server) newPageData(r *http.Request, data any) pageData {
 			ids = append(ids, id)
 		}
 		pd.SavedIDsJSON = jsonOrEmpty(ids)
-	} else if s.google.enabled() {
-		pd.LoginURL = "/auth/google/start?next=" + url.QueryEscape(r.URL.RequestURI())
 	}
+	pd.LoginURL = s.loginURL(r)
 	return pd
+}
+
+// loginURL is the sign-in link that returns the visitor to this exact page, or
+// "" when they are already signed in or accounts are disabled (which is what
+// hides every login affordance on the site).
+func (s *Server) loginURL(r *http.Request) string {
+	if userFrom(r.Context()) != nil || !s.google.enabled() {
+		return ""
+	}
+	return "/auth/google/start?next=" + url.QueryEscape(r.URL.RequestURI())
 }
 
 func (s *Server) renderNotFound(w http.ResponseWriter, r *http.Request) {
