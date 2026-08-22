@@ -92,6 +92,41 @@ The manager persists the approval allow-list to its `/data` volume
 (`MANAGER_STATE_DIR`), so approvals survive redeploys; keep each streamer's
 `/data` volume and `STREAMER_INSTANCE_ID` stable so its approval survives too.
 
+### Google sign-in (viewer accounts) — optional
+
+Leave `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `SESSION_SECRET` unset and the
+viewer runs exactly as it did before accounts existed: no login button, `/auth/*`
+routes unregistered. That is also the safe rollback if sign-in ever misbehaves.
+
+To turn it on, once, in the [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+
+1. *OAuth consent screen*: **External**, app name, support email. Scopes
+   `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile` are all
+   non-sensitive, so no verification review is needed — but while the app is in
+   **Testing** only listed *Test users* can sign in, so publish it when ready.
+2. *Credentials → Create credentials → OAuth client ID → **Web application***.
+   Authorized redirect URIs — these must match **byte for byte**, and a mismatch
+   (`redirect_uri_mismatch`) is the usual failure:
+   - `https://$VIEWER_HOST/auth/google/callback`
+   - `http://localhost:8082/auth/google/callback` (local dev)
+
+   Note `http://127.0.0.1:8082/...` is *not* the same URI as `http://localhost:8082/...`
+   — register whichever you actually browse to.
+3. Set the three values as repo Secrets (or in your local `.env`):
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+   `SESSION_SECRET=$(openssl rand -hex 32)`.
+
+`SESSION_SECRET` keys the signed session cookie, and there is **no sessions
+table** — rotating it logs every user out. Treat it as a revocation lever, not a
+routine credential rotation.
+
+**Deploy order matters here.** The `users` / `user_bookmarks` tables come from
+`admin/migrations/0007_users.sql`, so the **admin must deploy first**. The `all`
+option already runs admin before viewer, so only a viewer-only deploy of new code
+against an un-migrated database is a problem — and even then the damage is
+contained: sign-in fails and is logged, while the rest of the site keeps serving
+anonymously.
+
 The only thing still hardcoded in the configs is the GHCR image namespace
 (`image: chiengyn/phimtor2-*`) — change `chiengyn` if you fork under another user.
 

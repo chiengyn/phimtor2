@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -54,6 +55,13 @@ type Server struct {
 	// discordURL is the public invite link to the support Discord channel,
 	// exposed to templates via the discordURL helper. Empty → link is hidden.
 	discordURL string
+
+	// google and sess implement accounts. google is nil-safe and reports
+	// enabled() == false when GOOGLE_CLIENT_ID is unset, in which case the
+	// /auth routes are never registered and the header shows no login button —
+	// the site then behaves exactly as it did before accounts existed.
+	google *googleClient
+	sess   *sessionSigner
 }
 
 func NewServer(store *Store, cfg Config) (*Server, error) {
@@ -61,12 +69,27 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	sess, ephemeral, err := newSessionSigner(cfg.SessionSecret, cfg.secureCookies())
+	if err != nil {
+		return nil, err
+	}
+	if ephemeral {
+		log.Printf("SESSION_SECRET unset — using an ephemeral key, so sessions will not survive a restart (set one with: openssl rand -hex 32)")
+	}
+
 	s := &Server{
 		store:      store,
 		manager:    newManagerClient(cfg.ManagerInternalURL, cfg.ManagerInternalToken),
 		blobs:      blobs,
 		publicURL:  strings.TrimRight(cfg.PublicURL, "/"),
 		discordURL: cfg.DiscordURL,
+		sess:       sess,
+	}
+	if cfg.accountsEnabled() {
+		s.google = newGoogleClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.oauthRedirectURL())
+		log.Printf("Google sign-in enabled (redirect URI %s)", cfg.oauthRedirectURL())
+	} else {
+		log.Printf("Google sign-in disabled (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET unset)")
 	}
 	s.watcher = newWatchTracker(time.Duration(cfg.WatchHeartbeatTTL)*time.Second, s.manager.deleteTorrent)
 	if err := s.parseTemplates(); err != nil {
@@ -261,7 +284,10 @@ func (s *Server) parseTemplates() error {
 	if s.watch, err = parse("layout.html", "watch.html"); err != nil {
 		return err
 	}
-	if s.bookmarks, err = parse("layout.html", "bookmarks.html"); err != nil {
+	// grid.html comes along for the "card" partial, so the saved list can be
+	// rendered server-side for signed-in visitors with the exact same markup as
+	// the discovery grid.
+	if s.bookmarks, err = parse("layout.html", "bookmarks.html", "grid.html"); err != nil {
 		return err
 	}
 	if s.notFound, err = parse("layout.html", "404.html"); err != nil {
@@ -274,6 +300,10 @@ func (s *Server) setupRouter() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	// Applied globally so every page renders its own signed-in header state.
+	// Anonymous requests carry no session cookie and return before touching the
+	// database, so the public site pays nothing for this.
+	r.Use(s.currentUser)
 
 	// Liveness probe for kamal-proxy / load balancers (no DB access).
 	r.Get("/up", func(w http.ResponseWriter, _ *http.Request) {
@@ -297,6 +327,27 @@ func (s *Server) setupRouter() {
 	// Watch-session liveness: the watch page heartbeats while playing and beacons
 	// a leave on page hide, so the torrent is dropped the instant its last viewer
 	// goes away (see watchtracker.go).
+	// Accounts. The Google routes exist only when sign-in is configured, so an
+	// unconfigured deploy 404s them instead of failing mid-flow. Logout is always
+	// registered so an existing session can be cleared even if sign-in is later
+	// turned off, and is POST-only so no prefetch can sign anyone out.
+	if s.google.enabled() {
+		r.Get("/auth/google/start", s.handleGoogleStart)
+		r.Get("/auth/google/callback", s.handleGoogleCallback)
+	}
+	r.Post("/auth/logout", s.handleLogout)
+
+	// Saved titles ("xem sau") for signed-in visitors. Anonymous visitors keep
+	// their list in localStorage and never call these.
+	r.Route("/api/bookmarks", func(r chi.Router) {
+		r.Use(s.requireUser)
+		r.Get("/", s.handleListSaved)
+		r.Delete("/", s.handleClearSaved)
+		r.Post("/merge", s.handleMergeSaved)
+		r.Post("/{titleID}", s.handleAddSaved)
+		r.Delete("/{titleID}", s.handleRemoveSaved)
+	})
+
 	r.Post("/api/watch/heartbeat", s.handleWatchHeartbeat)
 	r.Post("/api/watch/leave", s.handleWatchLeave)
 
@@ -569,13 +620,13 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.render(w, s.home, "layout", data)
+	s.render(w, r, s.home, data)
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
-		s.renderNotFound(w)
+		s.renderNotFound(w, r)
 		return
 	}
 	title, err := s.store.GetTitle(r.Context(), id)
@@ -584,17 +635,126 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if title == nil {
-		s.renderNotFound(w)
+		s.renderNotFound(w, r)
 		return
 	}
-	s.render(w, s.detail, "layout", title)
+	s.render(w, r, s.detail, title)
 }
 
-// handleBookmarks serves the "xem sau" list page. The list itself lives in the
-// visitor's localStorage (there are no accounts and the viewer never writes), so
-// this is a static shell that static/bookmarks.js fills in on load.
-func (s *Server) handleBookmarks(w http.ResponseWriter, _ *http.Request) {
-	s.render(w, s.bookmarks, "layout", nil)
+// bookmarksData drives the "xem sau" list page, which has two modes.
+//
+// Anonymous: LoggedIn is false and Titles is nil — the template renders an empty
+// shell that static/bookmarks.js fills from localStorage, exactly as it did
+// before accounts existed.
+//
+// Signed in: the list comes from the database, so it follows the user across
+// devices, and the cards are rendered server-side by the same "card" partial the
+// discovery grid uses — which means a saved entry can never show stale metadata.
+type bookmarksData struct {
+	LoggedIn bool
+	Titles   []TitleSummary
+}
+
+func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	if user == nil {
+		s.render(w, r, s.bookmarks, bookmarksData{})
+		return
+	}
+	titles, err := s.store.SavedTitles(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.render(w, r, s.bookmarks, bookmarksData{LoggedIn: true, Titles: titles})
+}
+
+// --- Saved-titles API (signed-in visitors only) ------------------------------
+
+// handleListSaved returns the ids the signed-in user has saved. bookmarks.js
+// uses it to refresh its in-memory set after a merge.
+func (s *Server) handleListSaved(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	ids := make([]int64, 0, len(user.SavedIDs))
+	for id := range user.SavedIDs {
+		ids = append(ids, id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ids": ids})
+}
+
+// handleAddSaved saves a title. Idempotent, so a double-click is harmless.
+func (s *Server) handleAddSaved(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	id, err := strconv.ParseInt(chi.URLParam(r, "titleID"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid title id")
+		return
+	}
+	if err := s.store.AddBookmark(r.Context(), user.ID, id); err != nil {
+		log.Printf("bookmarks: add %d for user %d: %v", id, user.ID, err)
+		writeJSONError(w, http.StatusInternalServerError, "could not save")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"saved": true})
+}
+
+// handleRemoveSaved unsaves a title. Unsaving something never saved is a no-op.
+func (s *Server) handleRemoveSaved(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	id, err := strconv.ParseInt(chi.URLParam(r, "titleID"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid title id")
+		return
+	}
+	if err := s.store.RemoveBookmark(r.Context(), user.ID, id); err != nil {
+		log.Printf("bookmarks: remove %d for user %d: %v", id, user.ID, err)
+		writeJSONError(w, http.StatusInternalServerError, "could not remove")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"saved": false})
+}
+
+// handleClearSaved empties the signed-in user's saved list in one call, backing
+// the "Xoá tất cả" button.
+func (s *Server) handleClearSaved(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	if err := s.store.ClearBookmarks(r.Context(), user.ID); err != nil {
+		log.Printf("bookmarks: clear for user %d: %v", user.ID, err)
+		writeJSONError(w, http.StatusInternalServerError, "could not clear")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ids": []int64{}})
+}
+
+// handleMergeSaved folds a browser's pre-login localStorage list into the
+// account. bookmarks.js calls it on any page load where the visitor is signed in
+// AND localStorage still holds entries, so it self-heals on every device without
+// needing a "just logged in" marker. The merge is idempotent.
+func (s *Server) handleMergeSaved(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if err := s.store.MergeBookmarks(r.Context(), user.ID, body.IDs); err != nil {
+		log.Printf("bookmarks: merge for user %d: %v", user.ID, err)
+		writeJSONError(w, http.StatusInternalServerError, "could not merge")
+		return
+	}
+	ids, err := s.store.SavedTitleIDs(r.Context(), user.ID)
+	if err != nil {
+		log.Printf("bookmarks: reload for user %d: %v", user.ID, err)
+		writeJSONError(w, http.StatusInternalServerError, "could not merge")
+		return
+	}
+	out := make([]int64, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ids": out})
 }
 
 // watchData drives the watch page. Videos and subtitles are serialized to JSON
@@ -678,7 +838,7 @@ func jsonOrEmpty(v any) string {
 func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
-		s.renderNotFound(w)
+		s.renderNotFound(w, r)
 		return
 	}
 	title, err := s.store.GetTitle(r.Context(), id)
@@ -687,7 +847,7 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if title == nil {
-		s.renderNotFound(w)
+		s.renderNotFound(w, r)
 		return
 	}
 	videos, err := s.store.VideosForTitle(r.Context(), title.ID)
@@ -710,13 +870,13 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
 		HasVideo:      len(videos) > 0,
 	}
-	s.render(w, s.watch, "layout", data)
+	s.render(w, r, s.watch, data)
 }
 
 func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
-		s.renderNotFound(w)
+		s.renderNotFound(w, r)
 		return
 	}
 	ec, err := s.store.GetEpisodeContext(r.Context(), id)
@@ -725,7 +885,7 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ec == nil {
-		s.renderNotFound(w)
+		s.renderNotFound(w, r)
 		return
 	}
 	videos, err := s.store.VideosForEpisode(r.Context(), id)
@@ -759,7 +919,7 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		SeasonNumber:  ec.SeasonNumber,
 		Episodes:      eps,
 	}
-	s.render(w, s.watch, "layout", data)
+	s.render(w, r, s.watch, data)
 }
 
 // handlePrepareSource adds the chosen video's torrent to the streamer
@@ -1038,14 +1198,54 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(b.String()))
 }
 
-func (s *Server) renderNotFound(w http.ResponseWriter) {
-	w.WriteHeader(http.StatusNotFound)
-	s.render(w, s.notFound, "layout", nil)
+// pageData is the root value every page template is executed with. Data is the
+// handler's own view model — layout.html re-scopes the head_title / head_extra /
+// content blocks to it, so no page template had to change — while User and
+// LoginURL drive the shared header chrome and SavedIDsJSON lets bookmarks.js
+// mark the save buttons without a round trip.
+type pageData struct {
+	Data any
+	// User is nil for an anonymous visitor, which is the common case.
+	User *User
+	// LoginURL is the sign-in link for THIS page, so a visitor comes back to
+	// where they were. Empty when accounts are disabled, which hides the button.
+	LoginURL string
+	// SavedIDsJSON is the signed-in user's saved title ids as a JSON array, "[]"
+	// when anonymous. Rendered onto <body data-bm-ids>.
+	SavedIDsJSON string
+	// Path is the current request's path+query, so the logout form returns the
+	// visitor to where they were.
+	Path string
 }
 
-func (s *Server) render(w http.ResponseWriter, t *template.Template, name string, data any) {
+// newPageData wraps a handler's view model with the shared per-request chrome.
+func (s *Server) newPageData(r *http.Request, data any) pageData {
+	pd := pageData{
+		Data:         data,
+		User:         userFrom(r.Context()),
+		SavedIDsJSON: "[]",
+		Path:         r.URL.RequestURI(),
+	}
+	if pd.User != nil {
+		ids := make([]int64, 0, len(pd.User.SavedIDs))
+		for id := range pd.User.SavedIDs {
+			ids = append(ids, id)
+		}
+		pd.SavedIDsJSON = jsonOrEmpty(ids)
+	} else if s.google.enabled() {
+		pd.LoginURL = "/auth/google/start?next=" + url.QueryEscape(r.URL.RequestURI())
+	}
+	return pd
+}
+
+func (s *Server) renderNotFound(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotFound)
+	s.render(w, r, s.notFound, nil)
+}
+
+func (s *Server) render(w http.ResponseWriter, r *http.Request, t *template.Template, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := t.ExecuteTemplate(w, name, data); err != nil {
+	if err := t.ExecuteTemplate(w, "layout", s.newPageData(r, data)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

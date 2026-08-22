@@ -19,9 +19,20 @@ small inline carousel helpers, `static/bookmarks.js` (loaded site-wide from
 watch page `import()`s only when it meets a container the browser cannot demux —
 see *Playing `.mkv`* below).
 
-It is **strictly read-only**: it never writes and **never runs migrations** —
-[`admin/`](../admin/CLAUDE.md) is the sole owner of the schema. The viewer assumes
-the tables already exist.
+It **owns no schema and never runs migrations** —
+[`admin/`](../admin/CLAUDE.md) is the sole owner, and the viewer assumes the
+tables already exist. It is **read-only for the whole catalog** (`titles`,
+`videos`, `subtitles`, `featured_titles`, …).
+
+The one exception, added with accounts: the viewer is the **only writer of two
+tables it does not own** — `users` (created/refreshed on login) and
+`user_bookmarks` (the saved list). Both are created by
+`admin/migrations/0007_users.sql`. Nothing else here writes, ever.
+
+> Deploy ordering matters because of this: the admin must apply `0007` **before**
+> a viewer that writes those tables boots. The failure is contained by design —
+> `currentUser` and the auth handlers treat a store error as "anonymous" and log
+> it, so an un-migrated database breaks sign-in only, not the site.
 
 ## Commands
 
@@ -50,6 +61,21 @@ service).
 - Watch-session reaping: `WATCH_HEARTBEAT_TTL` (30s) — how long a watch session
   may go silent before the viewer drops its torrent (via the manager) to free
   streamer resources. Keep it well above the watch page's 10s heartbeat interval.
+- Google sign-in (`googleauth.go`): `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`
+  (env-only secrets). **Both empty ⇒ accounts are off**: the `/auth/google/*`
+  routes are not registered and the header shows no login button, so the site is
+  exactly the anonymous-only one it was before accounts existed. That is also the
+  safe rollback. The OAuth `redirect_uri` is *derived* from `VIEWER_PUBLIC_URL`
+  (`<origin>/auth/google/callback`, falling back to `http://localhost:<port>/…`),
+  so there is no separate env var to keep in sync — but it must match an
+  "Authorized redirect URI" in the Google Cloud Console **byte for byte**.
+- Session cookie (`session.go`): `SESSION_SECRET` (env-only secret,
+  `openssl rand -hex 32`, ≥32 chars). **Required once `VIEWER_PUBLIC_URL` is
+  set** — `NewServer` errors out rather than let production run on a key that
+  changes every boot. Unset locally it generates an ephemeral key and logs a
+  warning, so sign-in works with zero setup. Rotating it **logs every user out**,
+  and since there is no sessions table that is the *only* revocation lever — not
+  a routine credential rotation.
 - Subtitle storage (`blobstore.go`, **read-only**): the viewer reads the *same*
   storage the admin writes to. `SUBTITLE_STORAGE_BACKEND` (`local`|`s3`),
   `SUBTITLE_STORAGE_DIR` (`./data/subtitles` — for `local` this **must** be the
@@ -84,13 +110,22 @@ Flat single `main` package.
     back** to the first row's top (score-ranked) titles so the hero is never empty.
     The curation itself lives in the admin (`GET /featured`), which owns the table.
   - `GET /titles/{id}` — full detail page (genres, and for TV its seasons/episodes).
-  - `GET /bookmarks` — the "xem sau" list. A **static shell** (`handleBookmarks`
-    renders it with `nil` data); the list is filled client-side from
-    localStorage. `noindex` and deliberately absent from `sitemap.xml`.
+  - `GET /bookmarks` — the "xem sau" list, in **two modes** (see *Bookmarks*
+    below). Anonymous: a static shell filled client-side from localStorage.
+    Signed in: server-rendered from `user_bookmarks` with the same `card`
+    partial the grid uses. `noindex` in both, and deliberately absent from
+    `sitemap.xml`.
   - `GET /watch/movie/{id}` and `GET /watch/episode/{id}` — the watch page.
   - `POST /api/sources/{videoID}/prepare` — viewer-mediated playback (see below).
   - `GET /api/subtitles/{id}/file` — serves a saved subtitle file read-only from
     the shared blob store, by the row's `storage_backend` + `storage_key`.
+  - `GET /auth/google/start` and `GET /auth/google/callback` — sign-in
+    (registered only when accounts are configured); `POST /auth/logout` —
+    always registered, and POST-only so no prefetch can sign anyone out.
+  - `/api/bookmarks/*` — the saved-titles API, behind `requireUser` (401 JSON
+    for anonymous callers): `GET /` (ids), `DELETE /` (clear all),
+    `POST|DELETE /{titleID}`, and `POST /merge` (fold a pre-login localStorage
+    list into the account).
   - `POST /api/watch/heartbeat` and `POST /api/watch/leave` — watch-session
     liveness (see *Watch-session reaping* below); drop a torrent once its last
     viewer goes away.
@@ -149,21 +184,78 @@ Flat single `main` package.
   rather than by sniffed `Content-Type`, because admin pages know the file path
   and this one does not.
 
+- **Accounts & sessions** (`googleauth.go`, `session.go`, `auth.go`). Sign-in is
+  Google OAuth2 authorization-code + OIDC, **hand-written** rather than via
+  `golang.org/x/oauth2` — the same convention as every other external client in
+  this repo (`manager.go`, admin's `tmdb.go`/`opensubtitles.go`). We never call a
+  Google API after login, so no token is stored: the `id_token` is decoded once
+  for its claims and discarded. Identity is `(provider, provider_uid)` — the
+  Google `sub` claim — **not** the email, so a user who changes their Gmail
+  address keeps their row and their saved list.
+  - `decodeIDToken` deliberately **does not verify the signature**. That is
+    correct *only* because `exchange` fetches the token itself, server-side, over
+    verified TLS from `oauth2.googleapis.com` (OIDC Core 3.1.3.7 clause 6); we
+    still check `aud`/`iss`/`exp`/`email_verified`. **If this is ever reused for
+    a token arriving from the browser — Google One Tap, an implicit flow — it
+    becomes a complete auth bypass.** See the comment on the function.
+  - The session is a **signed cookie, not a table**: `v1:<userID>:<expiry>` plus
+    an HMAC-SHA256 over `SESSION_SECRET`, 30 days, `HttpOnly` + `Path=/` +
+    `Secure` (only when the public URL is https, or local dev would silently drop
+    it). `SameSite=Lax` is **required, not a preference**: the OAuth callback is a
+    top-level cross-site GET from `accounts.google.com`, and `Strict` would
+    withhold the state cookie so every login would fail. `Lax` still keeps the
+    cookie off cross-site POSTs, which is what protects the write API.
+  - CSRF on the callback is a nonce in a 10-minute signed `phimnet_oauth` cookie,
+    compared in constant time against the `state` parameter. The post-login
+    return path rides in that **cookie**, not in `state`, so it never round-trips
+    through Google. `safeNext` rejects anything not a plain site-relative path
+    (`//evil.com`, absolute URLs, backslashes) — the open-redirect guard.
+  - `currentUser` is applied **globally** so every page renders its own header
+    state; it returns before touching the DB when there is no cookie, so
+    anonymous traffic (and every crawler) pays nothing. A cookie that no longer
+    resolves to a row is cleared. `requireUser` gates the write API only — read
+    pages degrade to the anonymous rendering rather than redirecting.
+  - Templates get the user through the `pageData` envelope (`server.go`):
+    `render` executes `layout` with `{Data, User, LoginURL, SavedIDsJSON, Path}`,
+    and `layout.html` re-scopes its three override blocks with
+    `{{block "content" .Data}}`. **No page template had to change** — inside a
+    `{{define "content"}}` the dot is still the handler's own view model. If you
+    add a page, that is the only contract to honour.
+
 - **Bookmarks / "xem sau"** (`static/bookmarks.js`, `templates/bookmarks.html`).
-  There are no accounts and the viewer never writes, so the watch-later list lives
-  **entirely in the visitor's `localStorage`** under the key `phimnet.bookmarks`
-  (same convention as the watch page's `phimnet.subStyle`): a newest-first JSON
-  array, capped at 500, of **full card snapshots** (`id`, `href`, `title`,
-  `original`, `poster` URL, `year`, `type`, `score`, `vietsub`, `savedAt`). Storing
-  the snapshot — not just the id — is what lets `/bookmarks` re-render the grid with
-  **no server round trip and no new store query**. Save buttons are rendered by the
-  `card` partial and `detail.html` as `[data-bm-toggle]` elements carrying that
-  snapshot in `data-bm-*` attributes; one delegated `click` listener on `document`
-  handles all of them, including the cards the script builds itself. Because the
-  `card` partial must hold a `<button>` (which may not nest in an `<a>`), `.card` is
-  a `<div>` and the whole-card link is the stretched `.card-link::after` overlay —
-  keep `buildCard` in the JS in sync with that partial's classes. Every storage
-  access is `try/catch`-guarded so blocked storage degrades to "nothing saved".
+  The watch-later list runs in one of **two modes**, chosen from
+  `<body data-bm-mode>` which `layout.html` renders per request:
+  - **`local`** (anonymous) — unchanged from before accounts existed. The list
+    lives entirely in `localStorage` under `phimnet.bookmarks` (same convention as
+    the watch page's `phimnet.subStyle`): a newest-first JSON array, capped at
+    500, of **full card snapshots** (`id`, `href`, `title`, `original`, `poster`
+    URL, `year`, `type`, `score`, `vietsub`, `savedAt`). Storing the snapshot —
+    not just the id — is what lets `/bookmarks` re-render the grid with **no
+    server round trip and no new store query**.
+  - **`server`** (signed in) — the list lives in `user_bookmarks`, so it follows
+    the visitor across devices. Only ids are held client-side (the set the server
+    renders onto `<body data-bm-ids>`, so every save button is correct on first
+    paint with no extra fetch and no flash); the cards themselves come from the
+    server-rendered `card` partial, which means a saved entry can never show
+    stale metadata and a deleted title simply cascades out of every list. Toggles
+    are optimistic and revert on a failed write; a card is only removed from the
+    saved grid once the server confirms.
+  - **The merge.** On any load where a signed-in visitor still has a localStorage
+    list, `mergeLocal` POSTs its ids to `/api/bookmarks/merge` and drops the key
+    *only after* the server accepts — so a failed merge simply retries next load.
+    It is deliberately **not** gated on a "just logged in" marker, so it
+    self-heals on every device. The server side is `INSERT IGNORE`, making it
+    idempotent and letting ids that no longer exist fall away on the foreign key
+    (a stale list is expected input, not an error).
+  - Save buttons are rendered by the `card` partial and `detail.html` as
+    `[data-bm-toggle]` elements carrying the snapshot in `data-bm-*` attributes;
+    one delegated `click` listener on `document` handles all of them, including
+    the cards the script builds itself. Because the `card` partial must hold a
+    `<button>` (which may not nest in an `<a>`), `.card` is a `<div>` and the
+    whole-card link is the stretched `.card-link::after` overlay — **keep
+    `buildCard` in the JS in sync with that partial's classes** (it is still
+    needed for local mode). Every storage access is `try/catch`-guarded so
+    blocked storage degrades to "nothing saved".
 
 - **Watch-session reaping** (`watchtracker.go`, `manager.go`
   `deleteTorrent`). So a torrent doesn't linger after the user leaves (wasting the
@@ -202,7 +294,16 @@ Flat single `main` package.
   never serialized to the browser). Dates are `"YYYY-MM-DD"` strings. Deliberately
   a separate copy from admin's (no shared package).
 
-- **Store** (`store.go`): read-only `database/sql` queries.
+- **Store** (`store.go`): `database/sql` queries — read-only for the catalog,
+  read/write for `users` + `user_bookmarks` only (see the invariant at the top).
+  `titleSummaryColumns` + `scanTitleSummary` are the shared SELECT list and
+  scanner behind every card query (grid, browse rows, saved list) so they cannot
+  drift; the columns are **qualified with the alias `t`**, so callers must select
+  `FROM titles t` — `SavedTitles` joins `user_bookmarks`, which also has an `id`.
+  `UpsertGoogleUser` relies on `id = LAST_INSERT_ID(id)` in its
+  `ON DUPLICATE KEY UPDATE` so `LastInsertId()` returns the *existing* row's id
+  on a returning login (without it you get 0) — works on both MySQL 8 and the
+  MariaDB used in production.
   - `ListTitles(filter, limit, offset)` — one **page** of the discovery list
     (optional free-text title `LIKE`, genre, and type constraints), newest first.
     `CountTitles(filter)` returns the total for the same filter so the grid can

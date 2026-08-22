@@ -1186,3 +1186,65 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// --- Viewer accounts (read-only from the admin side) --------------------------
+//
+// The admin OWNS these tables (migrations/0007_users.sql) but never writes them
+// — the public viewer does, on login and on save/unsave. The admin only reports
+// on them.
+
+// userSearchWhere builds the WHERE clause (and its args) filtering users by a
+// free-text query against name and email. An empty query matches everything.
+// Shared by CountUsers and ListUsers so the count and the page stay in sync.
+func userSearchWhere(q string) (string, []any) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return "", nil
+	}
+	like := "%" + q + "%"
+	return " WHERE u.name LIKE ? OR u.email LIKE ?", []any{like, like}
+}
+
+// CountUsers returns the number of accounts matching the (optional) search
+// query, for computing the number of user-list pages.
+func (s *Store) CountUsers(ctx context.Context, q string) (int, error) {
+	where, args := userSearchWhere(q)
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users u`+where, args...).Scan(&n)
+	return n, err
+}
+
+// ListUsers returns one page of accounts matching the (optional) search query,
+// newest signup first, each with the number of titles they have saved.
+func (s *Store) ListUsers(ctx context.Context, q string, limit, offset int) ([]User, error) {
+	where, args := userSearchWhere(q)
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT u.id, u.provider, u.provider_uid, u.email, u.email_verified, u.name,
+		       u.avatar_url, u.plan, u.is_blocked, u.last_login_at, u.created_at,
+		       (SELECT COUNT(*) FROM user_bookmarks b WHERE b.user_id = u.id)
+		FROM users u`+where+`
+		ORDER BY u.created_at DESC
+		LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []User
+	for rows.Next() {
+		var u User
+		var lastLogin sql.NullTime
+		if err := rows.Scan(&u.ID, &u.Provider, &u.ProviderUID, &u.Email, &u.EmailVerified,
+			&u.Name, &u.AvatarURL, &u.Plan, &u.IsBlocked, &lastLogin, &u.CreatedAt,
+			&u.BookmarkCount); err != nil {
+			return nil, err
+		}
+		if lastLogin.Valid {
+			t := lastLogin.Time
+			u.LastLoginAt = &t
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}

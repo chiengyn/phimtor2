@@ -1,7 +1,18 @@
-// Bookmarks ("xem sau"): a per-browser watch-later list kept entirely in
-// localStorage. The viewer is a public, account-less, read-only service, so there
-// is no server side to this — each entry stores the whole card snapshot it was
-// saved from, which is what lets /bookmarks re-render the list with no round trip.
+// Bookmarks ("xem sau"): the watch-later list, in one of two modes.
+//
+//   local  — anonymous visitors. The list lives entirely in localStorage and each
+//            entry stores the whole card snapshot it was saved from, which is
+//            what lets /bookmarks re-render it with no round trip. This is
+//            exactly how the feature worked before accounts existed, and nothing
+//            about it changed.
+//   server — signed-in visitors. The list lives in the database, so it follows
+//            them across devices. Only ids are held here (the set the server
+//            rendered onto <body data-bm-ids>); the cards themselves come from
+//            the server-rendered "card" partial, so they can never go stale.
+//
+// On any load where a signed-in visitor still has a localStorage list, it is
+// merged into their account and then dropped. That is deliberately not gated on
+// a "just logged in" marker, so it self-heals on every device they use.
 //
 // Loaded from layout.html on every page, so any rendered card (home rows, the
 // filtered grid, the detail page, the bookmarks page itself) gets a working save
@@ -12,6 +23,32 @@
 
 	var KEY = 'phimnet.bookmarks';
 	var MAX = 500; // far under quota; oldest entries fall off the end
+
+	var SERVER = document.body.dataset.bmMode === 'server';
+	// Ids the signed-in visitor has saved, as strings so they compare cleanly
+	// against the data-bm-id attributes. Unused in local mode.
+	var savedIDs = new Set();
+	if (SERVER) {
+		try {
+			(JSON.parse(document.body.dataset.bmIds || '[]') || []).forEach(function (id) {
+				savedIDs.add(String(id));
+			});
+		} catch (e) {}
+	}
+
+	// api wraps fetch for the saved-titles endpoints. same-origin credentials so
+	// the session cookie rides along; any non-2xx rejects so callers can revert.
+	function api(path, method, body) {
+		return fetch(path, {
+			method: method,
+			credentials: 'same-origin',
+			headers: body ? { 'Content-Type': 'application/json' } : undefined,
+			body: body ? JSON.stringify(body) : undefined
+		}).then(function (res) {
+			if (!res.ok) throw new Error('HTTP ' + res.status);
+			return res.json().catch(function () { return {}; });
+		});
+	}
 
 	// Storage can throw (Safari private mode, quota, disabled cookies). Every
 	// access is guarded so a blocked store degrades to "nothing saved" instead of
@@ -25,6 +62,21 @@
 
 	function save(list) {
 		try { localStorage.setItem(KEY, JSON.stringify(list.slice(0, MAX))); } catch (e) {}
+	}
+
+	function dropLocal() {
+		try { localStorage.removeItem(KEY); } catch (e) {}
+	}
+
+	// isSaved / savedCount are the two questions the UI asks, answered from
+	// whichever store this page is using.
+	function isSaved(id) {
+		if (SERVER) return savedIDs.has(String(id));
+		return indexOf(load(), id) >= 0;
+	}
+
+	function savedCount() {
+		return SERVER ? savedIDs.size : load().length;
 	}
 
 	function indexOf(list, id) {
@@ -76,14 +128,13 @@
 	}
 
 	function syncButtons() {
-		var list = load();
 		document.querySelectorAll('[data-bm-toggle]').forEach(function (btn) {
-			markButton(btn, indexOf(list, btn.dataset.bmId) >= 0);
+			markButton(btn, isSaved(btn.dataset.bmId));
 		});
 	}
 
 	function syncCount() {
-		var n = load().length;
+		var n = savedCount();
 		document.querySelectorAll('.saved-count').forEach(function (el) {
 			el.textContent = n;
 			el.hidden = n === 0;
@@ -161,17 +212,40 @@
 		return card;
 	}
 
+	// syncEmptyState shows/hides the "nothing saved yet" copy and the clear
+	// button from whatever is currently in the grid. Used by both modes.
+	function syncEmptyState() {
+		var grid = document.getElementById('bookmark-grid');
+		if (!grid) return;
+		var n = grid.querySelectorAll('.card').length;
+		var empty = document.getElementById('bookmark-empty');
+		var clear = document.getElementById('bookmark-clear');
+		if (empty) empty.hidden = n > 0;
+		if (clear) clear.hidden = n === 0;
+	}
+
+	// renderBookmarks rebuilds the saved grid from localStorage. Local mode only:
+	// in server mode the grid arrives server-rendered by the same "card" partial
+	// the discovery grid uses, and this script only ever removes nodes from it.
 	function renderBookmarks() {
 		var grid = document.getElementById('bookmark-grid');
 		if (!grid) return; // not the bookmarks page
-		var empty = document.getElementById('bookmark-empty');
-		var clear = document.getElementById('bookmark-clear');
+		if (SERVER) {
+			syncEmptyState();
+			return;
+		}
 		var list = load();
-
 		grid.textContent = '';
 		list.forEach(function (entry) { grid.appendChild(buildCard(entry)); });
-		if (empty) empty.hidden = list.length > 0;
-		if (clear) clear.hidden = list.length === 0;
+		syncEmptyState();
+	}
+
+	// dropCard removes an un-saved title from the saved grid, if we are on it.
+	function dropCard(btn) {
+		if (!document.getElementById('bookmark-grid')) return;
+		var card = btn.closest('.card');
+		if (card) card.remove();
+		syncEmptyState();
 	}
 
 	// One delegated handler covers every save button on the page, including the
@@ -184,31 +258,99 @@
 		ev.preventDefault();
 		ev.stopPropagation();
 
-		var saved = toggle(snapshotFrom(btn));
-		markButton(btn, saved);
+		if (!SERVER) {
+			var nowSaved = toggle(snapshotFrom(btn));
+			markButton(btn, nowSaved);
+			syncCount();
+			// On the bookmarks page an un-saved card leaves the list immediately.
+			if (!nowSaved) renderBookmarks();
+			return;
+		}
+
+		// Server mode: mark optimistically so the button feels instant, then
+		// revert if the write fails. The card itself is only removed once the
+		// server has confirmed, so there is nothing to rebuild on failure.
+		var id = String(btn.dataset.bmId);
+		var was = savedIDs.has(id);
+		var want = !was;
+		if (want) { savedIDs.add(id); } else { savedIDs.delete(id); }
+		markButton(btn, want);
 		syncCount();
-		// On the bookmarks page an un-saved card leaves the list immediately.
-		if (!saved && document.getElementById('bookmark-grid')) renderBookmarks();
+
+		api('/api/bookmarks/' + encodeURIComponent(id), want ? 'POST' : 'DELETE')
+			.then(function () {
+				if (!want) dropCard(btn);
+			})
+			.catch(function () {
+				if (was) { savedIDs.add(id); } else { savedIDs.delete(id); }
+				markButton(btn, was);
+				syncCount();
+			});
 	});
 
 	document.addEventListener('click', function (ev) {
 		if (!ev.target.closest('#bookmark-clear')) return;
 		if (!window.confirm('Xoá toàn bộ danh sách phim đã lưu?')) return;
-		save([]);
-		renderBookmarks();
-		syncButtons();
-		syncCount();
+		if (!SERVER) {
+			save([]);
+			renderBookmarks();
+			syncButtons();
+			syncCount();
+			return;
+		}
+		api('/api/bookmarks', 'DELETE').then(function () {
+			savedIDs.clear();
+			var grid = document.getElementById('bookmark-grid');
+			if (grid) grid.textContent = '';
+			syncEmptyState();
+			syncButtons();
+			syncCount();
+		});
 	});
 
-	// Keep other tabs of the same site consistent.
-	window.addEventListener('storage', function (ev) {
-		if (ev.key !== null && ev.key !== KEY) return;
-		syncButtons();
-		syncCount();
-		renderBookmarks();
-	});
+	// Keep other tabs of the same site consistent. Local mode only — in server
+	// mode localStorage is not the source of truth (and has been emptied).
+	if (!SERVER) {
+		window.addEventListener('storage', function (ev) {
+			if (ev.key !== null && ev.key !== KEY) return;
+			syncButtons();
+			syncCount();
+			renderBookmarks();
+		});
+	}
+
+	// mergeLocal folds a pre-login localStorage list into the account. It runs on
+	// any load where a signed-in visitor still has one, so it self-heals across
+	// devices with no "just logged in" marker. The server merge is idempotent and
+	// ignores ids that no longer exist, so a stale list is safe input.
+	//
+	// localStorage is only dropped once the server has accepted the list, so a
+	// failed merge simply retries on the next page load.
+	function mergeLocal() {
+		var list = load();
+		if (!list.length) return;
+		var ids = [];
+		list.forEach(function (entry) {
+			var n = parseInt(entry.id, 10);
+			if (n > 0) ids.push(n);
+		});
+		if (!ids.length) {
+			dropLocal();
+			return;
+		}
+		api('/api/bookmarks/merge', 'POST', { ids: ids }).then(function (data) {
+			dropLocal();
+			savedIDs.clear();
+			(data.ids || []).forEach(function (id) { savedIDs.add(String(id)); });
+			syncButtons();
+			syncCount();
+			// The saved grid was rendered before the merge, so it is now stale.
+			if (document.getElementById('bookmark-grid')) window.location.reload();
+		}).catch(function () {});
+	}
 
 	syncButtons();
 	syncCount();
 	renderBookmarks();
+	if (SERVER) mergeLocal();
 })();

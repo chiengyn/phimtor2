@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -34,6 +35,20 @@ type Config struct {
 	// anymore — it is per-torrent.
 	ManagerInternalURL   string
 	ManagerInternalToken string
+
+	// Google sign-in (OAuth2 / OIDC). An empty GoogleClientID disables accounts
+	// entirely: the /auth routes are not registered and the header shows no login
+	// button, so an unconfigured deploy degrades to exactly the anonymous-only
+	// site this was before accounts existed. Secrets, so env-only (no flags).
+	GoogleClientID     string
+	GoogleClientSecret string
+
+	// SessionSecret keys the HMAC on the session cookie. There is no sessions
+	// table — the signed cookie IS the session — so rotating this logs every user
+	// out, which is also the only revocation lever. Required once PublicURL is
+	// set (a production-shaped config); locally an ephemeral key is generated at
+	// boot so sign-in works with zero setup (sessions then die on restart).
+	SessionSecret string
 
 	// WatchHeartbeatTTL is how long (seconds) a watch session may go silent before
 	// the viewer treats the tab as gone and drops its torrent. Must comfortably
@@ -67,6 +82,10 @@ func loadConfig() Config {
 		DBPassword: envStr("DB_PASSWORD", ""),
 		DBName:     envStr("DB_NAME", "phimtor"),
 
+		GoogleClientID:     envStr("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret: envStr("GOOGLE_CLIENT_SECRET", ""),
+		SessionSecret:      envStr("SESSION_SECRET", ""),
+
 		ManagerInternalURL:   envStr("MANAGER_INTERNAL_URL", "http://localhost:8083"),
 		ManagerInternalToken: envStr("MANAGER_INTERNAL_TOKEN", ""),
 		WatchHeartbeatTTL:    envInt("WATCH_HEARTBEAT_TTL", 30),
@@ -95,6 +114,31 @@ func loadConfig() Config {
 	flag.Parse()
 
 	return cfg
+}
+
+// accountsEnabled reports whether Google sign-in is configured. When false the
+// viewer serves exactly the anonymous-only site it did before accounts existed.
+func (c Config) accountsEnabled() bool {
+	return c.GoogleClientID != "" && c.GoogleClientSecret != ""
+}
+
+// oauthRedirectURL is the absolute callback URL Google sends the browser back
+// to. It must match an "Authorized redirect URI" in the Google Cloud Console
+// byte for byte, so it is derived from PublicURL rather than being its own env
+// var (there is nothing to keep in sync that way).
+func (c Config) oauthRedirectURL() string {
+	base := strings.TrimRight(c.PublicURL, "/")
+	if base == "" {
+		base = fmt.Sprintf("http://localhost:%d", c.Port)
+	}
+	return base + "/auth/google/callback"
+}
+
+// secureCookies reports whether session cookies may carry the Secure attribute.
+// Browsers drop Secure cookies sent over plain http, so local dev (where
+// PublicURL is empty) must not set it.
+func (c Config) secureCookies() bool {
+	return strings.HasPrefix(c.PublicURL, "https://")
 }
 
 // mysqlDSN builds the connection string from the individual DB_* fields, unless

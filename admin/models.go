@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -106,4 +107,50 @@ type Subtitle struct {
 	StorageKey     string          `json:"storage_key"`
 	Metadata       json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt      time.Time       `json:"created_at,omitempty"`
+}
+
+// User is a registered viewer account. Sign-in is delegated to an OIDC provider
+// (Google today), so no credential material lives here — the identity is
+// (Provider, ProviderUID), never the email address, which is descriptive only
+// and may change. The admin surfaces these read-only: there is no user
+// management UI, this is "who signed up".
+//
+// Plan / PlanExpiresAt are the seam for the future paid unlock; everyone is
+// "free" today and nothing reads them yet.
+type User struct {
+	ID            int64      `json:"id"`
+	Provider      string     `json:"provider"`
+	ProviderUID   string     `json:"provider_uid"`
+	Email         string     `json:"email"`
+	EmailVerified bool       `json:"email_verified"`
+	Name          string     `json:"name"`
+	AvatarURL     string     `json:"avatar_url"`
+	Plan          string     `json:"plan"`
+	IsBlocked     bool       `json:"is_blocked"`
+	LastLoginAt   *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	// BookmarkCount is how many titles this user has saved for later, loaded
+	// alongside the row so the list shows engagement at a glance.
+	BookmarkCount int `json:"bookmark_count"`
+}
+
+// DisplayName is what the users list shows: the provider's name, falling back to
+// the local part of the email so the column is never blank.
+func (u User) DisplayName() string {
+	if u.Name != "" {
+		return u.Name
+	}
+	if i := strings.IndexByte(u.Email, '@'); i > 0 {
+		return u.Email[:i]
+	}
+	return "(chưa đặt tên)"
+}
+
+// Initial is the single-letter avatar fallback for a user whose provider gave us
+// no picture (or whose picture fails to load).
+func (u User) Initial() string {
+	for _, r := range u.DisplayName() {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
 }

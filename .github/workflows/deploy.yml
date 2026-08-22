@@ -86,6 +86,9 @@ jobs:
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
           MANAGER_REGISTER_TOKEN: ${{ secrets.MANAGER_REGISTER_TOKEN }}
           MANAGER_INTERNAL_TOKEN: ${{ secrets.MANAGER_INTERNAL_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
         run: |
           set -euo pipefail
           admin()    { kamal deploy --skip-push; }

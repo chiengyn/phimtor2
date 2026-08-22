@@ -1,8 +1,10 @@
 {{define "head_title"}}Phim đã lưu – phimnet{{end}}
 {{define "head_extra"}}
 <meta name="description" content="Danh sách phim bạn đã lưu để xem sau trên phimnet.">
-{{/* The list lives in this browser only, so there is nothing for a crawler to
-     index — and no URL that would reproduce it. Kept out of sitemap.xml too. */}}
+{{/* A personal list: nothing for a crawler to index, and no URL that would
+     reproduce it. Kept out of sitemap.xml too. This must stay even now that the
+     signed-in list is server-rendered — crawlers are never signed in, but the
+     page is still per-visitor either way. */}}
 <meta name="robots" content="noindex, nofollow">
 {{end}}
 {{define "content"}}
@@ -11,11 +13,26 @@
 		<h1>Phim đã lưu</h1>
 		<button class="clear-btn" type="button" id="bookmark-clear" hidden>Xoá tất cả</button>
 	</div>
-	{{/* Filled by /static/bookmarks.js from localStorage — the server sends no
-	     data here, so the list works without any account or DB read. */}}
+	{{if .LoggedIn}}
+	{{/* Signed in: the list comes from the database, so it follows the visitor
+	     across devices, and the cards are rendered by the very same "card"
+	     partial the discovery grid uses — a saved entry can never show stale
+	     metadata, and a deleted title simply drops out. static/bookmarks.js only
+	     removes nodes here, it never builds them. */}}
+	<div class="grid" id="bookmark-grid">{{range .Titles}}{{template "card" .}}{{end}}</div>
+	<p class="empty" id="bookmark-empty" {{if .Titles}}hidden{{end}}>
+		Bạn chưa lưu phim nào. Bấm vào biểu tượng dấu trang trên áp phích phim để lưu xem sau.
+	</p>
+	{{else}}
+	{{/* Anonymous: filled by /static/bookmarks.js from localStorage — the server
+	     sends no data, so the list still works with no account at all. */}}
 	<div class="grid" id="bookmark-grid"></div>
 	<p class="empty" id="bookmark-empty" hidden>
 		Bạn chưa lưu phim nào. Bấm vào biểu tượng dấu trang trên áp phích phim để lưu xem sau.
 	</p>
+	<p class="bookmarks-hint">
+		Danh sách này chỉ lưu trên trình duyệt hiện tại. Đăng nhập để đồng bộ trên mọi thiết bị.
+	</p>
+	{{end}}
 </section>
 {{end}}

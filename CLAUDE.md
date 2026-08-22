@@ -11,7 +11,7 @@ viewer) share a single MySQL database; the streamer(s) and manager stand alone.
 | Module | Purpose | Default port | Storage | Detail |
 |--------|---------|--------------|---------|--------|
 | **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard + featured-titles curation | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
-| **`viewer/`** | Public read-only browse/discovery + watch UI | `8082` | MySQL (read-only) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
+| **`viewer/`** | Public browse/discovery + watch UI + Google sign-in | `8082` | MySQL (read-only catalog; writes `users`/`user_bookmarks`) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
 | **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage); **N interchangeable instances** | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
 | **`manager/`** | Control plane that load-balances torrents across streamers (token-gated; public host + internal alias) | `8083` | enrollment JSON file | [`manager/CLAUDE.md`](manager/CLAUDE.md) |
 
@@ -42,9 +42,14 @@ any module.
 `admin/` and `viewer/` are two ends of one database:
 
 - **`admin/` owns the schema.** It runs the embedded migrations in
-  `admin/migrations/` on startup (`admin/store.go`) and is the only writer.
-- **`viewer/` only reads.** It **never migrates** and assumes the tables already
-  exist (`viewer/main.go`).
+  `admin/migrations/` on startup (`admin/store.go`) and is the only writer of the
+  catalog. It owns the two account tables too but never writes them.
+- **`viewer/` never migrates** and assumes the tables already exist
+  (`viewer/main.go`). It only *reads* the catalog — with one exception: it is the
+  sole **writer** of the two account tables, `users` and `user_bookmarks`
+  (created by `admin/migrations/0007_users.sql`), which back Google sign-in and
+  the per-account watch-later list. It writes nothing else, ever.
+  **Deploy admin before viewer** so the migration lands first.
 
 So schema changes live in `admin/` (a new numbered `admin/migrations/NNNN_*.sql`),
 and any new column the viewer should surface must be added to **both** modules'

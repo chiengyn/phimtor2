@@ -137,6 +137,11 @@ Flat single `main` package. Layers, in request order:
     `HX-Trigger: featuredChanged` so the list re-fetches. The viewer reads this same
     table (`viewer/store.go` `FeaturedTitleIDs`) for its hero, falling back to a
     score-based pick when nothing is featured.
+  - `GET /users` (`users.html`) — a **read-only** list of registered viewer
+    accounts (avatar, name, email, provider, plan, saved-title count, signup and
+    last-login dates), searchable by name/email and paginated with plain `<a>`
+    links rather than the htmx `pager` fragment. There are **no actions**: the
+    viewer is the only writer of `users`, so this is purely "who signed up".
   - `GET /api/subtitles/search` (`?file=&query=&languages=&season=&episode=`) and
     `GET /api/subtitles/download` (`?file_id=`) — the live subtitle-provider proxy
     (`opensubtitles.go`, behind the `SubtitleProvider` interface so more providers
@@ -224,7 +229,8 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
 - The schema (`0001_init.sql`) is `utf8mb4`/`utf8mb4_unicode_ci` throughout:
   `titles` (+`uniq_tmdb`), `genres`, `title_genres`, `seasons`, `episodes`, with
   cascading FKs. Later migrations add `torrent_sources`/`videos` (`0003`),
-  `subtitles` (`0004`), and `featured_titles` (`0005`). `featured_titles` is the
+  `subtitles` (`0004`), `featured_titles` (`0005`), a `has_vietsub` column
+  (`0006`), and the two **viewer account** tables (`0007`). `featured_titles` is the
   manual browse-hero curation list — `(title_id PK, position, created_at)` with a
   cascading FK to `titles`, ordered by `position` ascending; the catalog `titles`
   table stays untouched (deliberately a separate table, not a `titles` column).
@@ -234,6 +240,15 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
   `storage_key`) — the bytes live in a `BlobStore`, not MySQL — plus the provider
   metadata (`provider`, `provider_file_id`, `language`, `download_count`, and a
   JSON `metadata` for extras).
+
+`0007_users.sql` is the one place this rule bends: the admin **owns** `users` and
+`user_bookmarks` (they are declared here, and only migrations here can change
+them) but **never writes** them — the public viewer does, on login and on
+save/unsave. The admin only reports on them, read-only, at `GET /users`. Identity
+is `(provider, provider_uid)`, deliberately not the email, which is descriptive
+and may change. `plan`/`plan_expires_at` are an unused seam for a future paid
+unlock. Because the viewer writes these, **deploy the admin first** so the
+migration lands before a viewer that depends on it.
 
 A new column the viewer should display must also be added to **`viewer/`'s** own
 `models.go`/`store.go` — the two services duplicate their query layers rather than

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -98,4 +99,49 @@ type Subtitle struct {
 	StorageKey     string          `json:"storage_key"`
 	Metadata       json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt      time.Time       `json:"created_at,omitempty"`
+}
+
+// User is a signed-in visitor. Sign-in is delegated to an OIDC provider (Google
+// today), so no credential material lives here — the identity is the provider's
+// stable subject id, never the email address, which may change.
+//
+// This is the ONE part of the catalog the viewer writes (see store.go): a row is
+// created or refreshed on each login. Plan is the seam for the future paid
+// unlock and is "free" for everyone today.
+type User struct {
+	ID        int64
+	Email     string
+	Name      string
+	AvatarURL string
+	Plan      string
+
+	// SavedIDs is the set of title ids this user has saved for later, loaded
+	// alongside the user by the currentUser middleware so the header badge and
+	// every card's save button render in their correct state on first paint —
+	// no extra round trip, no flash of "unsaved".
+	SavedIDs map[int64]bool
+}
+
+// SavedCount is how many titles the user has saved, for the header badge.
+func (u *User) SavedCount() int { return len(u.SavedIDs) }
+
+// DisplayName is what the header shows: the provider's name, falling back to the
+// local part of the email so the chip is never blank.
+func (u *User) DisplayName() string {
+	if u.Name != "" {
+		return u.Name
+	}
+	if i := strings.IndexByte(u.Email, '@'); i > 0 {
+		return u.Email[:i]
+	}
+	return "Tài khoản"
+}
+
+// Initial is the single-letter avatar shown when the provider gave us no
+// picture, or when the picture fails to load.
+func (u *User) Initial() string {
+	for _, r := range u.DisplayName() {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
 }

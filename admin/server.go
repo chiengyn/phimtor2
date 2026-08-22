@@ -184,6 +184,7 @@ func (s *Server) setupRouter() {
 	r.Post("/streamers/{id}/revoke", s.handleRevokeStreamer)
 	r.Get("/crawl", s.handleCrawlPage)
 	r.Get("/featured", s.handleFeaturedPage)
+	r.Get("/users", s.handleUsersPage)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
 	r.Get("/videos/{id}/play", s.handlePlayVideo)
@@ -545,6 +546,52 @@ func (s *Server) handleFeaturedPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "featured.html", map[string]any{"Featured": featured})
+}
+
+// usersPage is one page of registered viewer accounts plus its pagination
+// controls. Read-only: the admin has no user-management actions, this is just
+// "who signed up" — the viewer is the only writer of the users table.
+type usersPage struct {
+	Users []User
+	Query string
+	Total int
+	Pager pager
+}
+
+// loadUsersPage fetches one page of accounts matching q (clamping the requested
+// page to the valid range) and builds its pagination controls; the pager links
+// carry q so navigation stays within the search results. Mirrors
+// loadTitleListPage, except the links are plain page URLs rather than htmx
+// fragment URLs, because this page is static.
+func (s *Server) loadUsersPage(ctx context.Context, q string, page int) (usersPage, error) {
+	total, err := s.store.CountUsers(ctx, q)
+	if err != nil {
+		return usersPage{}, err
+	}
+	pages := totalPages(total, adminPageSize)
+	page = clampPage(page, pages)
+	users, err := s.store.ListUsers(ctx, q, adminPageSize, (page-1)*adminPageSize)
+	if err != nil {
+		return usersPage{}, err
+	}
+	return usersPage{
+		Users: users,
+		Query: q,
+		Total: total,
+		Pager: buildPager(page, pages, func(n int) template.URL {
+			return template.URL(fmt.Sprintf("/users?page=%d&q=%s", n, url.QueryEscape(q)))
+		}),
+	}, nil
+}
+
+// handleUsersPage renders the read-only list of registered viewer accounts.
+func (s *Server) handleUsersPage(w http.ResponseWriter, r *http.Request) {
+	page, err := s.loadUsersPage(r.Context(), r.URL.Query().Get("q"), pageFromQuery(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	render(w, "users.html", page)
 }
 
 // handleListFeatured returns the ordered featured-list fragment, re-fetched

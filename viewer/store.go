@@ -96,6 +96,31 @@ func titleFilterClause(f TitleFilter) (string, []any) {
 	return " WHERE " + strings.Join(where, " AND "), args
 }
 
+// titleSummaryColumns is the SELECT list every card query shares, so the
+// discovery grid, the browse rows and the saved list can never drift apart in
+// which columns they load. scanTitleSummary is its matching scanner, taking the
+// Scan method both *sql.Row and *sql.Rows satisfy (same idiom as scanVideo).
+//
+// The columns are qualified with the alias "t", so every caller must select
+// `FROM titles t` — otherwise a query that joins another table carrying an `id`
+// column (SavedTitles does) would be ambiguous.
+const titleSummaryColumns = `t.id, t.tmdb_id, t.type, t.title, t.original_title, t.air_date, t.poster_path, t.vote_average, (t.type = 'movie' AND t.has_vietsub)`
+
+func scanTitleSummary(sc interface{ Scan(...any) error }) (TitleSummary, error) {
+	var t TitleSummary
+	var origTitle, poster sql.NullString
+	var air sql.NullTime
+	var vote sql.NullFloat64
+	if err := sc.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote, &t.HasVietsub); err != nil {
+		return TitleSummary{}, err
+	}
+	t.OriginalTitle = origTitle.String
+	t.AirDate = dateStr(air)
+	t.PosterPath = poster.String
+	t.VoteAverage = vote.Float64
+	return t, nil
+}
+
 // CountTitles returns how many titles match the filter, for computing the total
 // number of discovery-grid pages.
 func (s *Store) CountTitles(ctx context.Context, f TitleFilter) (int, error) {
@@ -109,7 +134,7 @@ func (s *Store) CountTitles(ctx context.Context, f TitleFilter) (int, error) {
 // first; offset skips earlier pages.
 func (s *Store) ListTitles(ctx context.Context, f TitleFilter, limit, offset int) ([]TitleSummary, error) {
 	clause, args := titleFilterClause(f)
-	query := `SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average, (type = 'movie' AND has_vietsub) FROM titles` +
+	query := `SELECT ` + titleSummaryColumns + ` FROM titles t` +
 		clause + " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
@@ -121,17 +146,10 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter, limit, offset int
 
 	var out []TitleSummary
 	for rows.Next() {
-		var t TitleSummary
-		var origTitle, poster sql.NullString
-		var air sql.NullTime
-		var vote sql.NullFloat64
-		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote, &t.HasVietsub); err != nil {
+		t, err := scanTitleSummary(rows)
+		if err != nil {
 			return nil, err
 		}
-		t.OriginalTitle = origTitle.String
-		t.AirDate = dateStr(air)
-		t.PosterPath = poster.String
-		t.VoteAverage = vote.Float64
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -205,7 +223,7 @@ func (r Row) Href() template.URL {
 func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 	// Load every title once, newest first.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tmdb_id, type, title, original_title, air_date, poster_path, vote_average, (type = 'movie' AND has_vietsub) FROM titles ORDER BY updated_at DESC`)
+		`SELECT `+titleSummaryColumns+` FROM titles t ORDER BY t.updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -215,17 +233,10 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 	byID := map[int64]TitleSummary{}
 	var all, movies, tv, vietsub []TitleSummary
 	for rows.Next() {
-		var t TitleSummary
-		var origTitle, poster sql.NullString
-		var air sql.NullTime
-		var vote sql.NullFloat64
-		if err := rows.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote, &t.HasVietsub); err != nil {
+		t, err := scanTitleSummary(rows)
+		if err != nil {
 			return nil, err
 		}
-		t.OriginalTitle = origTitle.String
-		t.AirDate = dateStr(air)
-		t.PosterPath = poster.String
-		t.VoteAverage = vote.Float64
 		byID[t.ID] = t
 		order = append(order, t.ID)
 		all = append(all, t)
@@ -739,4 +750,161 @@ func (s *Store) SubtitlesForTitle(ctx context.Context, titleID int64) ([]Subtitl
 // SubtitlesForEpisode returns the subtitles attached to a single TV episode.
 func (s *Store) SubtitlesForEpisode(ctx context.Context, episodeID int64) ([]Subtitle, error) {
 	return s.querySubtitles(ctx, "episode_id = ?", episodeID)
+}
+
+// --- Accounts and saved titles -----------------------------------------------
+//
+// These two tables are the ONLY things the viewer writes. The catalog itself
+// (titles, videos, subtitles, …) stays strictly read-only, and the schema is
+// still owned entirely by the admin service — the viewer never migrates.
+
+// maxBookmarks caps a single merge request so a hostile or broken client cannot
+// push an unbounded insert.
+const maxBookmarks = 500
+
+// UpsertGoogleUser creates or refreshes the row for a Google identity and
+// returns it. The (provider, provider_uid) unique key is the identity, so a user
+// who changes their Google display name, avatar or even email address keeps the
+// same row and the same saved list.
+func (s *Store) UpsertGoogleUser(ctx context.Context, id *googleIdentity) (*User, error) {
+	// `id = LAST_INSERT_ID(id)` is what makes LastInsertId return the EXISTING
+	// row's id on the update branch — without it, a returning user would come
+	// back with 0. Works on both MySQL 8 and the MariaDB used in production.
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO users (provider, provider_uid, email, email_verified, name, avatar_url, locale, last_login_at)
+		VALUES ('google', ?, ?, ?, ?, ?, ?, NOW())
+		ON DUPLICATE KEY UPDATE
+			email = VALUES(email), email_verified = VALUES(email_verified),
+			name = VALUES(name), avatar_url = VALUES(avatar_url),
+			locale = VALUES(locale), last_login_at = NOW(), id = LAST_INSERT_ID(id)`,
+		id.Sub, id.Email, id.EmailVerified, id.Name, id.Picture, id.Locale)
+	if err != nil {
+		return nil, err
+	}
+	userID, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.UserByID(ctx, userID)
+}
+
+// UserByID loads a user together with the set of titles they have saved, for the
+// session middleware. A blocked user, or one whose row is gone, comes back as
+// (nil, nil) — a stale cookie, not an error.
+func (s *Store) UserByID(ctx context.Context, id int64) (*User, error) {
+	var u User
+	var email, name, avatar sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, email, name, avatar_url, plan
+		FROM users WHERE id = ? AND is_blocked = 0`, id).
+		Scan(&u.ID, &email, &name, &avatar, &u.Plan)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	u.Email = email.String
+	u.Name = name.String
+	u.AvatarURL = avatar.String
+
+	u.SavedIDs, err = s.SavedTitleIDs(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// SavedTitleIDs is the set of title ids this user has saved, used to pre-mark
+// every save button on a server-rendered page.
+func (s *Store) SavedTitleIDs(ctx context.Context, userID int64) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT title_id FROM user_bookmarks WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// SavedTitles returns the user's saved titles, newest save first, using the same
+// column list as the discovery grid so /bookmarks can render them with the very
+// same "card" partial.
+func (s *Store) SavedTitles(ctx context.Context, userID int64) ([]TitleSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+titleSummaryColumns+`
+		FROM titles t
+		JOIN user_bookmarks b ON b.title_id = t.id
+		WHERE b.user_id = ?
+		ORDER BY b.created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TitleSummary
+	for rows.Next() {
+		t, err := scanTitleSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// AddBookmark saves a title for a user. Idempotent: saving an already-saved
+// title updates nothing and is not an error, so a double-click is harmless.
+func (s *Store) AddBookmark(ctx context.Context, userID, titleID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO user_bookmarks (user_id, title_id) VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE user_id = user_id`, userID, titleID)
+	return err
+}
+
+// RemoveBookmark unsaves a title. Removing something that was never saved is a
+// no-op, not an error.
+func (s *Store) RemoveBookmark(ctx context.Context, userID, titleID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM user_bookmarks WHERE user_id = ? AND title_id = ?`, userID, titleID)
+	return err
+}
+
+// MergeBookmarks folds a browser's pre-login localStorage list into the account.
+// INSERT IGNORE makes it idempotent and lets ids that no longer exist in `titles`
+// fall away on the foreign key instead of failing the whole batch — a stale
+// localStorage list is expected input here, not an error.
+func (s *Store) MergeBookmarks(ctx context.Context, userID int64, titleIDs []int64) error {
+	if len(titleIDs) == 0 {
+		return nil
+	}
+	if len(titleIDs) > maxBookmarks {
+		titleIDs = titleIDs[:maxBookmarks]
+	}
+	placeholders := make([]string, 0, len(titleIDs))
+	args := make([]any, 0, len(titleIDs)*2)
+	for _, id := range titleIDs {
+		placeholders = append(placeholders, "(?, ?)")
+		args = append(args, userID, id)
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT IGNORE INTO user_bookmarks (user_id, title_id) VALUES `+strings.Join(placeholders, ", "),
+		args...)
+	return err
+}
+
+// ClearBookmarks empties a user's saved list in one statement, backing the
+// "clear all" button.
+func (s *Store) ClearBookmarks(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM user_bookmarks WHERE user_id = ?`, userID)
+	return err
 }

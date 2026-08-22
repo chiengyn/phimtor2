@@ -56,6 +56,16 @@ env:
   secret:
     - DB_PASSWORD
     - MANAGER_INTERNAL_TOKEN
+    # Google sign-in. Drop all three to disable accounts: the /auth routes are
+    # then not registered and the header shows no login button, i.e. the
+    # anonymous-only site. The OAuth client's "Authorized redirect URI" must be
+    # https://<VIEWER_HOST>/auth/google/callback, byte for byte.
+    - GOOGLE_CLIENT_ID
+    - GOOGLE_CLIENT_SECRET
+    # Keys the signed session cookie. Rotating it logs every user out — it is the
+    # only revocation lever, since there is no sessions table. Not a routine
+    # credential rotation.
+    - SESSION_SECRET
 
 # Mount the SAME named volume admin writes subtitles to (viewer only reads it).
 volumes:

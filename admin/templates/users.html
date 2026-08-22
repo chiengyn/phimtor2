@@ -1,0 +1,117 @@
+{{/* Read-only list of registered viewer accounts. The admin OWNS the users table
+     (migrations/0007_users.sql) but never writes it — the public viewer does, on
+     login. This page is purely "who signed up", so it has no actions.
+
+     Pagination is plain <a> links rather than the htmx "pager" fragment used by
+     the catalogue list, because this page is static and has no swap target. */}}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phimtor2 — Người dùng</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0e1116; color: #e6edf3; line-height: 1.5;
+    }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 980px; margin: 0 auto; padding: 1.5rem; }
+    a { color: #79c0ff; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+    input, button {
+      font: inherit; padding: .55rem .7rem; border-radius: 8px;
+      border: 1px solid #303b48; background: #161b22; color: #e6edf3;
+    }
+    button { background: #2563eb; border-color: #2563eb; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    .row { display: flex; gap: .5rem; align-items: center; }
+    .row input[type=search] { flex: 1; }
+
+    .user-row {
+      display: flex; gap: 1rem; padding: .7rem .85rem; margin-top: .6rem;
+      border: 1px solid #222b36; border-radius: 10px; background: #11161d; align-items: center;
+    }
+    .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: #222b36; flex: none; }
+    .avatar-fallback {
+      display: grid; place-items: center; font-weight: 700; color: #79c0ff;
+      background: #1f6feb33; font-size: 1rem;
+    }
+    .user-body { flex: 1; min-width: 0; }
+    .user-name { font-weight: 600; }
+    .user-email { font-size: .8rem; color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .user-meta { display: flex; gap: .35rem; flex-wrap: wrap; align-items: center; margin-top: .15rem; }
+    .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; }
+    .badge.plan-free { background: #21262d; color: #8b98a5; }
+    .badge.blocked { background: #2a141a; color: #ff8b94; }
+    .badge.unverified { background: #3a2e16; color: #f6d186; }
+    .user-stats { flex: none; text-align: right; font-size: .8rem; color: #8b98a5; white-space: nowrap; }
+    .user-stats b { color: #e6edf3; font-size: .95rem; }
+
+    .pager { display: flex; gap: .3rem; align-items: center; justify-content: center; margin-top: 1.25rem; flex-wrap: wrap; }
+    .pager a, .pager span {
+      padding: .35rem .6rem; border-radius: 8px; border: 1px solid #303b48;
+      color: #c9d1d9; text-decoration: none; font-size: .85rem;
+    }
+    .pager a:hover { background: #1f2733; }
+    .pager .current { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .pager .disabled { opacity: .4; }
+    .pager .gap { border: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>👤 phimtor2 — Người dùng</h1>
+    <a href="/">← Danh sách phim</a>
+  </header>
+  <main>
+    <p class="muted">Tài khoản người xem đã đăng ký bằng Google trên trang công khai. Trang này chỉ để xem — mọi thay đổi đều do chính người dùng thực hiện khi đăng nhập.</p>
+
+    <form class="row" method="get" action="/users">
+      <input type="search" name="q" value="{{ .Query }}" placeholder="Tìm theo tên hoặc email…" aria-label="Tìm người dùng">
+      <button type="submit">Tìm</button>
+    </form>
+
+    <p class="muted">{{ .Total }} tài khoản{{ with .Query }} khớp với “{{ . }}”{{ end }}.</p>
+
+    {{- range .Users }}
+    <div class="user-row">
+      {{ if .AvatarURL }}
+      <img class="avatar" src="{{ .AvatarURL }}" alt="" referrerpolicy="no-referrer"
+           onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'avatar avatar-fallback',textContent:{{ .Initial }}}))">
+      {{ else }}
+      <span class="avatar avatar-fallback" aria-hidden="true">{{ .Initial }}</span>
+      {{ end }}
+      <div class="user-body">
+        <div class="user-name">{{ .DisplayName }}</div>
+        <div class="user-email">{{ .Email }}</div>
+        <div class="user-meta">
+          <span class="badge">{{ .Provider }}</span>
+          <span class="badge plan-{{ .Plan }}">{{ .Plan }}</span>
+          {{ if not .EmailVerified }}<span class="badge unverified">chưa xác thực email</span>{{ end }}
+          {{ if .IsBlocked }}<span class="badge blocked">bị khoá</span>{{ end }}
+        </div>
+      </div>
+      <div class="user-stats">
+        <div><b>{{ .BookmarkCount }}</b> phim đã lưu</div>
+        <div>Đăng ký {{ .CreatedAt.Format "02/01/2006" }}</div>
+        <div>{{ with .LastLoginAt }}Đăng nhập {{ .Format "02/01/2006 15:04" }}{{ else }}Chưa đăng nhập lại{{ end }}</div>
+      </div>
+    </div>
+    {{- else }}
+    <p class="muted">Chưa có ai đăng ký.</p>
+    {{- end }}
+
+    {{ with .Pager }}{{ if .Show }}
+    <nav class="pager" aria-label="Phân trang">
+      {{ if .PrevURL }}<a href="{{ .PrevURL }}" rel="prev">‹ Trước</a>{{ else }}<span class="disabled">‹ Trước</span>{{ end }}
+      {{ range .Links }}{{ if .Gap }}<span class="gap">…</span>{{ else if .Current }}<span class="current" aria-current="page">{{ .Num }}</span>{{ else }}<a href="{{ .URL }}">{{ .Num }}</a>{{ end }}{{ end }}
+      {{ if .NextURL }}<a href="{{ .NextURL }}" rel="next">Sau ›</a>{{ else }}<span class="disabled">Sau ›</span>{{ end }}
+    </nav>
+    {{ end }}{{ end }}
+  </main>
+</body>
+</html>
