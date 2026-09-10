@@ -180,9 +180,14 @@ Flat single `main` package. Layers, in request order:
     pinned CDN so an `.mp4` never pays for it), remuxed — not re-encoded — into
     fragmented MP4 and fed to a `MediaSource`. Seeking restarts the muxer at the
     preceding keyframe, so a scrub is an ordinary range request.
-  - Codecs the browser cannot decode (AC3/E-AC3/DTS audio, HEVC without a hardware
-    decoder) throw `UnsupportedMediaError` up front, and `attachSource` falls back
-    **once** to the plain (no `?raw=1`) URL — the ffmpeg path.
+  - MSE codec rejection, asynchronous remux errors, and video decode errors
+    trigger **one** fallback to `?transcode=1`: H.264 + stereo AAC, including
+    native containers with unsupported codecs. This uses server CPU and remains
+    sequential/unseekable. MSE support is checked directly; WebCodecs support is
+    not required for packet remuxing.
+  - `attachSource` aborts pending probes and removes error listeners on destroy
+    or replacement. The remuxer bounds pending fragment bytes, preserves delayed
+    audio and the latest seek, and ends only after the final buffer append.
 
   Unlike the viewer, which must sniff the raw stream's `Content-Type` because its
   browser-facing DTO omits the file path, every admin surface already knows the

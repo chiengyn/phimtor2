@@ -27,6 +27,7 @@ const MEDIABUNNY_URL = 'https://cdn.jsdelivr.net/npm/mediabunny@1.55.1/dist/bund
 // a 4K remux fills them fast, so the pump idles once it is far enough ahead.
 const BUFFER_AHEAD_SEC = 60;
 const BUFFER_BEHIND_SEC = 30;
+const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 
 // A seek inside already-buffered data is handled by the media element itself; only
 // a seek beyond this tolerance of the buffered ranges is worth tearing the muxing
@@ -46,7 +47,12 @@ export class UnsupportedMediaError extends Error {
 // it. The promise is cached so a source switch reuses the already-loaded module.
 let mediabunnyPromise = null;
 function loadMediabunny() {
-	if (!mediabunnyPromise) mediabunnyPromise = import(MEDIABUNNY_URL);
+	if (!mediabunnyPromise) {
+		mediabunnyPromise = import(MEDIABUNNY_URL).catch((err) => {
+			mediabunnyPromise = null; // allow retry after a transient CDN failure
+			throw err;
+		});
+	}
 	return mediabunnyPromise;
 }
 
@@ -83,11 +89,12 @@ function bufferedAhead(ranges, t) {
  *
  * @param {HTMLVideoElement} video
  * @param {string} rawURL  streamer stream URL with ?raw=1
- * @param {{onStatus?: (msg: string) => void, onLog?: (info: object) => void}} opts
+ * @param {{onStatus?: (msg: string) => void, onLog?: (info: object) => void, onError?: (error: Error) => void, signal?: AbortSignal}} opts
  * @returns {Promise<{destroy: () => void}>}
  */
 export async function attachRemuxedSource(video, rawURL, opts = {}) {
-	const { onStatus = () => {}, onLog = () => {} } = opts;
+	const { onStatus = () => {}, onLog = () => {}, onError = () => {}, signal } = opts;
+	signal?.throwIfAborted();
 
 	if (typeof window.MediaSource === 'undefined') {
 		throw new UnsupportedMediaError('MediaSource is not available in this browser');
@@ -101,43 +108,52 @@ export async function attachRemuxedSource(video, rawURL, opts = {}) {
 		formats: MB.ALL_FORMATS,
 	});
 
-	const videoTrack = await input.getPrimaryVideoTrack();
-	const audioTrack = await input.getPrimaryAudioTrack();
-	if (!videoTrack) throw new UnsupportedMediaError('container has no video track');
+	const dispose = () => input.dispose();
+	signal?.addEventListener('abort', dispose, { once: true });
+	try {
+		signal?.throwIfAborted();
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const audioTrack = await input.getPrimaryAudioTrack();
+		if (!videoTrack) throw new UnsupportedMediaError('container has no video track');
 
-	// Probe every track we intend to pass through. canDecode() asks the browser's
-	// own WebCodecs support, so this is the real answer for this device — HEVC on a
-	// machine with hardware decode passes, the same file on one without does not.
-	const codecInfo = {};
-	for (const [label, track] of [['video', videoTrack], ['audio', audioTrack]]) {
-		if (!track) continue;
-		const codec = await track.getCodec();
-		codecInfo[label] = codec;
-		if (!(await track.canDecode())) {
-			throw new UnsupportedMediaError(`${label} codec "${codec || 'unknown'}" cannot be decoded by this browser`);
+		// This path passes encoded packets directly to MSE. WebCodecs canDecode()
+		// tests a different API and can reject codecs that <video>/MSE can play.
+		// Let MSE advertise support, then handle actual decode errors via fallback.
+		const codecInfo = {};
+		for (const [label, track] of [['video', videoTrack], ['audio', audioTrack]]) {
+			if (!track) continue;
+			const codec = await track.getCodec();
+			if (!codec) throw new UnsupportedMediaError(`Unknown ${label} codec`);
+			codecInfo[label] = codec;
 		}
-	}
 
-	// MediaSource keeps its own allow-list, separate from WebCodecs — a codec can be
-	// decodable yet still be refused inside an MP4 SourceBuffer, so check both.
-	const codecStrings = [];
-	for (const track of [videoTrack, audioTrack]) {
-		if (!track) continue;
-		const s = await track.getCodecParameterString();
-		if (s) codecStrings.push(s);
-	}
-	const mimeType = `video/mp4; codecs="${codecStrings.join(',')}"`;
-	if (!window.MediaSource.isTypeSupported(mimeType)) {
-		throw new UnsupportedMediaError(`MediaSource will not accept ${mimeType}`);
-	}
+		const codecStrings = [];
+		for (const track of [videoTrack, audioTrack]) {
+			if (!track) continue;
+			const s = await track.getCodecParameterString();
+			if (!s) throw new UnsupportedMediaError('Missing codec parameters');
+			codecStrings.push(s);
+		}
+		const mimeType = `video/mp4; codecs="${codecStrings.join(',')}"`;
+		if (!window.MediaSource.isTypeSupported(mimeType)) {
+			throw new UnsupportedMediaError(`MediaSource will not accept ${mimeType}`);
+		}
 
-	const duration = await input.computeDuration();
-	onLog({ mimeType, duration, codecs: codecInfo, format: (await input.getFormat())?.name });
+		const duration = await input.computeDuration();
+		onLog({ mimeType, duration, codecs: codecInfo, format: (await input.getFormat())?.name });
 
-	return startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, duration, onStatus });
+		signal?.throwIfAborted();
+		if (!video.isConnected) throw new DOMException('Player was removed', 'AbortError');
+		return startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, duration, onStatus, onError, signal });
+	} catch (err) {
+		input.dispose();
+		throw err;
+	} finally {
+		signal?.removeEventListener('abort', dispose);
+	}
 }
 
-function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, duration, onStatus }) {
+function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, duration, onStatus, onError, signal }) {
 	const mediaSource = new MediaSource();
 	const objectURL = URL.createObjectURL(mediaSource);
 
@@ -149,6 +165,22 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 	// Appends must be serialized: a SourceBuffer accepts one operation at a time.
 	const appendQueue = [];
 	let appending = false;
+	let queuedBytes = 0;
+	let quotaBlocked = false;
+	let outputEnded = false;
+
+	function fail(err) {
+		if (destroyed) return;
+		destroy();
+		onError(err);
+	}
+
+	function maybeEndStream() {
+		if (!destroyed && outputEnded && !appendQueue.length && sourceBuffer &&
+			!sourceBuffer.updating && mediaSource.readyState === 'open') {
+			try { mediaSource.endOfStream(); } catch (err) { fail(err); }
+		}
+	}
 
 	function drainQueue() {
 		if (destroyed || appending || !appendQueue.length) return;
@@ -159,28 +191,31 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 		appending = true;
 		try {
 			sourceBuffer.appendBuffer(chunk.bytes);
+			quotaBlocked = false;
 		} catch (err) {
 			appending = false;
 			if (err && err.name === 'QuotaExceededError') {
 				// The buffer is full. Drop history well behind the playhead and retry
 				// the same chunk on the next tick rather than dropping it.
-				evictBehind();
+				quotaBlocked = true;
+				evictBehind(true);
 				return;
 			}
-			throw err;
+			fail(err);
 		}
 	}
 
-	function evictBehind() {
+	function evictBehind(urgent = false) {
 		if (!sourceBuffer || sourceBuffer.updating) return;
-		const cutoff = video.currentTime - BUFFER_BEHIND_SEC;
-		if (cutoff <= 0) return;
+		const cutoff = video.currentTime - (urgent ? 1 : BUFFER_BEHIND_SEC);
+		if (cutoff <= 0 || !sourceBuffer.buffered.length || sourceBuffer.buffered.start(0) >= cutoff) return;
 		try {
 			sourceBuffer.remove(0, cutoff);
 		} catch (err) { /* racing another op; the next drain will retry */ }
 	}
 
 	function enqueue(bytes, meta) {
+		queuedBytes += bytes.byteLength;
 		appendQueue.push({ bytes, ...meta });
 		drainQueue();
 	}
@@ -191,15 +226,18 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 		// segment that was never written.
 		if (!appending) {
 			drainQueue();
+			maybeEndStream();
 			return;
 		}
 		const done = appendQueue.shift();
+		if (done) queuedBytes -= done.bytes.byteLength;
 		appending = false;
 		if (done && done.onAppended) {
 			try { done.onAppended(); } catch (err) { /* calibration is best-effort */ }
 		}
 		drainQueue();
 		unstickSeek();
+		maybeEndStream();
 	}
 
 	// Chrome will not finish a seek whose target lands exactly on the start of a
@@ -267,6 +305,9 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 			}),
 		});
 
+		const current = { output, cancelled, gen };
+		session = current;
+
 		const videoCodec = await videoTrack.getCodec();
 		const videoSource = new MB.EncodedVideoPacketSource(videoCodec);
 		output.addVideoTrack(videoSource);
@@ -280,12 +321,9 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 		await output.start();
 		if (cancelled()) { await output.cancel().catch(() => {}); return null; }
 
-		const current = { output, cancelled, gen };
-		session = current;
-
 		// Pump packets in the background; the caller does not await this.
 		pumpPackets({ output, videoSource, audioSource, startTime, anchor, cancelled }).catch((err) => {
-			if (!cancelled()) console.warn('[mkvplayer] pump failed', err);
+			if (!cancelled()) fail(err);
 		});
 
 		return current;
@@ -300,7 +338,7 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 		let vPacket = startTime > 0
 			? await videoSink.getKeyPacket(startTime)
 			: await videoSink.getFirstPacket();
-		if (!vPacket) return;
+		if (!vPacket) throw new Error('No video packets at the requested position');
 		// Recorded before the first add(), so it is always set by the time the muxer
 		// emits a segment and calibrateTimeline runs.
 		anchor.time = vPacket.timestamp;
@@ -308,6 +346,9 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 		// Start audio at the video keyframe's timestamp so the tracks stay aligned
 		// instead of the audio running ahead of the first decodable picture.
 		let aPacket = audioSink ? await audioSink.getKeyPacket(vPacket.timestamp) : null;
+		// Audio may begin later than the first video keyframe. A null predecessor
+		// does not mean there is no audio; start at its first packet in that case.
+		if (audioSink && !aPacket) aPacket = await audioSink.getFirstPacket();
 
 		let firstVideo = true;
 		let firstAudio = true;
@@ -332,26 +373,32 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 
 		if (cancelled()) return;
 		await output.finalize();
-		if (!cancelled() && mediaSource.readyState === 'open' && !appendQueue.length) {
-			try { mediaSource.endOfStream(); } catch (err) { /* already ended */ }
+		if (!cancelled()) {
+			outputEnded = true;
+			maybeEndStream(); // updateend will finish once the last append drains
 		}
 	}
 
 	// Idle while the buffer is far enough ahead of the playhead. Without this the
 	// pump would race to the end of the file and blow the SourceBuffer quota.
 	function waitForBufferRoom(cancelled) {
-		if (cancelled()) return Promise.resolve();
-		if (!sourceBuffer) return Promise.resolve();
-		if (bufferedAhead(video.buffered, video.currentTime) < BUFFER_AHEAD_SEC) return Promise.resolve();
+		const hasRoom = () => !quotaBlocked && queuedBytes < MAX_QUEUED_BYTES &&
+			bufferedAhead(video.buffered, video.currentTime) < BUFFER_AHEAD_SEC;
+		if (cancelled() || hasRoom()) return Promise.resolve();
 		return new Promise((resolve) => {
-			const tick = () => {
-				if (cancelled() || bufferedAhead(video.buffered, video.currentTime) < BUFFER_AHEAD_SEC) {
+			const timer = setInterval(() => {
+				if (cancelled() || hasRoom()) {
 					clearInterval(timer);
 					resolve();
 				}
-			};
-			const timer = setInterval(tick, 250);
+			}, 250);
 		});
+	}
+
+	function onTimeUpdate() {
+		if (destroyed) return;
+		evictBehind(quotaBlocked);
+		drainQueue();
 	}
 
 	// A fragmented MP4 written from a mid-file keyframe may carry either the source's
@@ -381,6 +428,7 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 			sourceBuffer.timestampOffset = drift;
 			sourceBuffer.remove(landedAt, Infinity);
 			appendQueue.unshift({ bytes: segment });
+			queuedBytes += segment.byteLength;
 			drainQueue();
 		} catch (err) {
 			console.warn('[mkvplayer] timeline calibration failed', err);
@@ -390,13 +438,17 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 	// --- seeking -----------------------------------------------------------
 
 	async function restartAt(startTime) {
+		outputEnded = false;
 		const stale = session;
 		session = null;
 		generation++; // makes the old session's callbacks no-ops immediately
 		if (stale) await stale.output.cancel().catch(() => {});
 
 		appendQueue.length = 0;
+		queuedBytes = 0;
+		quotaBlocked = false;
 		appending = false;
+		if (destroyed) return;
 		if (sourceBuffer) {
 			try {
 				if (sourceBuffer.updating) sourceBuffer.abort();
@@ -408,18 +460,22 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 	}
 
 	let seekPending = false;
+	let latestSeek = null;
 	function onSeeking() {
 		if (destroyed) return;
 		const target = video.currentTime;
-		// A seek within the buffer is the media element's job — restarting the muxer
-		// for it would throw away good data and stall playback for no reason.
-		if (isBuffered(video.buffered, target)) return;
+		if (!seekPending && isBuffered(video.buffered, target)) return;
+		latestSeek = target;
 		if (seekPending) return;
 		seekPending = true;
 		onStatus('Đang tua…');
-		restartAt(target)
-			.catch((err) => console.warn('[mkvplayer] seek failed', err))
-			.finally(() => { seekPending = false; });
+		(async () => {
+			while (!destroyed && latestSeek !== null) {
+				const next = latestSeek;
+				latestSeek = null;
+				await restartAt(next);
+			}
+		})().catch(fail).finally(() => { seekPending = false; });
 	}
 
 	// --- wiring ------------------------------------------------------------
@@ -432,30 +488,43 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 			sourceBuffer = mediaSource.addSourceBuffer(mimeType);
 			sourceBuffer.mode = 'segments';
 			sourceBuffer.addEventListener('updateend', onUpdateEnd);
+			sourceBuffer.addEventListener('error', onBufferError);
 		} catch (err) {
-			console.error('[mkvplayer] could not create SourceBuffer', err);
+			fail(err);
 			return;
 		}
-		startSession(0).catch((err) => console.error('[mkvplayer] initial session failed', err));
+		startSession(0).catch(fail);
 	}
 
 	mediaSource.addEventListener('sourceopen', onSourceOpen);
 	video.addEventListener('seeking', onSeeking);
+	video.addEventListener('timeupdate', onTimeUpdate);
+	signal?.addEventListener('abort', destroy, { once: true });
 	video.src = objectURL;
 
-	return {
-		destroy() {
-			if (destroyed) return;
-			destroyed = true;
-			generation++;
-			video.removeEventListener('seeking', onSeeking);
-			if (sourceBuffer) sourceBuffer.removeEventListener('updateend', onUpdateEnd);
-			if (session) session.output.cancel().catch(() => {});
-			session = null;
-			appendQueue.length = 0;
-			try { if (mediaSource.readyState === 'open') mediaSource.endOfStream(); } catch (err) { /* ignore */ }
-			URL.revokeObjectURL(objectURL);
-			input.dispose?.();
-		},
-	};
+	function onBufferError() {
+		fail(new Error('MediaSource rejected a video segment'));
+	}
+
+	function destroy() {
+		if (destroyed) return;
+		destroyed = true;
+		generation++;
+		signal?.removeEventListener('abort', destroy);
+		mediaSource.removeEventListener('sourceopen', onSourceOpen);
+		video.removeEventListener('seeking', onSeeking);
+		video.removeEventListener('timeupdate', onTimeUpdate);
+		if (sourceBuffer) {
+			sourceBuffer.removeEventListener('updateend', onUpdateEnd);
+			sourceBuffer.removeEventListener('error', onBufferError);
+		}
+		if (session) session.output.cancel().catch(() => {});
+		session = null;
+		appendQueue.length = 0;
+		queuedBytes = 0;
+		try { if (mediaSource.readyState === 'open') mediaSource.endOfStream(); } catch (err) { /* ignore */ }
+		URL.revokeObjectURL(objectURL);
+		input.dispose();
+	}
+	return { destroy };
 }

@@ -189,14 +189,21 @@ Flat single `main` package.
      re-encoding — into fragmented MP4, and appends them to a `MediaSource`.
      Seeking restarts the muxer at `getKeyPacket(t)`, so a scrub becomes an
      ordinary range request the streamer can prioritize.
-  3. Codecs the browser cannot decode (AC3/E-AC3/DTS audio, HEVC without a
-     hardware decoder) are caught up front by `canDecode()`, which throws
-     `UnsupportedMediaError`; `fallbackToTranscode` then re-points the element at
-     the plain (no `?raw=1`) URL — the old ffmpeg path. The fallback is
-     **one-shot** per source so the two paths cannot ping-pong.
+  3. `MediaSource.isTypeSupported` checks the MP4 codec combination. This is
+     a packet remux, so it does not require WebCodecs `canDecode()` support.
+     Rejected codecs, asynchronous remux/SourceBuffer failures, and video decode
+     errors trigger **one** fallback to `?transcode=1` (H.264 + stereo AAC),
+     including native containers whose codecs the browser cannot decode.
+
+  Aborting a source switch disposes pending probes and active playback. The pump
+  pauses for queued bytes as well as buffered duration, retries quota failures
+  as playback advances, preserves delayed-start audio and the latest seek target,
+  and signals end-of-stream after the final append. The compatibility fallback
+  uses server CPU and remains sequential/unseekable; it does not promise support
+  for input containers that require backward reads through FFmpeg's stdin pipe.
 
   The `<video>` `error` handler also inspects `video.error.code`:
-  `MEDIA_ERR_SRC_NOT_SUPPORTED` (4) is a codec problem, not a transport one, so it
+  `MEDIA_ERR_DECODE` (3) and `MEDIA_ERR_SRC_NOT_SUPPORTED` (4) trigger compatibility mode, so the player
   goes straight to the fallback instead of the reload/re-prepare loop that would
   otherwise report it as a missing-seeder error.
 

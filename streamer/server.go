@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -272,24 +273,27 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	defer reader.Close()
 
 	// Meter every byte served to the viewer; this egress rate is the load signal
 	// the manager balances new torrents on.
 	cw := &countingResponseWriter{ResponseWriter: w, manager: s.manager}
 
 	// raw=1 opts out of transcoding: the caller wants the container's own bytes,
-	// range-seekable, because it remuxes them itself in the browser. Without it the
-	// behaviour is unchanged, so any client that doesn't ask keeps the old path.
+	// range-seekable, because it remuxes them itself in the browser.
+	// transcode=1 forces compatibility encoding even for native containers whose
+	// codecs the browser rejected. raw=1 always wins.
 	raw := r.URL.Query().Get("raw") == "1"
 
-	if !raw && needsTranscode(fileInfo.Path) {
+	if !raw && (r.URL.Query().Get("transcode") == "1" || needsTranscode(fileInfo.Path)) {
 		if err := transcodeStream(r.Context(), reader, cw); err != nil {
-			// Response may have already started; can't write error header
-			return
+			if r.Context().Err() == nil {
+				log.Printf("transcode %s/%d: %v", infoHash, fileIndex, err)
+			}
 		}
 		return
 	}
+
+	defer reader.Close()
 
 	// Direct play: the browser seeks by issuing a Range request at the new offset.
 	// Boost the seek target's priority so the post-seek buffer fills ahead of
@@ -369,3 +373,5 @@ func (w *countingResponseWriter) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+func (w *countingResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

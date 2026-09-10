@@ -34,50 +34,71 @@ export function needsClientRemux(filePath) {
  * @param {{onStatus?: (msg: string) => void}} opts
  * @returns {Promise<{destroy: () => void}>}
  */
+const activeAttachments = new WeakMap();
+
 export async function attachSource(video, streamURL, filePath, opts = {}) {
 	const { onStatus = () => {} } = opts;
+	activeAttachments.get(video)?.destroy();
+	const abort = new AbortController();
 	let controller = null;
 	let fellBack = false;
+	let destroyed = false;
 
 	const destroy = () => {
-		if (controller) { try { controller.destroy(); } catch (e) {} controller = null; }
+		if (destroyed) return;
+		destroyed = true;
+		abort.abort();
+		video.removeEventListener('error', onVideoError);
+		controller?.destroy();
+		controller = null;
+		if (activeAttachments.get(video) === attachment) activeAttachments.delete(video);
 	};
+	const attachment = { destroy };
+	activeAttachments.set(video, attachment);
+
+	const fallback = () => {
+		if (destroyed || fellBack || !video.isConnected) return;
+		fellBack = true;
+		abort.abort();
+		controller?.destroy();
+		controller = null;
+		onStatus('Định dạng chưa được hỗ trợ trực tiếp, đang chuyển sang chế độ tương thích…');
+		video.querySelectorAll('source').forEach((el) => el.remove());
+		const url = new URL(streamURL, document.baseURI);
+		url.searchParams.delete('raw');
+		url.searchParams.set('transcode', '1');
+		video.src = url.href;
+		try { video.load(); video.play().catch(() => {}); } catch (e) {}
+	};
+
+	function onVideoError() {
+		if ([3, 4].includes(video.error?.code)) fallback();
+	}
+	video.addEventListener('error', onVideoError);
 
 	if (!needsClientRemux(filePath)) {
 		video.src = streamURL;
 		video.play().catch(() => {});
-		return { destroy };
+		return attachment;
 	}
-
-	// One-shot: if the transcode itself fails we must not bounce back to the
-	// remuxer, or the two would ping-pong.
-	const fallback = () => {
-		if (fellBack) return;
-		fellBack = true;
-		destroy();
-		onStatus('Định dạng chưa được hỗ trợ trực tiếp, đang chuyển sang chế độ tương thích…');
-		video.querySelectorAll('source').forEach((el) => el.remove());
-		video.removeAttribute('src');
-		video.src = streamURL; // no ?raw=1 — the streamer's ffmpeg path
-		try { video.load(); video.play().catch(() => {}); } catch (e) {}
-	};
-
-	// MEDIA_ERR_SRC_NOT_SUPPORTED is a codec problem, not a transport one, so a
-	// reload would never fix it.
-	video.addEventListener('error', () => {
-		if (video.error && video.error.code === 4) fallback();
-	});
 
 	try {
-		controller = await attachRemuxedSource(video, streamURL + '?raw=1', {
+		const rawURL = new URL(streamURL, document.baseURI);
+		rawURL.searchParams.set('raw', '1');
+		const result = await attachRemuxedSource(video, rawURL.href, {
 			onStatus,
 			onLog: (info) => console.log('[mkvplayer] probe', info),
+			onError: fallback,
+			signal: abort.signal,
 		});
-		if (!video.isConnected) { destroy(); return { destroy }; }
+		if (destroyed || fellBack || !video.isConnected) { result.destroy(); return attachment; }
+		controller = result;
 		video.play().catch(() => {});
 	} catch (e) {
-		console.warn('[admin] client remux unavailable:', (e && e.message) || e);
-		if (video.isConnected) fallback();
+		if (!abort.signal.aborted) {
+			console.warn('[admin] client remux unavailable:', (e && e.message) || e);
+			fallback();
+		}
 	}
-	return { destroy };
+	return attachment;
 }

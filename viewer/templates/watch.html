@@ -333,6 +333,7 @@ let subtitleURL = null;
 let activeVtt = null;       // currently applied subtitle text (re-applied on source switch)
 let activeVttLabel = '';
 let activeSavedId = null;
+let remuxAbort = null;
 let remuxController = null; // client-side MKV remuxer, when one is driving the player
 let fellBackToTranscode = false;
 
@@ -358,6 +359,8 @@ function hideLoadNotice() {
 // than below it. buildPlayer later swaps this out for the real <video>.
 function showPlayerStatus(text, isErr) {
 	const wrap = document.getElementById('player-wrap');
+	remuxAbort?.abort();
+	remuxAbort = null;
 	if (player) { try { player.destroy(); } catch(e) {} player = null; }
 	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
 	wrap.innerHTML = '<div class="player-placeholder" id="player-placeholder"></div>';
@@ -477,6 +480,8 @@ function renderSourceChips() {
 // this must not become the one path that injects markup into it.
 function showLoginGate(v) {
 	const wrap = document.getElementById('player-wrap');
+	remuxAbort?.abort();
+	remuxAbort = null;
 	if (player) { try { player.destroy(); } catch(e) {} player = null; }
 	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
 	if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
@@ -618,7 +623,7 @@ async function prebufferStream(streamURL, videoID) {
 		clearTimeout(timer);
 	}
 	// A null container means we never got a usable response; the caller then takes
-	// the server-transcode path, which plays anything.
+	// the default server path (direct play or compatibility conversion).
 	return contentType;
 }
 
@@ -687,11 +692,13 @@ async function recoverStream() {
 const NATIVE_CONTAINERS = ['video/mp4', 'video/webm', 'video/ogg'];
 
 function rawStreamURL(streamURL) {
-	return streamURL + '?raw=1';
+	const url = new URL(streamURL, document.baseURI);
+	url.searchParams.set('raw', '1');
+	return url.href;
 }
 
 // needsClientRemux is deliberately conservative: an unknown container falls back
-// to the server transcode, which plays anything.
+// to the default server path.
 function needsClientRemux(contentType) {
 	if (!contentType) return false;
 	const base = contentType.split(';')[0].trim().toLowerCase();
@@ -702,14 +709,18 @@ function needsClientRemux(contentType) {
 // one-shot per source: if the transcode itself fails, we must not bounce back to
 // the remuxer, or the two would ping-pong forever.
 function fallbackToTranscode(video, streamURL) {
-	if (fellBackToTranscode) return;
+	if (!video.isConnected || fellBackToTranscode) return;
 	fellBackToTranscode = true;
+	remuxAbort?.abort();
 	if (remuxController) { try { remuxController.destroy(); } catch(e) {} remuxController = null; }
 	setStatus('Định dạng chưa được hỗ trợ trực tiếp, đang chuyển sang chế độ tương thích…');
 	video.querySelectorAll('source').forEach(el => el.remove());
 	video.removeAttribute('src');
 	const source = document.createElement('source');
-	source.src = streamURL;
+	const url = new URL(streamURL, document.baseURI);
+	url.searchParams.delete('raw');
+	url.searchParams.set('transcode', '1');
+	source.src = url.href;
 	video.appendChild(source);
 	try { video.load(); video.play().catch(() => {}); } catch(e) {}
 }
@@ -719,18 +730,24 @@ function fallbackToTranscode(video, streamURL) {
 // range request instead of waiting for a sequential transcode to reach the point.
 // Anything it cannot handle — an undecodable codec, no MediaSource — falls back.
 async function attachClientRemux(video, streamURL) {
+	const abort = new AbortController();
+	remuxAbort = abort;
 	try {
 		const mod = await import('/static/mkvplayer.js');
+		abort.signal.throwIfAborted();
 		const controller = await mod.attachRemuxedSource(video, rawStreamURL(streamURL), {
 			onStatus: setPlayerStatus,
 			onLog: (info) => console.log('[mkvplayer] probe', info),
+			onError: () => fallbackToTranscode(video, streamURL),
+			signal: abort.signal,
 		});
-		if (!video.isConnected) { controller.destroy(); return; } // player rebuilt while probing
+		if (abort.signal.aborted || !video.isConnected) { controller.destroy(); return; } // player rebuilt while probing
 		remuxController = controller;
 		// buildPlayer's own play() ran before the MediaSource existed, so it was a
 		// no-op; kick playback now that the element actually has a source.
 		video.play().catch(() => {});
 	} catch(e) {
+		if (abort.signal.aborted) return;
 		console.warn('[watch] client remux unavailable:', (e && e.message) || e);
 		if (video.isConnected) fallbackToTranscode(video, streamURL);
 	}
@@ -738,6 +755,8 @@ async function attachClientRemux(video, streamURL) {
 
 function buildPlayer(streamURL, resumeAt, contentType) {
 	const wrap = document.getElementById('player-wrap');
+	remuxAbort?.abort();
+	remuxAbort = null;
 	if (player) { try { player.destroy(); } catch(e) {} player = null; }
 	if (remuxController) { try { remuxController.destroy(); } catch(e) {} remuxController = null; }
 	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
@@ -766,11 +785,12 @@ function buildPlayer(streamURL, resumeAt, contentType) {
 	// dropped torrent rather than giving up.
 	let retries = 0;
 	video.addEventListener('error', () => {
-		// MEDIA_ERR_SRC_NOT_SUPPORTED means the browser cannot decode what it was
+		// MEDIA_ERR_DECODE / MEDIA_ERR_SRC_NOT_SUPPORTED mean playback failed for what it was
 		// given. Reloading or re-preparing the source will never fix that, so hand
 		// off to the server transcode instead of reporting a connection problem.
+		if (!video.isConnected) return;
 		const code = video.error && video.error.code;
-		if (code === 4 && !fellBackToTranscode) {
+		if ((code === 3 || code === 4) && !fellBackToTranscode) {
 			fallbackToTranscode(video, streamURL);
 			return;
 		}

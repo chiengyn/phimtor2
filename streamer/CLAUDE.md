@@ -198,7 +198,7 @@ Flat single `main` package. The pieces that only make sense read together:
 - **Streaming, raw mode + transcode** (`server.go` `handleStream`,
   `transcode.go`): browser-native containers (`.mp4/.m4v/.webm/.ogg`) are served
   directly via `http.ServeContent` (range/seek support). Anything else is piped
-  through an **`ffmpeg` subprocess** (codec copy + AAC, fragmented MP4) — so
+  through an **`ffmpeg` subprocess** (H.264 + stereo AAC, fragmented MP4) — so
   transcoding requires `ffmpeg` on PATH at runtime (the Docker image bundles it).
   Each stream reader is wrapped in a `trackedReader` (`torrent.go`) that reports
   its playhead to the storage and gets **adaptive readahead** — the per-reader
@@ -208,7 +208,12 @@ Flat single `main` package. The pieces that only make sense read together:
   **`?raw=1` bypasses the transcode** and serves the container's own bytes down
   the same `ServeContent` path, with `detectContentType` reporting the true
   container (`video/x-matroska` and friends). It exists for callers that remux in
-  the browser — see the viewer's `static/mkvplayer.js`. Because the raw path *is*
+  the browser — see the viewer's `static/mkvplayer.js`. **`?transcode=1`** forces
+  compatibility conversion even for native containers with unsupported codecs;
+  `raw=1` wins if both flags are present. Conversion uses CPU (libx264, two encoder
+  threads), flushes output incrementally, closes its reader on exit/disconnect,
+  and logs bounded FFmpeg diagnostics. Failures before output return HTTP 502.
+  Because the raw path *is*
   the direct-play path, egress metering (`countingResponseWriter`) and
   `PrioritizeSeek` apply to it unchanged. `corsMiddleware` sets
   **`Access-Control-Expose-Headers`** for this: a cross-origin JS reader cannot
@@ -226,6 +231,12 @@ Flat single `main` package. The pieces that only make sense read together:
   files the browser cannot decode after remuxing (AC3/E-AC3/DTS audio, HEVC with
   no hardware decoder), since everything else takes the raw path. Real transcoded
   seeking needs HLS or a time-seek (`-ss`) protocol; deliberately not built yet.
+  FFmpeg's stdin pipe also cannot seek within its input, so a MOV/MP4 requiring
+  backward reads (such as a tail moov atom) may still fail on this fallback.
+
+**Verification:** `go test ./...` includes real FFmpeg conversion/decode tests
+(skipped if FFmpeg/ffprobe are missing), plus process cancellation, early exit,
+write failure, and missing-executable regressions. `go vet ./...` checks Go code.
 
 **Subtitles** are *not* handled here anymore. The watch UI and the
 OpenSubtitles proxy moved to [`admin/`](../admin/CLAUDE.md); the admin matches

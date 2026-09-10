@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // browserNativeExts are the containers a browser's <video> can demux on its own,
@@ -57,55 +59,117 @@ func detectContentType(path string) string {
 	}
 }
 
-// transcodeStream pipes reader through FFmpeg and writes fragmented MP4 to w.
-// The output is browser-compatible regardless of input container/codec.
-//
-// The flags are tuned for low time-to-first-frame on a cold torrent:
-//   - -probesize/-analyzeduration cap how much input FFmpeg reads (trickling in
-//     from the swarm) before it emits anything; the defaults (~5 MB / 5 s) add
-//     seconds of startup stall for no benefit on a codec copy.
-//   - frag_keyframe+empty_moov makes the output progressively streamable. We do
-//     NOT use +faststart here: it relocates the moov atom in a final pass that
-//     needs a seekable output, but our output is a non-seekable pipe, so it only
-//     risks buffering/delay — the fragmented output already needs no faststart.
-//   - -flush_packets 1 pushes each fragment to the browser as soon as it's ready
-//     instead of letting FFmpeg buffer.
-func transcodeStream(ctx context.Context, reader io.ReadSeeker, w http.ResponseWriter) error {
-	args := []string{
-		"-fflags", "+nobuffer",
-		"-probesize", "2M",
-		"-analyzeduration", "2M",
+// transcodeArgs converts the selected video and optional audio to H.264/AAC.
+// This is the compatibility fallback, so copying the video would preserve the
+// very codec the browser rejected. Keep the original bytes on the raw path.
+func transcodeArgs() []string {
+	return []string{
+		"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-probesize", "2M", "-analyzeduration", "2M",
 		"-i", "pipe:0",
-		"-c:v", "copy", // try codec copy first (works if video is already H.264)
-		"-c:a", "aac",
-		"-f", "mp4",
-		"-movflags", "frag_keyframe+empty_moov",
-		"-flush_packets", "1",
-		"pipe:1",
+		"-map", "0:V:0", "-map", "0:a:0?", "-sn", "-dn",
+		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+		"-threads", "2", "-tune", "zerolatency", "-pix_fmt", "yuv420p",
+		"-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-g", "48",
+		"-c:a", "aac", "-ac", "2", "-b:a", "192k",
+		"-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+		"-flush_packets", "1", "pipe:1",
 	}
+}
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+// transcodeStream owns and closes reader, including on disconnect and early
+// FFmpeg exit. Closing the torrent reader unblocks os/exec's stdin copy; killing
+// FFmpeg alone leaves Wait stuck if that copy is waiting for missing pieces.
+// Output is sequential fMP4, not byte-range seekable. The pipe input also cannot
+// seek: containers requiring backward reads (e.g. tail-moov MOV) need a future
+// seekable input transport. Do not promise support for every possible file.
+func transcodeStream(ctx context.Context, reader io.ReadCloser, w http.ResponseWriter) (err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var closeOnce sync.Once
+	closeReader := func() { closeOnce.Do(func() { _ = reader.Close() }) }
+	stopClose := context.AfterFunc(ctx, closeReader)
+	defer stopClose()
+	defer closeReader()
+
+	started := false
+	defer func() {
+		if err != nil && !started && ctx.Err() == nil {
+			http.Error(w, "video conversion failed", http.StatusBadGateway)
+		}
+	}()
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", transcodeArgs()...)
 	cmd.Stdin = reader
-
+	var stderr transcodeErrorBuffer
+	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
 	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-	go io.Copy(io.Discard, stderr)
-
-	if err := cmd.Start(); err != nil {
+	if err = cmd.Start(); err != nil {
 		return err
 	}
 
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.WriteHeader(http.StatusOK)
+	// Wait for real output before committing 200, so startup failures are visible.
+	buf := make([]byte, 32*1024)
+	n, readErr := stdout.Read(buf)
+	var copyErr error
+	if n > 0 {
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Accept-Ranges", "none")
+		started = true
+		fw := transcodeWriter{w}
+		_, copyErr = fw.Write(buf[:n])
+		if copyErr == nil && readErr == nil {
+			_, copyErr = io.CopyBuffer(fw, stdout, buf)
+		}
+	}
+	if copyErr != nil || (readErr != nil && readErr != io.EOF) {
+		cancel()
+	}
+	closeReader()
+	waitErr := cmd.Wait()
+	if copyErr != nil {
+		return fmt.Errorf("write converted video: %w", copyErr)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("ffmpeg: %w: %s", waitErr, strings.TrimSpace(string(stderr)))
+	}
+	if readErr != nil && readErr != io.EOF {
+		return readErr
+	}
+	if !started {
+		return fmt.Errorf("ffmpeg produced no video: %s", strings.TrimSpace(string(stderr)))
+	}
+	return nil
+}
 
-	io.Copy(w, stdout)
-	return cmd.Wait()
+// Bound diagnostics even for long or corrupt streams. Read only after cmd.Wait.
+type transcodeErrorBuffer []byte
+
+func (b *transcodeErrorBuffer) Write(p []byte) (int, error) {
+	const limit = 8 * 1024
+	n := len(p)
+	if n >= limit {
+		*b = append((*b)[:0], p[n-limit:]...)
+	} else {
+		if len(*b)+n > limit {
+			*b = (*b)[len(*b)+n-limit:]
+		}
+		*b = append(*b, p...)
+	}
+	return n, nil
+}
+
+type transcodeWriter struct{ http.ResponseWriter }
+
+func (w transcodeWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if err == nil {
+		// ResponseController follows Unwrap through the egress meter.
+		_ = http.NewResponseController(w.ResponseWriter).Flush()
+	}
+	return n, err
 }
