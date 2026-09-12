@@ -43,7 +43,9 @@ any module.
 
 - **`admin/` owns the schema.** It runs the embedded migrations in
   `admin/migrations/` on startup (`admin/store.go`) and is the only writer of the
-  catalog. It owns the two account tables too but never writes them.
+  catalog. It owns the account tables too and writes exactly **two columns**
+  across them — `users.comp_expires_at` / `users.comp_granted_at`, the
+  admin-granted 4K unlock (`0009_comp_premium.sql`) — and nothing else there.
 - **`viewer/` never migrates** and assumes the tables already exist
   (`viewer/main.go`). It only *reads* the catalog — with one exception: it is the
   sole **writer** of the tables the admin declares but never touches. Those are
@@ -53,6 +55,12 @@ any module.
   `0008_billing.sql` (`payment_invoices`, `user_title_unlocks`,
   `billing_chain_cursors`) behind the paid 4K tier. It writes nothing else, ever.
   **Deploy admin before viewer** so the migrations land first.
+
+  The one shared row is `users`, and the two services write **disjoint columns**
+  of it: the viewer owns `plan` / `plan_expires_at` (the paid pass) and the admin
+  owns `comp_*` (the granted one). That is what makes "revoke comp" in the admin
+  UI provably unable to cancel a subscription somebody paid for — the `UPDATE`
+  never names those columns. Keep it that way.
 
 So schema changes live in `admin/` (a new numbered `admin/migrations/NNNN_*.sql`),
 and any new column the viewer should surface must be added to **both** modules'

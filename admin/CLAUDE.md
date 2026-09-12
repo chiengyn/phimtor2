@@ -140,8 +140,14 @@ Flat single `main` package. Layers, in request order:
   - `GET /users` (`users.html`) — a **read-only** list of registered viewer
     accounts (avatar, name, email, provider, plan, saved-title count, signup and
     last-login dates), searchable by name/email and paginated with plain `<a>`
-    links rather than the htmx `pager` fragment. There are **no actions**: the
-    viewer is the only writer of `users`, so this is purely "who signed up".
+    links rather than the htmx `pager` fragment. It has exactly **one action**:
+    granting or revoking the complimentary 4K unlock
+    (`POST /users/{id}/comp`, `duration` = `30d|1y|forever|revoke`). That write
+    touches only `users.comp_*` — never `plan`/`plan_expires_at`, which are the
+    viewer's paid pass — so revoking a comp cannot cancel a paid subscription.
+    Because this page carries no htmx, the action is a plain form POST + `303`
+    modelled on the streamers dashboard, and each form posts `q`/`page` back so
+    the redirect returns to the same list view rather than page 1.
   - `GET /api/subtitles/search` (`?file=&query=&languages=&season=&episode=`) and
     `GET /api/subtitles/download` (`?file_id=`) — the live subtitle-provider proxy
     (`opensubtitles.go`, behind the `SubtitleProvider` interface so more providers
@@ -235,9 +241,10 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
   `titles` (+`uniq_tmdb`), `genres`, `title_genres`, `seasons`, `episodes`, with
   cascading FKs. Later migrations add `torrent_sources`/`videos` (`0003`),
   `subtitles` (`0004`), `featured_titles` (`0005`), a `has_vietsub` column
-  (`0006`), the two **viewer account** tables (`0007`), and the **billing**
+  (`0006`), the two **viewer account** tables (`0007`), the **billing**
   tables for the paid 4K tier (`0008`: `payment_invoices`, `user_title_unlocks`,
-  `billing_chain_cursors`). `featured_titles` is the
+  `billing_chain_cursors`), and the admin-granted 4K unlock columns
+  (`0009`: `users.comp_expires_at` / `comp_granted_at`). `featured_titles` is the
   manual browse-hero curation list — `(title_id PK, position, created_at)` with a
   cascading FK to `titles`, ordered by `position` ascending; the catalog `titles`
   table stays untouched (deliberately a separate table, not a `titles` column).
@@ -250,8 +257,11 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
 
 `0007_users.sql` is the one place this rule bends: the admin **owns** `users` and
 `user_bookmarks` (they are declared here, and only migrations here can change
-them) but **never writes** them — the public viewer does, on login and on
-save/unsave. The admin only reports on them, read-only, at `GET /users`. Identity
+them) but writes only the **two `comp_*` columns** `0009` adds — the
+admin-granted 4K unlock, from `GET /users`. Everything else there is the public
+viewer's: rows on login, `user_bookmarks` on save/unsave, and `plan` /
+`plan_expires_at` when an invoice settles. The split into separate columns is
+deliberate and load-bearing: two services write this row, never the same data. Identity
 is `(provider, provider_uid)`, deliberately not the email, which is descriptive
 and may change. `plan`/`plan_expires_at` are no longer a dormant seam: `0008`
 turned them into the live **time-based 4K pass**, which the viewer pushes forward

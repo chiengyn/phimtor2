@@ -1187,11 +1187,17 @@ func firstLine(s string) string {
 	return s
 }
 
-// --- Viewer accounts (read-only from the admin side) --------------------------
+// --- Viewer accounts ----------------------------------------------------------
 //
-// The admin OWNS these tables (migrations/0007_users.sql) but never writes them
-// — the public viewer does, on login and on save/unsave. The admin only reports
-// on them.
+// The admin OWNS these tables (migrations/0007_users.sql) and writes exactly TWO
+// columns across them: users.comp_expires_at and users.comp_granted_at, the
+// admin-granted 4K unlock (SetUserComp, below). Everything else here is written
+// only by the public viewer — rows on login, user_bookmarks on save/unsave, and
+// plan / plan_expires_at when an invoice settles.
+//
+// That split is load-bearing, not incidental: because the two services write
+// DISJOINT columns, revoking a comp cannot cancel a pass the user paid for. Keep
+// admin writes confined to comp_*.
 
 // userSearchWhere builds the WHERE clause (and its args) filtering users by a
 // free-text query against name and email. An empty query matches everything.
@@ -1221,7 +1227,8 @@ func (s *Store) ListUsers(ctx context.Context, q string, limit, offset int) ([]U
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.id, u.provider, u.provider_uid, u.email, u.email_verified, u.name,
-		       u.avatar_url, u.plan, u.plan_expires_at, u.is_blocked, u.last_login_at, u.created_at,
+		       u.avatar_url, u.plan, u.plan_expires_at, u.comp_expires_at, u.comp_granted_at,
+		       u.is_blocked, u.last_login_at, u.created_at,
 		       (SELECT COUNT(*) FROM user_bookmarks b WHERE b.user_id = u.id)
 		FROM users u`+where+`
 		ORDER BY u.created_at DESC
@@ -1234,11 +1241,20 @@ func (s *Store) ListUsers(ctx context.Context, q string, limit, offset int) ([]U
 	var out []User
 	for rows.Next() {
 		var u User
-		var lastLogin, planExpires sql.NullTime
+		var lastLogin, planExpires, compExpires, compGranted sql.NullTime
 		if err := rows.Scan(&u.ID, &u.Provider, &u.ProviderUID, &u.Email, &u.EmailVerified,
-			&u.Name, &u.AvatarURL, &u.Plan, &planExpires, &u.IsBlocked, &lastLogin, &u.CreatedAt,
+			&u.Name, &u.AvatarURL, &u.Plan, &planExpires, &compExpires, &compGranted,
+			&u.IsBlocked, &lastLogin, &u.CreatedAt,
 			&u.BookmarkCount); err != nil {
 			return nil, err
+		}
+		if compExpires.Valid {
+			t := compExpires.Time
+			u.CompExpiresAt = &t
+		}
+		if compGranted.Valid {
+			t := compGranted.Time
+			u.CompGrantedAt = &t
 		}
 		if lastLogin.Valid {
 			t := lastLogin.Time
@@ -1251,4 +1267,24 @@ func (s *Store) ListUsers(ctx context.Context, q string, limit, offset int) ([]U
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// SetUserComp grants or revokes the complimentary 4K unlock for one account.
+// until == nil revokes.
+//
+// This is the ONLY write this service makes to `users`, and it names ONLY the
+// comp_ columns. That restriction is the whole safety argument for letting two
+// services write this row: plan / plan_expires_at belong to the viewer's billing
+// path, so revoking a comp provably cannot cancel a subscription the user paid
+// for. Do not be tempted to "tidy up" plan here — setting it to 'free' would
+// silently cancel a paying customer.
+func (s *Store) SetUserComp(ctx context.Context, userID int64, until *time.Time) error {
+	if until == nil {
+		_, err := s.db.ExecContext(ctx,
+			`UPDATE users SET comp_expires_at = NULL, comp_granted_at = NULL WHERE id = ?`, userID)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET comp_expires_at = ?, comp_granted_at = NOW() WHERE id = ?`, *until, userID)
+	return err
 }

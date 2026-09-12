@@ -852,13 +852,14 @@ const (
 	lockUpgrade = "upgrade"
 )
 
-// titleAccess is the visitor's entitlement snapshot for ONE title. pass is the
-// time-based unlock (every 4K source, until it expires) and unlocked is the
-// permanent purchase of this title in particular — either one is sufficient.
+// titleAccess is the visitor's entitlement snapshot for ONE title. unlimited is
+// every-4K access however it was obtained — a paid time pass OR an admin-granted
+// comp — and unlocked is the permanent purchase of this title in particular.
+// Either one is sufficient.
 type titleAccess struct {
-	signedIn bool
-	pass     bool
-	unlocked bool
+	signedIn  bool
+	unlimited bool
+	unlocked  bool
 }
 
 // resolutionLock reports why res is not playable for this visitor, or lockNone.
@@ -870,19 +871,26 @@ type titleAccess struct {
 //   - With no GOOGLE_CLIENT_ID there are no /auth/google/* routes and no login
 //     button, so gating 1080p would strand every visitor at 720p with no way to
 //     unlock it.
-//   - With no crypto rail there is no /goi page to send anyone to, so 4K must
-//     stay uniformly "sắp ra mắt" rather than dangle an unbuyable upgrade.
+//   - With no crypto rail there is nothing to SELL, so 4K falls back to
+//     "sắp ra mắt" rather than dangling an upgrade nobody can buy.
 //
 // Turning either feature's env vars off stays the clean rollback (see
 // CLAUDE.md). Test both configs whenever you touch this.
+//
+// Note the order: an EXISTING entitlement is honoured before the billing-off
+// check. That matters, and it was wrong until admin comps arrived — an admin
+// grant has nothing to do with whether crypto billing is configured, and a
+// permanent title unlock somebody already paid for must not evaporate the day
+// the operator unsets the wallet env vars. Billing-off means "you cannot buy",
+// never "what you hold is void".
 func (s *Server) resolutionLock(res string, a titleAccess) string {
 	switch {
 	case lockedResolutions[res]:
 		switch {
+		case a.unlimited || a.unlocked:
+			return lockNone // entitled, by whatever route
 		case !s.billing.enabled():
 			return lockPaid
-		case a.pass || a.unlocked:
-			return lockNone
 		case !a.signedIn:
 			// Entitlements hang off an account, so sign-in is step one of paying.
 			return lockMember
@@ -917,11 +925,15 @@ func hasLockedResolution(vs []Video) bool {
 func (s *Server) accessForTitle(r *http.Request, titleID int64, needsPaid bool) titleAccess {
 	u := userFrom(r.Context())
 	a := titleAccess{signedIn: u != nil}
-	if u == nil || !needsPaid || !s.billing.enabled() {
+	// Deliberately NOT gated on s.billing.enabled(): a comp is granted by the
+	// admin and an unlock may already have been bought, and neither depends on a
+	// crypto rail being configured today.
+	if u == nil || !needsPaid {
 		return a
 	}
-	if a.pass = u.HasPass(time.Now()); a.pass {
-		return a // a pass covers every title, so skip the per-title lookup
+	now := time.Now()
+	if a.unlimited = u.HasPass(now) || u.HasComp(now); a.unlimited {
+		return a // covers every title, so skip the per-title lookup
 	}
 	if titleID == 0 {
 		return a

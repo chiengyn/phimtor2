@@ -1,9 +1,14 @@
-{{/* Read-only list of registered viewer accounts. The admin OWNS the users table
-     (migrations/0007_users.sql) but never writes it — the public viewer does, on
-     login. This page is purely "who signed up", so it has no actions.
+{{/* Registered viewer accounts. The admin OWNS the users table
+     (migrations/0007_users.sql) and writes exactly TWO of its columns — the
+     comp_* pair behind "Tặng 4K" below (migrations/0009_comp_premium.sql).
+     Everything else there is the public viewer's: rows on login, and the PAID
+     pass (plan / plan_expires_at) when an invoice settles. Revoking a comp must
+     never touch the paid pass, which is why they are separate columns.
 
-     Pagination is plain <a> links rather than the htmx "pager" fragment used by
-     the catalogue list, because this page is static and has no swap target. */}}
+     Pagination is plain <a> links, and the grant action is a plain form POST +
+     303, because this page carries no htmx — one action does not justify
+     pulling that dependency in here. Each form posts q and page back so the
+     redirect returns to the same view instead of page 1. */}}
 <!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -46,8 +51,24 @@
     .user-meta { display: flex; gap: .35rem; flex-wrap: wrap; align-items: center; margin-top: .15rem; }
     .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; }
     .badge.plan-free { background: #21262d; color: #8b98a5; }
+    .badge.plan-premium { background: #0f2e1a; color: #86efac; }
+    .badge.comp { background: #2b1f3a; color: #d0b3ff; }
     .badge.blocked { background: #2a141a; color: #ff8b94; }
     .badge.unverified { background: #3a2e16; color: #f6d186; }
+
+    /* Grant / revoke controls. Copied in spirit from streamers.html, the other
+       page that mutates state with plain forms rather than htmx. */
+    .user-actions { flex: none; display: flex; flex-direction: column; gap: .35rem; align-items: flex-end; }
+    form.inline { display: flex; gap: .35rem; align-items: center; margin: 0; }
+    form.inline select {
+      font: inherit; font-size: .8rem; padding: .3rem .4rem; border-radius: 8px;
+      border: 1px solid #303b48; background: #161b22; color: #e6edf3;
+    }
+    .btn { font-size: .8rem; padding: .3rem .6rem; }
+    .btn-grant { background: #14532d; border-color: #14532d; color: #86efac; }
+    .btn-grant:hover { background: #166534; }
+    .btn-revoke { background: transparent; border-color: #5a2330; color: #ff8b94; }
+    .btn-revoke:hover { background: #2a141a; }
     .user-stats { flex: none; text-align: right; font-size: .8rem; color: #8b98a5; white-space: nowrap; }
     .user-stats b { color: #e6edf3; font-size: .95rem; }
 
@@ -68,7 +89,7 @@
     <a href="/">← Danh sách phim</a>
   </header>
   <main>
-    <p class="muted">Tài khoản người xem đã đăng ký bằng Google trên trang công khai. Trang này chỉ để xem — mọi thay đổi đều do chính người dùng thực hiện khi đăng nhập.</p>
+    <p class="muted">Tài khoản người xem đã đăng ký bằng Google trên trang công khai. Bạn có thể tặng quyền xem 4K tại đây; mọi thay đổi khác đều do chính người dùng thực hiện khi đăng nhập.</p>
 
     <form class="row" method="get" action="/users">
       <input type="search" name="q" value="{{ .Query }}" placeholder="Tìm theo tên hoặc email…" aria-label="Tìm người dùng">
@@ -91,7 +112,10 @@
         <div class="user-meta">
           <span class="badge">{{ .Provider }}</span>
           <span class="badge plan-{{ .Plan }}">{{ .Plan }}</span>
-          {{ with .PlanExpiresAt }}<span class="badge">4K đến {{ .Format "02/01/2006" }}</span>{{ end }}
+          {{/* HasPass, not `with .PlanExpiresAt` — a non-nil expiry in the past
+               is an EXPIRED pass, and this badge used to claim it was active. */}}
+          {{ if .HasPass }}<span class="badge">4K trả phí đến {{ .PlanExpiresAt.Format "02/01/2006" }}</span>{{ end }}
+          {{ if .HasComp }}<span class="badge comp">4K tặng · {{ .CompLabel }}</span>{{ end }}
           {{ if not .EmailVerified }}<span class="badge unverified">chưa xác thực email</span>{{ end }}
           {{ if .IsBlocked }}<span class="badge blocked">bị khoá</span>{{ end }}
         </div>
@@ -100,6 +124,28 @@
         <div><b>{{ .BookmarkCount }}</b> phim đã lưu</div>
         <div>Đăng ký {{ .CreatedAt.Format "02/01/2006" }}</div>
         <div>{{ with .LastLoginAt }}Đăng nhập {{ .Format "02/01/2006 15:04" }}{{ else }}Chưa đăng nhập lại{{ end }}</div>
+      </div>
+      <div class="user-actions">
+        {{/* $ is the usersPage envelope: inside this range, . is the User. */}}
+        <form class="inline" method="post" action="/users/{{ .ID }}/comp">
+          <input type="hidden" name="q" value="{{ $.Query }}">
+          <input type="hidden" name="page" value="{{ $.Page }}">
+          <select name="duration" aria-label="Thời hạn tặng 4K cho {{ .DisplayName }}">
+            <option value="30d">30 ngày</option>
+            <option value="1y">1 năm</option>
+            <option value="forever">Vĩnh viễn</option>
+          </select>
+          <button class="btn btn-grant" type="submit">{{ if .HasComp }}Gia hạn{{ else }}Tặng 4K{{ end }}</button>
+        </form>
+        {{ if .HasComp }}
+        <form class="inline" method="post" action="/users/{{ .ID }}/comp"
+              onsubmit="return confirm('Thu hồi quyền xem 4K đã tặng cho {{ .DisplayName }}?')">
+          <input type="hidden" name="q" value="{{ $.Query }}">
+          <input type="hidden" name="page" value="{{ $.Page }}">
+          <input type="hidden" name="duration" value="revoke">
+          <button class="btn btn-revoke" type="submit">Thu hồi</button>
+        </form>
+        {{ end }}
       </div>
     </div>
     {{- else }}

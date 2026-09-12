@@ -37,10 +37,16 @@ type plansData struct {
 	Plans  []planView
 	Chains []chainView
 
-	SignedIn  bool
-	LoginURL  string
+	SignedIn bool
+	LoginURL string
+	// HasPass is "already entitled to every 4K source", from a paid pass OR an
+	// admin comp — the page only needs to know not to sell it again.
 	HasPass   bool
 	PassUntil string
+	// PassForever suppresses the expiry date: a permanent admin comp is stored
+	// as the maximum DATETIME, and telling someone their access runs out in the
+	// year 9999 reads as a bug.
+	PassForever bool
 
 	// Set when arriving from a watch page (/goi?title=123): the per-title unlock
 	// is only meaningful with a title in hand.
@@ -68,13 +74,20 @@ type invoiceData struct {
 
 func (s *Server) handlePlansPage(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
+	now := time.Now()
 	data := plansData{
 		SignedIn: u != nil,
 		LoginURL: s.loginURL(r),
-		HasPass:  u.HasPass(time.Now()),
+		HasPass:  u.HasPass(now) || u.HasComp(now),
 	}
-	if data.HasPass && u.PlanExpiresAt != nil {
-		data.PassUntil = u.PlanExpiresAt.Format("02/01/2006")
+	// Report whichever entitlement runs longest, and never print the sentinel
+	// year a permanent comp is stored as.
+	if until := u.EntitledUntil(now); until != nil {
+		if until.Year() >= 9999 {
+			data.PassForever = true
+		} else {
+			data.PassUntil = until.Format("02/01/2006")
+		}
 	}
 	for _, c := range s.billing.chains() {
 		if wch, ok := s.billing.watcher(c); ok {

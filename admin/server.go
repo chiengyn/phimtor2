@@ -185,6 +185,7 @@ func (s *Server) setupRouter() {
 	r.Get("/crawl", s.handleCrawlPage)
 	r.Get("/featured", s.handleFeaturedPage)
 	r.Get("/users", s.handleUsersPage)
+	r.Post("/users/{id}/comp", s.handleSetUserComp)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
 	r.Get("/videos/{id}/play", s.handlePlayVideo)
@@ -550,11 +551,17 @@ func (s *Server) handleFeaturedPage(w http.ResponseWriter, r *http.Request) {
 
 // usersPage is one page of registered viewer accounts plus its pagination
 // controls. Read-only: the admin has no user-management actions, this is just
-// "who signed up" — the viewer is the only writer of the users table.
+// "who signed up", plus the one action the admin has here: granting or revoking
+// the complimentary 4K unlock (the comp_* columns only — the paid pass belongs
+// to the viewer).
 type usersPage struct {
 	Users []User
 	Query string
 	Total int
+	// Page is the clamped page number actually being shown. Each row's grant
+	// form posts it back so the redirect returns to this exact view instead of
+	// dumping the admin on page 1 after every action.
+	Page  int
 	Pager pager
 }
 
@@ -578,6 +585,7 @@ func (s *Server) loadUsersPage(ctx context.Context, q string, page int) (usersPa
 		Users: users,
 		Query: q,
 		Total: total,
+		Page:  page,
 		Pager: buildPager(page, pages, func(n int) template.URL {
 			return template.URL(fmt.Sprintf("/users?page=%d&q=%s", n, url.QueryEscape(q)))
 		}),
@@ -592,6 +600,48 @@ func (s *Server) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, "users.html", page)
+}
+
+// handleSetUserComp grants or revokes an account's complimentary 4K unlock, then
+// returns to the list. Modelled on handleApproveStreamer: a plain form POST and
+// a 303, because users.html carries no htmx and one action does not justify
+// introducing it there.
+//
+// This is the admin's only write to `users`, and it reaches only the comp_
+// columns (see store.SetUserComp).
+func (s *Server) handleSetUserComp(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	until, ok := compUntil(r.FormValue("duration"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid duration")
+		return
+	}
+	if err := s.store.SetUserComp(r.Context(), id, until); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	http.Redirect(w, r, usersListURL(r.FormValue("q"), r.FormValue("page")), http.StatusSeeOther)
+}
+
+// usersListURL rebuilds the /users URL, preserving the search and page the admin
+// was looking at. Both arrive as form fields rather than query params because
+// this is a POST.
+func usersListURL(q, page string) string {
+	v := url.Values{}
+	if q != "" {
+		v.Set("q", q)
+	}
+	if n, err := strconv.Atoi(page); err == nil && n > 1 {
+		v.Set("page", strconv.Itoa(n))
+	}
+	if len(v) == 0 {
+		return "/users"
+	}
+	return "/users?" + v.Encode()
 }
 
 // handleListFeatured returns the ordered featured-list fragment, re-fetched

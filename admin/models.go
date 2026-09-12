@@ -112,29 +112,96 @@ type Subtitle struct {
 // User is a registered viewer account. Sign-in is delegated to an OIDC provider
 // (Google today), so no credential material lives here — the identity is
 // (Provider, ProviderUID), never the email address, which is descriptive only
-// and may change. The admin surfaces these read-only: there is no user
-// management UI, this is "who signed up".
+// and may change. The admin mostly reports on these — "who signed up" — with
+// one exception: it grants and revokes the complimentary 4K unlock.
 //
-// Plan / PlanExpiresAt carry the paid 4K unlock. The viewer writes them when an
-// invoice settles; the admin only reports them.
+// Plan / PlanExpiresAt are the PAID 4K pass and belong to the viewer, which
+// writes them when an invoice settles. CompExpiresAt / CompGrantedAt are the
+// admin's grant. They are separate columns so the two services never write the
+// same data, which is what makes revoking a comp safe.
 type User struct {
-	ID            int64      `json:"id"`
-	Provider      string     `json:"provider"`
-	ProviderUID   string     `json:"provider_uid"`
-	Email         string     `json:"email"`
-	EmailVerified bool       `json:"email_verified"`
-	Name          string     `json:"name"`
-	AvatarURL     string     `json:"avatar_url"`
-	Plan          string     `json:"plan"`
+	ID            int64  `json:"id"`
+	Provider      string `json:"provider"`
+	ProviderUID   string `json:"provider_uid"`
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
+	Name          string `json:"name"`
+	AvatarURL     string `json:"avatar_url"`
+	Plan          string `json:"plan"`
 	// PlanExpiresAt is when the time-based 4K pass runs out, nil for an account
 	// that never bought one. A non-nil value in the past is an expired pass.
 	PlanExpiresAt *time.Time `json:"plan_expires_at,omitempty"`
+	// CompExpiresAt / CompGrantedAt are the ADMIN-GRANTED 4K unlock — the only
+	// columns on `users` this service writes. They are deliberately separate
+	// from Plan/PlanExpiresAt, which belong to the viewer's billing path, so the
+	// two writers never touch the same data and revoking a comp cannot cancel a
+	// pass somebody paid for. A permanent grant is stored as the maximum
+	// DATETIME (see migrations/0009_comp_premium.sql).
+	CompExpiresAt *time.Time `json:"comp_expires_at,omitempty"`
+	CompGrantedAt *time.Time `json:"comp_granted_at,omitempty"`
 	IsBlocked     bool       `json:"is_blocked"`
 	LastLoginAt   *time.Time `json:"last_login_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	// BookmarkCount is how many titles this user has saved for later, loaded
 	// alongside the row so the list shows engagement at a glance.
 	BookmarkCount int `json:"bookmark_count"`
+}
+
+// compForeverDate is how a permanent grant is stored: the maximum DATETIME both
+// MySQL 8 and MariaDB accept. Using an "end of time" date rather than a separate
+// boolean keeps the entitlement check a single comparison against now, on both
+// sides of the database — see migrations/0009_comp_premium.sql.
+var compForeverDate = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+
+// compUntil translates the admin form's duration choice into an expiry, or nil
+// to revoke. The second return is false for an unrecognised choice: the column
+// is a bare DATETIME with no constraint, so this is the only validation there is.
+func compUntil(choice string) (*time.Time, bool) {
+	switch choice {
+	case "30d":
+		t := time.Now().AddDate(0, 0, 30)
+		return &t, true
+	case "1y":
+		t := time.Now().AddDate(1, 0, 0)
+		return &t, true
+	case "forever":
+		t := compForeverDate
+		return &t, true
+	case "revoke":
+		return nil, true
+	}
+	return nil, false
+}
+
+// HasPass reports whether a PAID 4K pass is active. These helpers take no
+// argument because their only caller is the template — a rendered page has one
+// notion of "now" and threading it through would buy nothing.
+//
+// It exists because `{{ with .PlanExpiresAt }}` was showing the 4K badge for
+// accounts whose pass had already EXPIRED.
+func (u User) HasPass() bool {
+	return u.PlanExpiresAt != nil && u.PlanExpiresAt.After(time.Now())
+}
+
+// HasComp reports whether an admin-granted 4K unlock is active.
+func (u User) HasComp() bool {
+	return u.CompExpiresAt != nil && u.CompExpiresAt.After(time.Now())
+}
+
+// CompForever reports whether the active grant is the permanent one.
+func (u User) CompForever() bool {
+	return u.CompExpiresAt != nil && u.CompExpiresAt.Year() >= compForeverDate.Year()
+}
+
+// CompLabel describes the grant for the badge, never printing the year 9999.
+func (u User) CompLabel() string {
+	switch {
+	case !u.HasComp():
+		return ""
+	case u.CompForever():
+		return "vĩnh viễn"
+	}
+	return "đến " + u.CompExpiresAt.Format("02/01/2006")
 }
 
 // DisplayName is what the users list shows: the provider's name, falling back to

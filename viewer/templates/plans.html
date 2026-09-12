@@ -9,7 +9,7 @@
 	<h1>Nâng cấp để xem 4K</h1>
 
 	{{if .HasPass}}
-	<p class="billing-note ok">Bạn đang có gói 4K, hiệu lực đến {{.PassUntil}}. Mua thêm sẽ cộng dồn thời hạn.</p>
+	<p class="billing-note ok">Bạn đang có quyền xem 4K{{if .PassForever}} vĩnh viễn{{else}}, hiệu lực đến {{.PassUntil}}. Mua thêm sẽ cộng dồn thời hạn{{end}}.</p>
 	{{end}}
 
 	{{if not .SignedIn}}

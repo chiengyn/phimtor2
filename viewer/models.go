@@ -155,6 +155,13 @@ type User struct {
 	// has never bought one. Always compare through HasPass — a non-nil expiry in
 	// the past is an EXPIRED pass, not an active one.
 	PlanExpiresAt *time.Time
+	// CompExpiresAt is when an ADMIN-GRANTED 4K unlock runs out, nil when none
+	// was granted. Written only by the admin service, which is why it is a
+	// separate column from PlanExpiresAt: the two writers stay disjoint, so
+	// revoking a comp cannot cancel a pass the user paid for. A permanent grant
+	// is stored as the maximum DATETIME, so this side needs no notion of
+	// "forever" — HasComp just compares against now, like HasPass.
+	CompExpiresAt *time.Time
 
 	// SavedIDs is the set of title ids this user has saved for later, loaded
 	// alongside the user by the currentUser middleware so the header badge and
@@ -171,6 +178,28 @@ func (u *User) SavedCount() int { return len(u.SavedIDs) }
 // anonymous visitor without a guard.
 func (u *User) HasPass(now time.Time) bool {
 	return u != nil && u.PlanExpiresAt != nil && u.PlanExpiresAt.After(now)
+}
+
+// HasComp reports whether an admin-granted 4K unlock is active right now. Same
+// nil-safety and same shape as HasPass — a permanent grant is just a very
+// distant expiry, so there is no special case here.
+func (u *User) HasComp(now time.Time) bool {
+	return u != nil && u.CompExpiresAt != nil && u.CompExpiresAt.After(now)
+}
+
+// EntitledUntil is when this user's every-4K access ends: the later of the paid
+// pass and the admin comp, ignoring whichever has already lapsed. nil when they
+// hold neither. Used to tell a already-entitled visitor what they have instead
+// of trying to sell it to them again.
+func (u *User) EntitledUntil(now time.Time) *time.Time {
+	var out *time.Time
+	if u.HasPass(now) {
+		out = u.PlanExpiresAt
+	}
+	if u.HasComp(now) && (out == nil || u.CompExpiresAt.After(*out)) {
+		out = u.CompExpiresAt
+	}
+	return out
 }
 
 // DisplayName is what the header shows: the provider's name, falling back to the

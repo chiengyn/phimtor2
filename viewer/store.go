@@ -828,11 +828,11 @@ func (s *Store) UpsertGoogleUser(ctx context.Context, id *googleIdentity) (*User
 func (s *Store) UserByID(ctx context.Context, id int64) (*User, error) {
 	var u User
 	var email, name, avatar sql.NullString
-	var planExpires sql.NullTime
+	var planExpires, compExpires sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, email, name, avatar_url, plan, plan_expires_at
+		SELECT id, email, name, avatar_url, plan, plan_expires_at, comp_expires_at
 		FROM users WHERE id = ? AND is_blocked = 0`, id).
-		Scan(&u.ID, &email, &name, &avatar, &u.Plan, &planExpires)
+		Scan(&u.ID, &email, &name, &avatar, &u.Plan, &planExpires, &compExpires)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -845,6 +845,10 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*User, error) {
 	if planExpires.Valid {
 		t := planExpires.Time
 		u.PlanExpiresAt = &t
+	}
+	if compExpires.Valid {
+		t := compExpires.Time
+		u.CompExpiresAt = &t
 	}
 
 	u.SavedIDs, err = s.SavedTitleIDs(ctx, u.ID)

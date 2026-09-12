@@ -151,11 +151,15 @@ Flat single `main` package.
   — seeing that a better quality exists is the whole point — but not always
   playable. Three tiers, from one predicate:
 
-  | | anonymous | signed in, unpaid | pass or title unlock |
+  | | anonymous | signed in, unpaid | entitled |
   |---|---|---|---|
   | 720p | plays | plays | plays |
   | 1080p (`memberResolutions`) | 🔒 sign-in chip | plays | plays |
   | 2160p (`lockedResolutions`) | 🔒 sign-in chip | 🔒 "Nâng cấp" | plays |
+
+  "Entitled" is any of three: a paid **time pass** (`users.plan_expires_at`), an
+  **admin-granted comp** (`users.comp_expires_at`, set from the admin's `/users`
+  page), or a **permanent per-title unlock** (`user_title_unlocks`).
 
   1080p is gated to push registration; 4K is the **paid** tier. 4K shows a
   sign-in chip rather than an upgrade chip to an anonymous visitor because
@@ -163,18 +167,27 @@ Flat single `main` package.
   `resolutionLock` returns `lockNone`/`lockMember`/`lockUpgrade`/`lockPaid` and
   is the **single source of truth** for the chip copy, the default-source pick,
   and the enforcement.
-  - **With billing unconfigured the 4K row collapses back to "sắp ra mắt" for
-    everyone** (`lockPaid`), which is exactly what the site did before billing
-    existed. That is the billing rollback, and it is why `resolutionLock` checks
-    `s.billing.enabled()` first — dangling an upgrade chip that leads to a `/goi`
-    page which is not even routed would be worse than no offer at all.
-  - Entitlement comes from two places, either of which is sufficient: an active
-    **time pass** (`users.plan_expires_at`, read for free off the user the session
-    middleware already loaded) or a **permanent per-title unlock**
-    (`user_title_unlocks`). `accessForTitle` builds that snapshot and is
+  - **With billing unconfigured, 4K collapses back to "sắp ra mắt" for everyone
+    who holds no entitlement** (`lockPaid`) — the pre-billing behaviour, and the
+    billing rollback. An upgrade chip pointing at a `/goi` route that is not
+    registered would be worse than no offer at all.
+  - **Order matters in `resolutionLock`: entitlement is checked BEFORE
+    `s.billing.enabled()`.** It was the other way round until admin comps
+    arrived, and that was a bug — turning billing off revoked permanent title
+    unlocks people had already paid for, and would have voided comps too.
+    Billing-off means "you cannot buy", never "what you hold is void".
+  - Entitlement is `unlimited || unlocked`: `unlimited` is every-4K access from
+    either a paid pass or an admin comp (`HasPass` / `HasComp`, both read for
+    free off the user the session middleware already loaded), and `unlocked` is
+    the per-title purchase. `accessForTitle` builds that snapshot and is
     deliberately lazy — it skips the `user_title_unlocks` query entirely unless a
-    paid-gated source is actually on the page (`hasLockedResolution`), so free
-    720p traffic pays nothing for a feature it cannot use.
+    paid-gated source is on the page (`hasLockedResolution`), so free 720p
+    traffic pays nothing for a feature it cannot use. It is **not** gated on
+    `billing.enabled()`, for the reason above.
+  - A comp is written by the **admin**, into its own `users.comp_*` columns. The
+    viewer must never write them, exactly as the admin must never write
+    `plan`/`plan_expires_at` — disjoint columns are what make the shared row
+    safe (see the root `CLAUDE.md`).
   - **The chips are client-rendered and bypassable — `handlePrepareSource` is
     the only thing that actually enforces this.** It answers `401` for a member
     lock, `402` for an upgrade lock and `403` for a paid one; the page turns the
