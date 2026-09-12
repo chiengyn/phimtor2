@@ -62,6 +62,24 @@ type Config struct {
 	BillingEVMChains   string
 	BillingTronAddress string
 
+	// BillingPollIntervalSec is how often the poller scans each enabled chain.
+	// 0 disables the loop entirely (invoices can still be created, they just
+	// never settle) — the same "interval 0 disables" convention as the admin's
+	// torrent harvester.
+	BillingPollIntervalSec int
+	// BillingInvoiceTTLMin is how long an invoice stays payable. It is short on
+	// purpose: the reserved amount is a scarce resource (see billing.go), and a
+	// stale invoice holding one helps nobody.
+	BillingInvoiceTTLMin int
+	// Prices, in US cents. Every rail settles in a USD stablecoin, so these are
+	// also the token amount — see stableUSDRate in billing.go.
+	BillingPass30Cents  int
+	BillingPass365Cents int
+	BillingTitleCents   int
+	// BillingVNDPerUSD is display only: prices are quoted in VND next to the USD
+	// figure because the audience is Vietnamese. It never affects what is charged.
+	BillingVNDPerUSD int
+
 	// WatchHeartbeatTTL is how long (seconds) a watch session may go silent before
 	// the viewer treats the tab as gone and drops its torrent. Must comfortably
 	// exceed the watch page's heartbeat interval (10s) so a couple of missed beats
@@ -105,6 +123,13 @@ func loadConfig() Config {
 		BillingEVMAddress:  envStr("BILLING_EVM_ADDRESS", ""),
 		BillingEVMChains:   envStr("BILLING_EVM_CHAINS", ""),
 		BillingTronAddress: envStr("BILLING_TRON_ADDRESS", ""),
+
+		BillingPollIntervalSec: envInt("BILLING_POLL_INTERVAL_SEC", 30),
+		BillingInvoiceTTLMin:   envInt("BILLING_INVOICE_TTL_MIN", 30),
+		BillingPass30Cents:     envInt("BILLING_PASS30_USD_CENTS", 200),
+		BillingPass365Cents:    envInt("BILLING_PASS365_USD_CENTS", 1500),
+		BillingTitleCents:      envInt("BILLING_TITLE_USD_CENTS", 100),
+		BillingVNDPerUSD:       envInt("BILLING_VND_PER_USD", 26000),
 
 		SubtitleStorageBackend: envStr("SUBTITLE_STORAGE_BACKEND", "local"),
 		SubtitleStorageDir:     envStr("SUBTITLE_STORAGE_DIR", "./data/subtitles"),
@@ -153,6 +178,15 @@ func (c Config) billingEnabled() bool {
 	}
 	evm := c.BillingEVMAddress != "" && c.BillingEVMChains != ""
 	return evm || c.BillingTronAddress != ""
+}
+
+// evmRPCOverride returns the operator's RPC endpoint for one chain, or "" to use
+// the built-in public default. Looked up dynamically (BILLING_EVM_RPC_BASE,
+// BILLING_EVM_RPC_BSC, …) rather than as a Config field per chain, so adding a
+// chain to the built-in table needs no config change — the whole point of
+// keeping the chain list data rather than code.
+func evmRPCOverride(chain string) string {
+	return envStr("BILLING_EVM_RPC_"+strings.ToUpper(chain), "")
 }
 
 // oauthRedirectURL is the absolute callback URL Google sends the browser back

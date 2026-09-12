@@ -101,6 +101,41 @@ type Subtitle struct {
 	CreatedAt      time.Time       `json:"created_at,omitempty"`
 }
 
+// Invoice is one crypto payment request. It is also the ledger: nothing else
+// records that money arrived, so rows are never deleted, only moved between
+// statuses.
+//
+// PayAmount / Received are decimal STRINGS, never float64. They are compared
+// against a DECIMAL(36,18) column and the comparison must be exact — the amount
+// is the invoice's identity (see billing.go), so a rounding error is not a small
+// discrepancy, it is a payment credited to the wrong invoice or to none at all.
+type Invoice struct {
+	ID             int64
+	Ref            string // opaque public id used in URLs — never expose ID
+	UserID         int64
+	Kind           string // "pass" | "title"
+	PlanCode       string
+	TitleID        *int64
+	AmountUSDCents int
+	Chain          string // the chain we SUGGESTED
+	PayTo          string
+	PayAmount      string
+	Token          string
+	Status         string // "pending" | "paid" | "expired"
+	Received       string
+	PaidChain      string // where it actually landed, may differ from Chain
+	TxHash         string
+	ExpiresAt      time.Time
+	PaidAt         *time.Time
+	CreatedAt      time.Time
+}
+
+// Paid reports whether this invoice has settled.
+func (i *Invoice) Paid() bool { return i != nil && i.Status == "paid" }
+
+// Pending reports whether this invoice is still awaiting payment.
+func (i *Invoice) Pending() bool { return i != nil && i.Status == "pending" }
+
 // User is a signed-in visitor. Sign-in is delegated to an OIDC provider (Google
 // today), so no credential material lives here — the identity is the provider's
 // stable subject id, never the email address, which may change.

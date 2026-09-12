@@ -67,6 +67,9 @@ type Server struct {
 	// enabled() == false when no crypto rail is configured, in which case 4K
 	// falls back to the "sắp ra mắt" tier the site shipped with.
 	billing *billingService
+
+	plans   *template.Template
+	invoice *template.Template
 }
 
 func NewServer(store *Store, cfg Config) (*Server, error) {
@@ -99,7 +102,7 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 	// Left nil when unconfigured (billingService is nil-safe), which is what makes
 	// resolutionLock fall back to the pre-billing "sắp ra mắt" 4K tier.
 	if cfg.billingEnabled() {
-		s.billing = newBillingService(cfg)
+		s.billing = newBillingService(store, cfg)
 		log.Printf("Crypto billing enabled (chains: %s)", strings.Join(s.billing.chains(), ", "))
 	} else {
 		log.Printf("Crypto billing disabled — 4K stays locked for everyone (needs accounts plus BILLING_EVM_ADDRESS + BILLING_EVM_CHAINS, or BILLING_TRON_ADDRESS)")
@@ -152,6 +155,11 @@ func (s *Server) funcMap() template.FuncMap {
 		// discordURL exposes the configured support-channel invite link (empty
 		// when unset, so templates can hide the link).
 		"discordURL": func() string { return s.discordURL },
+		// billingOn tells the shared header whether to offer the upgrade entry.
+		// A funcMap helper rather than a pageData field for the same reason
+		// discordURL is one: it is request-independent chrome, so making it a
+		// field would mean every handler had to remember to populate it.
+		"billingOn": func() bool { return s.billing.enabled() },
 	}
 	for k, v := range baseFuncMap {
 		fm[k] = v
@@ -306,6 +314,15 @@ func (s *Server) parseTemplates() error {
 	if s.notFound, err = parse("layout.html", "404.html"); err != nil {
 		return err
 	}
+	// Parsed unconditionally even when billing is off: the files always exist,
+	// and a parse error should surface at boot on every deploy rather than only
+	// on the ones where a crypto rail happens to be configured.
+	if s.plans, err = parse("layout.html", "plans.html"); err != nil {
+		return err
+	}
+	if s.invoice, err = parse("layout.html", "invoice.html"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -363,6 +380,19 @@ func (s *Server) setupRouter() {
 
 	r.Post("/api/watch/heartbeat", s.handleWatchHeartbeat)
 	r.Post("/api/watch/leave", s.handleWatchLeave)
+
+	// Paid 4K tier. Registered only when a crypto rail is configured, exactly
+	// like the Google routes — an unconfigured deploy 404s these, and
+	// resolutionLock never marks a source 'upgrade', so nothing ever links here.
+	if s.billing.enabled() {
+		r.Get("/goi", s.handlePlansPage)
+		r.Get("/thanh-toan/{ref}", s.handleInvoicePage)
+		r.Route("/api/billing", func(r chi.Router) {
+			r.Use(s.requireUser)
+			r.Post("/invoices", s.handleCreateInvoice)
+			r.Get("/invoices/{ref}", s.handleInvoiceStatus)
+		})
+	}
 
 	fs := http.FileServer(http.Dir("static"))
 	r.Handle("/static/*", http.StripPrefix("/static/", fs))

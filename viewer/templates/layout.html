@@ -70,6 +70,9 @@
 			<div class="user-menu-panel">
 				<div class="user-menu-email">{{.User.Email}}</div>
 				<a href="/bookmarks">Phim đã lưu</a>
+				{{/* Only when a crypto rail is configured — otherwise /goi is not
+				     even routed and this would be a dead link. */}}
+				{{if billingOn}}<a href="/goi">Nâng cấp 4K</a>{{end}}
 				<form method="post" action="/auth/logout">
 					<input type="hidden" name="next" value="{{.Path}}">
 					<button type="submit" class="user-logout">Đăng xuất</button>

@@ -41,6 +41,10 @@ func main() {
 	// Reap watch sessions whose heartbeats stopped, dropping their torrents.
 	go server.watcher.run(ctx)
 
+	// Watch the configured chains for incoming payments and credit them. A no-op
+	// when no crypto rail is configured, or when the poll interval is 0.
+	go server.billing.run(ctx)
+
 	go func() {
 		log.Printf("phimtor2-viewer listening on http://%s", addr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

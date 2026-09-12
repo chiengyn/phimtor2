@@ -1,0 +1,100 @@
+{{define "head_title"}}Thanh toán – phimnet{{end}}
+{{define "head_extra"}}
+<meta name="robots" content="noindex, nofollow">
+{{end}}
+{{define "content"}}
+<section class="billing wrap" data-ref="{{.Ref}}" id="invoice">
+	<a href="{{.BackHref}}" class="back-link">← Quay lại các gói</a>
+	<h1>{{.ProductName}}</h1>
+
+	{{if .Paid}}
+	<div class="pay-done">
+		<div class="pay-done-mark">✓</div>
+		<p>Đã nhận thanh toán. Quyền xem 4K đã được kích hoạt cho tài khoản của bạn.</p>
+		<a class="login-link" href="/"><span>Bắt đầu xem</span></a>
+	</div>
+	{{else if .Expired}}
+	<p class="billing-note err">Hoá đơn này đã hết hạn. Hãy tạo hoá đơn mới — số tiền cũ không còn được ghi nhận.</p>
+	<a class="login-link" href="{{.BackHref}}"><span>Tạo hoá đơn mới</span></a>
+	{{else}}
+
+	{{/* The AMOUNT is what identifies this payment, not the address — the address
+	     is shared by every invoice. So it gets the visual weight, and the warning
+	     below is not boilerplate: a different amount genuinely will not credit. */}}
+	<p class="billing-note warn">
+		Chuyển <b>chính xác</b> số tiền bên dưới. Số tiền là thứ nhận diện hoá đơn của bạn,
+		nên chuyển sai số sẽ không được cộng tự động.
+	</p>
+
+	<div class="pay-box">
+		{{with .QR}}<img class="pay-qr" src="{{.}}" alt="Mã QR địa chỉ nhận" width="260" height="260">{{end}}
+		<div class="pay-fields">
+			<div class="pay-field">
+				<span class="pay-label">Số tiền chính xác</span>
+				<div class="pay-value big">
+					<code id="pay-amount">{{.PayAmount}}</code>
+					<button type="button" class="copy-btn" data-copy="#pay-amount">Sao chép</button>
+				</div>
+				<span class="pay-hint">≈ {{.USD}}{{with .VND}} · {{.}}{{end}} (USDT/USDC)</span>
+			</div>
+			<div class="pay-field">
+				<span class="pay-label">Địa chỉ nhận</span>
+				<div class="pay-value">
+					<code id="pay-to">{{.PayTo}}</code>
+					<button type="button" class="copy-btn" data-copy="#pay-to">Sao chép</button>
+				</div>
+			</div>
+			<div class="pay-field">
+				<span class="pay-label">Mạng</span>
+				<div class="pay-value"><b>{{.ChainLabel}}</b></div>
+				{{with .OtherChains}}
+				<span class="pay-hint">
+					Cũng chấp nhận trên:
+					{{range $i, $c := .}}{{if $i}}, {{end}}{{$c.Label}}{{end}} — cùng một địa chỉ.
+				</span>
+				{{end}}
+			</div>
+		</div>
+	</div>
+
+	<p class="billing-note">Hoá đơn có hiệu lực đến <b>{{.ExpiresAt}}</b>. Trang này tự cập nhật khi giao dịch được xác nhận.</p>
+	<p class="pay-status" id="pay-status"><span class="spinner"></span> Đang chờ thanh toán…</p>
+	{{end}}
+</section>
+
+<script>
+(function () {
+	const root = document.getElementById('invoice');
+	if (!root) return;
+
+	document.querySelectorAll('.copy-btn').forEach(btn => {
+		btn.addEventListener('click', async () => {
+			const el = document.querySelector(btn.dataset.copy);
+			if (!el) return;
+			try {
+				await navigator.clipboard.writeText(el.textContent.trim());
+				const old = btn.textContent;
+				btn.textContent = 'Đã sao chép';
+				setTimeout(() => { btn.textContent = old; }, 1500);
+			} catch (e) { /* clipboard blocked — the text is selectable anyway */ }
+		});
+	});
+
+	const status = document.getElementById('pay-status');
+	if (!status) return; // already paid or expired, nothing to poll
+	const ref = root.dataset.ref;
+
+	// Poll rather than wait for the server-side scanner's tick, so the page
+	// reacts as soon as the invoice flips.
+	async function check() {
+		try {
+			const res = await fetch('/api/billing/invoices/' + encodeURIComponent(ref));
+			if (!res.ok) return;
+			const d = await res.json();
+			if (d.paid || d.expired) { window.location.reload(); }
+		} catch (e) { /* transient: try again next tick */ }
+	}
+	setInterval(check, 5000);
+})();
+</script>
+{{end}}

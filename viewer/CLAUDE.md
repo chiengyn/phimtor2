@@ -190,6 +190,59 @@ Flat single `main` package.
     1080p was a registration nudge; it is a real (accepted, tracked) hole now that
     money is involved. The fix is short-lived HMAC-signed stream URLs verified by
     the streamer, which is a separate change spanning all four services.
+
+- **Billing** (`billing.go`, `billing_http.go`, `chains.go`, `chain_evm.go`).
+  Crypto only, watched in-repo — no BTCPay, no hosted processor, no webhook.
+
+  - **An invoice is identified by a unique exact AMOUNT, not by an address.**
+    There is one receive address per chain family and the price is nudged by a few
+    units of dust; `UNIQUE(lock_ns, amount_lock)` in `0008` arbitrates so no two
+    open invoices can claim the same amount. This is why **no key material — not a
+    seed, not even an xpub — exists anywhere in this service**: nothing needs to
+    derive or sweep an address. It also means one `0x` address serves *every* EVM
+    chain, so funds land in one wallet with no per-address sweeping and no gas
+    spent collecting dust. Preserve that property.
+  - `amountDecimals` is **6**, the narrowest precision among the tokens watched
+    (USDT/USDC are 6; **BSC-USD is 18**). An amount at 6 decimals is exactly
+    representable on all of them, which is what lets one amount identify an
+    invoice across chains that disagree about decimals. Amounts are decimal
+    **strings** and `*big.Int`, never `float64` — they are compared for exact
+    equality against `DECIMAL(36,18)`, and that comparison decides who gets paid.
+  - **All open EVM invoices share the single `evm` lock namespace**, deliberately:
+    no two can collide on *any* EVM chain, so the buyer may pay on whichever chain
+    is cheapest and still be credited. `paid_chain` records where it landed, which
+    may differ from the `chain` the invoice suggested.
+  - **There is no under-payment tolerance, and there cannot be.** The amount *is*
+    the identity, so a payment of the wrong amount does not under-pay an invoice —
+    it matches none, and is logged as `UNMATCHED` for the operator to resolve. Do
+    not add a fuzzy match here: it would let one transfer satisfy the wrong
+    invoice.
+  - **`chain_evm.go` is written once and instantiated N times.** A chain is a row
+    in `evmChainDefs`, not code — adding Optimism is a row plus an entry in
+    `BILLING_EVM_CHAINS`. **The contract addresses in that table are the security
+    boundary**: scans filter by contract, so a scam token calling itself "USDT"
+    can never credit an invoice unless its address is listed. Verify an address
+    against a block explorer before enabling that chain.
+  - Confirmations are enforced by **never looking at blocks that are not deep
+    enough** (the scan ceiling is `latest - MinConf`), which handles reorgs for
+    free instead of tracking and re-checking a pending set. Only ERC-20
+    stablecoins are watched: a native ETH/BNB transfer emits no log, so
+    `eth_getLogs` cannot see it.
+  - **Idempotency lives in one place**: `SettleInvoice`'s `AND status = 'pending'`
+    guard. A repeated observation, a restart mid-settle and a rewound cursor all
+    collapse to zero rows affected. Do not "simplify" it away.
+  - Every timestamp comparison uses MySQL's own `NOW()`, never a Go `time.Time` —
+    the app and the database can disagree about clock or zone, and an invoice must
+    not expire early because of skew.
+  - Config: `BILLING_EVM_ADDRESS` + `BILLING_EVM_CHAINS` enable it (both needed);
+    `BILLING_EVM_RPC_<CHAIN>` overrides a public endpoint; plus poll interval,
+    invoice TTL, prices in US cents, and a display-only VND rate. **Billing also
+    requires accounts** — an entitlement hangs off a user row. Unset the address
+    and the whole tier goes inert, which is the rollback.
+  - The QR encodes the **plain address**, not an EIP-681 transfer URI: an invoice
+    accepts any enabled chain and any listed token, so baking one chain+token into
+    the QR would contradict that, and a wallet mis-parsing the amount is
+    unrecoverable when the amount is the identity.
   - `resolutionLock` is a **method on `*Server`** because the member tier must be
     inert when accounts are disabled (`s.google.enabled()`). Without that clause
     a `GOOGLE_CLIENT_ID=""` deploy — the documented rollback — would strand every

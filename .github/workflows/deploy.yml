@@ -76,6 +76,13 @@ jobs:
           MANAGER_HOST: ${{ vars.MANAGER_HOST }}
           STREAMER1_HOST: ${{ vars.STREAMER1_HOST }}
           STREAMER2_HOST: ${{ vars.STREAMER2_HOST }}
+          # Paid 4K tier. Variables, not secrets: a crypto RECEIVE address is
+          # public by nature (it is on-chain), and nothing here can spend from it
+          # — invoices are matched by a unique exact amount, not by derived
+          # addresses, so the deployment holds no key material. Leave both unset
+          # to keep billing off.
+          BILLING_EVM_ADDRESS: ${{ vars.BILLING_EVM_ADDRESS }}
+          BILLING_EVM_CHAINS: ${{ vars.BILLING_EVM_CHAINS }}
           # Secrets.
           KAMAL_REGISTRY_PASSWORD: ${{ secrets.KAMAL_REGISTRY_PASSWORD }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}

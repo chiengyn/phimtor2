@@ -53,6 +53,26 @@ env:
     # Read the same subtitle blob store admin writes (shared host volume).
     SUBTITLE_STORAGE_BACKEND: local
     SUBTITLE_STORAGE_DIR: /data/subtitles
+    # Paid 4K tier. Leave BILLING_EVM_ADDRESS / BILLING_EVM_CHAINS unset to keep
+    # billing OFF: /goi and /thanh-toan are then not registered and 4K shows
+    # "sắp ra mắt" for everyone, exactly as before billing existed. That is the
+    # clean rollback.
+    #
+    # The receive address is PUBLIC (it is on-chain) but is not committed here,
+    # because this repo is public and infra stays out of it — supply it as a repo
+    # Variable or via .env, the same way SERVER_IP is.
+    #
+    # It is also WATCH-ONLY, and that is the security model: an invoice is
+    # identified by a unique exact amount, never by a derived address, so no
+    # private key, seed or xpub belongs anywhere near this deployment.
+    BILLING_EVM_ADDRESS: <%= ENV["BILLING_EVM_ADDRESS"] %>
+    BILLING_EVM_CHAINS: <%= ENV["BILLING_EVM_CHAINS"] %>
+    BILLING_POLL_INTERVAL_SEC: 30
+    BILLING_INVOICE_TTL_MIN: 30
+    BILLING_PASS30_USD_CENTS: 200
+    BILLING_PASS365_USD_CENTS: 1500
+    BILLING_TITLE_USD_CENTS: 100
+    BILLING_VND_PER_USD: 26000
   secret:
     - DB_PASSWORD
     - MANAGER_INTERNAL_TOKEN

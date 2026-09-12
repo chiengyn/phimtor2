@@ -1,0 +1,94 @@
+{{define "head_title"}}Nâng cấp 4K – phimnet{{end}}
+{{define "head_extra"}}
+<meta name="description" content="Mở khoá chất lượng 4K trên phimnet.">
+{{/* A purchase funnel tied to one account: nothing for a crawler to index. */}}
+<meta name="robots" content="noindex, nofollow">
+{{end}}
+{{define "content"}}
+<section class="billing wrap">
+	<h1>Nâng cấp để xem 4K</h1>
+
+	{{if .HasPass}}
+	<p class="billing-note ok">Bạn đang có gói 4K, hiệu lực đến {{.PassUntil}}. Mua thêm sẽ cộng dồn thời hạn.</p>
+	{{end}}
+
+	{{if not .SignedIn}}
+	{{/* Entitlements hang off an account, so sign-in is genuinely step one —
+	     not an upsell. Say why, then get out of the way. */}}
+	<p class="billing-note">Cần đăng nhập trước khi thanh toán, vì quyền xem 4K gắn với tài khoản của bạn.</p>
+	{{with .LoginURL}}<a class="login-link" href="{{.}}"><span>Đăng nhập với Google</span></a>{{end}}
+	{{else}}
+
+	<div class="plan-grid">
+		{{range .Plans}}
+		<div class="plan-card{{if .Current}} owned{{end}}" data-plan="{{.Code}}">
+			<div class="plan-name">{{.Name}}</div>
+			<div class="plan-price">{{.USD}}{{with .VND}} <span class="plan-vnd">≈ {{.}}</span>{{end}}</div>
+			<p class="plan-note">{{.Note}}</p>
+			{{if .Current}}
+			<span class="plan-owned">Đã sở hữu</span>
+			{{else}}
+			<button type="button" class="plan-buy" data-code="{{.Code}}">Chọn gói này</button>
+			{{end}}
+		</div>
+		{{else}}
+		<p class="empty">Hiện chưa có gói nào khả dụng.</p>
+		{{end}}
+	</div>
+
+	<h2 class="billing-sub">Thanh toán bằng tiền mã hoá</h2>
+	<p class="billing-note">Chọn mạng bạn muốn chuyển. Phí mạng do bạn trả, nên các mạng L2 thường rẻ hơn nhiều.</p>
+	<div class="chain-picker" id="chain-picker">
+		{{range $i, $c := .Chains}}
+		<label class="chain-opt">
+			<input type="radio" name="chain" value="{{$c.Name}}"{{if eq $i 0}} checked{{end}}>
+			<span>{{$c.Label}}</span>
+		</label>
+		{{end}}
+	</div>
+
+	<p class="billing-error" id="billing-error" hidden></p>
+	{{end}}
+</section>
+
+<script>
+(function () {
+	const TITLE_ID = {{.TitleID}};
+	const errBox = document.getElementById('billing-error');
+
+	function showError(msg) {
+		if (!errBox) return;
+		errBox.textContent = msg;
+		errBox.hidden = false;
+	}
+
+	function chosenChain() {
+		const el = document.querySelector('#chain-picker input[name="chain"]:checked');
+		return el ? el.value : '';
+	}
+
+	document.querySelectorAll('.plan-buy').forEach(btn => {
+		btn.addEventListener('click', async () => {
+			const chain = chosenChain();
+			if (!chain) { showError('Hãy chọn một mạng thanh toán.'); return; }
+			btn.disabled = true;
+			btn.textContent = 'Đang tạo hoá đơn…';
+			try {
+				const res = await fetch('/api/billing/invoices', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ plan_code: btn.dataset.code, title_id: TITLE_ID, chain: chain })
+				});
+				const data = await res.json().catch(() => ({}));
+				if (!res.ok) throw new Error(data.error || 'Không tạo được hoá đơn');
+				window.location.href = data.url;
+			} catch (e) {
+				showError(e.message);
+				btn.disabled = false;
+				btn.textContent = 'Chọn gói này';
+			}
+		});
+	});
+})();
+</script>
+{{end}}

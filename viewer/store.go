@@ -4,14 +4,26 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"sort"
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	// Imported by name, not blank: the billing amount-reservation loop needs to
+	// tell a duplicate-key rejection (expected, retry) from a real failure. A
+	// named import still runs the driver's init, so registration is unchanged.
+	mysqldrv "github.com/go-sql-driver/mysql"
 )
+
+// isDuplicateKey reports whether err is MySQL's "duplicate entry" (1062). For
+// the invoice amount reservation this is an ordinary outcome under concurrency,
+// not an error condition.
+func isDuplicateKey(err error) bool {
+	var me *mysqldrv.MySQLError
+	return errors.As(err, &me) && me.Number == 1062
+}
 
 type Store struct {
 	db *sql.DB
@@ -857,6 +869,199 @@ func (s *Store) HasTitleUnlock(ctx context.Context, userID, titleID int64) (bool
 		return false, err
 	}
 	return true, nil
+}
+
+// --- Billing ---------------------------------------------------------------
+//
+// Every timestamp comparison below is done with MySQL's own NOW(), never a Go
+// time.Time. The app and the database can disagree about the clock or the zone,
+// and an invoice must not expire early (or refuse to) because of that skew.
+
+const invoiceColumns = `id, ref, user_id, kind, plan_code, title_id, amount_usd_cents,
+	chain, pay_to, pay_amount, token, status, received, paid_chain, tx_hash,
+	expires_at, paid_at, created_at`
+
+func scanInvoice(sc interface{ Scan(...any) error }) (*Invoice, error) {
+	var inv Invoice
+	var titleID sql.NullInt64
+	var paidAt sql.NullTime
+	if err := sc.Scan(&inv.ID, &inv.Ref, &inv.UserID, &inv.Kind, &inv.PlanCode, &titleID,
+		&inv.AmountUSDCents, &inv.Chain, &inv.PayTo, &inv.PayAmount, &inv.Token,
+		&inv.Status, &inv.Received, &inv.PaidChain, &inv.TxHash,
+		&inv.ExpiresAt, &paidAt, &inv.CreatedAt); err != nil {
+		return nil, err
+	}
+	if titleID.Valid {
+		inv.TitleID = &titleID.Int64
+	}
+	if paidAt.Valid {
+		t := paidAt.Time
+		inv.PaidAt = &t
+	}
+	return &inv, nil
+}
+
+// CreateInvoice writes a pending invoice, reserving its amount via
+// (lock_ns, amount_lock). A duplicate-key error here is the reservation being
+// taken — the caller retries with different dust (see billing.go).
+func (s *Store) CreateInvoice(ctx context.Context, inv *Invoice, lockNS string, ttlMin int) error {
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO payment_invoices
+			(ref, user_id, kind, plan_code, title_id, amount_usd_cents, chain, pay_to,
+			 pay_amount, token, rate_usd, status, lock_ns, amount_lock, expires_at)
+		VALUES (?,?,?,?,?,?,?,?,CAST(? AS DECIMAL(36,18)),?,?, 'pending', ?, CAST(? AS DECIMAL(36,18)),
+			DATE_ADD(NOW(), INTERVAL ? MINUTE))`,
+		inv.Ref, inv.UserID, inv.Kind, inv.PlanCode, inv.TitleID, inv.AmountUSDCents,
+		inv.Chain, inv.PayTo, inv.PayAmount, inv.Token, stableUSDRate,
+		lockNS, inv.PayAmount, ttlMin)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	inv.ID = id
+	return nil
+}
+
+// InvoiceByRef loads one invoice by its public ref. Returns (nil, nil) on miss.
+func (s *Store) InvoiceByRef(ctx context.Context, ref string) (*Invoice, error) {
+	inv, err := scanInvoice(s.db.QueryRowContext(ctx,
+		`SELECT `+invoiceColumns+` FROM payment_invoices WHERE ref = ?`, ref))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return inv, nil
+}
+
+// CountPendingInvoices is how many invoices in a namespace are still payable. It
+// is what lets the poller skip an expensive log query when nothing is owed.
+func (s *Store) CountPendingInvoices(ctx context.Context, lockNS string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM payment_invoices
+		 WHERE status = 'pending' AND lock_ns = ? AND expires_at > NOW()`, lockNS).Scan(&n)
+	return n, err
+}
+
+// MatchPendingInvoice finds the payable invoice that reserved this exact amount.
+// The CAST makes the comparison a DECIMAL one rather than a string one, so
+// "5.0001" and "5.000100" match — they are the same quantity of money.
+// Returns (nil, nil) when nothing owes this amount.
+func (s *Store) MatchPendingInvoice(ctx context.Context, lockNS, amount string) (*Invoice, error) {
+	inv, err := scanInvoice(s.db.QueryRowContext(ctx,
+		`SELECT `+invoiceColumns+` FROM payment_invoices
+		 WHERE status = 'pending' AND lock_ns = ?
+		   AND amount_lock = CAST(? AS DECIMAL(36,18))
+		   AND expires_at > NOW()
+		 LIMIT 1`, lockNS, amount))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return inv, nil
+}
+
+// ExpireInvoices releases the reservations held by invoices that ran out of
+// time. Clearing lock_ns/amount_lock is the point: it returns that amount to the
+// pool (the unique index ignores NULLs).
+func (s *Store) ExpireInvoices(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE payment_invoices
+		SET status = 'expired', lock_ns = NULL, amount_lock = NULL
+		WHERE status = 'pending' AND expires_at <= NOW()`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// SettleInvoice marks an invoice paid and grants its entitlement in ONE
+// transaction, returning false when the invoice was already settled.
+//
+// The `AND status = 'pending'` guard is the whole idempotency story: a repeated
+// scan observation, a restart mid-settle and a rewound cursor all land on zero
+// rows affected and change nothing. Everything downstream depends on that, so do
+// not "simplify" the guard away.
+func (s *Store) SettleInvoice(ctx context.Context, inv *Invoice, ob observedPayment, passDays int) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE payment_invoices
+		SET status = 'paid', lock_ns = NULL, amount_lock = NULL, paid_at = NOW(),
+		    received = CAST(? AS DECIMAL(36,18)), paid_chain = ?, tx_hash = ?
+		WHERE id = ? AND status = 'pending'`,
+		ob.Amount, ob.Chain, ob.TxHash, inv.ID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil
+	}
+
+	switch inv.Kind {
+	case "pass":
+		// GREATEST(...) is what makes renewals stack instead of truncating: an
+		// unexpired pass extends from its own end date, a lapsed one from today.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE users
+			SET plan = 'premium',
+			    plan_expires_at = DATE_ADD(GREATEST(COALESCE(plan_expires_at, NOW()), NOW()), INTERVAL ? DAY)
+			WHERE id = ?`, passDays, inv.UserID); err != nil {
+			return false, err
+		}
+	case "title":
+		if inv.TitleID == nil {
+			return false, fmt.Errorf("invoice %s is a title unlock with no title_id", inv.Ref)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT IGNORE INTO user_title_unlocks (user_id, title_id, invoice_id)
+			VALUES (?,?,?)`, inv.UserID, *inv.TitleID, inv.ID); err != nil {
+			return false, err
+		}
+	default:
+		return false, fmt.Errorf("invoice %s has unknown kind %q", inv.Ref, inv.Kind)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ChainCursor is where this chain's scan got to ("" when never scanned).
+func (s *Store) ChainCursor(ctx context.Context, chain string) (string, error) {
+	var c string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT scan_cursor FROM billing_chain_cursors WHERE chain = ?`, chain).Scan(&c)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return c, nil
+}
+
+func (s *Store) SetChainCursor(ctx context.Context, chain, cursor string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO billing_chain_cursors (chain, scan_cursor) VALUES (?,?)
+		ON DUPLICATE KEY UPDATE scan_cursor = VALUES(scan_cursor)`, chain, cursor)
+	return err
 }
 
 // SavedTitleIDs is the set of title ids this user has saved, used to pre-mark

@@ -6,6 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/minio/minio-go/v7 v7.2.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/text v0.37.0
 )
 
