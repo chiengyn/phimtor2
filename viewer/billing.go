@@ -83,6 +83,14 @@ func newBillingService(store *Store, cfg Config) *billingService {
 	}
 
 	evmAddr := strings.TrimSpace(cfg.BillingEVMAddress)
+	// Refuse a malformed address outright rather than half-running on it. Taking
+	// payments to an address nobody can pay is strictly worse than not offering
+	// the tier at all, and the failure is otherwise invisible — see isEVMAddress.
+	if evmAddr != "" && !isEVMAddress(evmAddr) {
+		log.Printf("billing: BILLING_EVM_ADDRESS %q is not a 0x-prefixed 40-hex-digit address — EVM rails DISABLED "+
+			"(if this looks like a large decimal number, the deploy config is missing quotes and YAML ate the 0x as an integer)", evmAddr)
+		evmAddr = ""
+	}
 	if evmAddr != "" {
 		for _, name := range strings.Split(cfg.BillingEVMChains, ",") {
 			name = strings.ToLower(strings.TrimSpace(name))

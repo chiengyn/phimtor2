@@ -65,8 +65,15 @@ env:
     # It is also WATCH-ONLY, and that is the security model: an invoice is
     # identified by a unique exact amount, never by a derived address, so no
     # private key, seed or xpub belongs anywhere near this deployment.
-    BILLING_EVM_ADDRESS: <%= ENV["BILLING_EVM_ADDRESS"] %>
-    BILLING_EVM_CHAINS: <%= ENV["BILLING_EVM_CHAINS"] %>
+    # QUOTE THESE. Kamal parses this file as YAML 1.1, which reads a bare 0x…
+    # value as an INTEGER — and every character of an EVM address after "0x" is
+    # a valid hex digit, so the whole address silently became its decimal
+    # expansion (381816886467293135913673320154258644308764740206) in the
+    # container on 2026-09-12. Nothing errored: invoices stored that as pay_to,
+    # buyers were shown an unusable string, and the log-topic filter was built
+    # from garbage, so scanning looked healthy while crediting nothing.
+    BILLING_EVM_ADDRESS: "<%= ENV['BILLING_EVM_ADDRESS'] %>"
+    BILLING_EVM_CHAINS: "<%= ENV['BILLING_EVM_CHAINS'] %>"
     BILLING_POLL_INTERVAL_SEC: 30
     BILLING_INVOICE_TTL_MIN: 30
     BILLING_PASS30_USD_CENTS: 200

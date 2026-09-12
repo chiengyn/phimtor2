@@ -106,6 +106,32 @@ var evmChainDefs = map[string]evmChainDef{
 	},
 }
 
+// isEVMAddress reports whether s is a 0x-prefixed, 40-hex-digit address.
+//
+// This check earns its place because a malformed address does NOT announce
+// itself. It would be stored on every invoice, shown to buyers to copy, and
+// padded into a log topic that simply never matches — so the poller would scan
+// happily, advance its cursors and report no errors, while being structurally
+// incapable of crediting anyone.
+//
+// That is not hypothetical: on 2026-09-12 Kamal's YAML 1.1 parser read the
+// unquoted 0x… value in the deploy config as an integer, and production ran with
+// the address's decimal expansion. Config will go wrong again; refusing to start
+// a rail on a malformed address is what keeps the next time loud.
+func isEVMAddress(s string) bool {
+	if len(s) != 42 || !strings.HasPrefix(s, "0x") {
+		return false
+	}
+	for _, r := range s[2:] {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 type evmWatcher struct {
 	name  string
 	def   evmChainDef
