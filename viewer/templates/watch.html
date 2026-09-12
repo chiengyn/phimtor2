@@ -71,14 +71,18 @@
 	.chip.active { border-color: var(--accent); background: rgba(229,9,20,0.18); }
 	.chip.locked { cursor: not-allowed; opacity: 0.55; }
 	.chip.locked:hover { border-color: #3a3a3a; }
-	/* A member-locked source IS reachable — you just have to sign in — so it stays
-	   fully legible and clickable, unlike the dimmed paid-tier chip above. */
-	.chip.member { cursor: pointer; opacity: 1; text-decoration: none; }
-	.chip.member:hover { border-color: var(--accent); background: rgba(229,9,20,0.10); }
+	/* A member- or upgrade-locked source IS reachable — you just have to sign in,
+	   or pay — so both stay fully legible and clickable, unlike the dimmed chip
+	   above, which is locked for everyone. */
+	.chip.member,
+	.chip.upgrade { cursor: pointer; opacity: 1; text-decoration: none; }
+	.chip.member:hover,
+	.chip.upgrade:hover { border-color: var(--accent); background: rgba(229,9,20,0.10); }
 	.chip .badge { font-weight: 700; font-size: 0.72rem; color: var(--accent); }
 	.chip .chip-sub { color: var(--muted); }
 	.chip .chip-lock { color: var(--muted); font-size: 0.72rem; }
-	.chip.member .chip-lock { color: var(--text); }
+	.chip.member .chip-lock,
+	.chip.upgrade .chip-lock { color: var(--text); }
 
 	/* Sign-in prompt painted into the player slot when the visitor picked (or
 	   only has) a member-gated source. */
@@ -199,7 +203,8 @@
 	data-owner-id="{{.OwnerID}}"
 	data-videos="{{.VideosJSON}}"
 	data-subs="{{.SubtitlesJSON}}"
-	data-login-url="{{.LoginURL}}">
+	data-login-url="{{.LoginURL}}"
+	data-upgrade-url="{{.UpgradeURL}}">
 	<a href="{{.BackHref}}" class="back-link">← Quay lại</a>
 	<div class="watch-meta-top">
 		<h1>{{.Heading}}</h1>
@@ -324,6 +329,10 @@ if (!Array.isArray(SAVED_SUBS)) SAVED_SUBS = [];
 // or accounts are disabled — in which case the server never marks a source
 // 'member' either, so nothing below ever needs it.
 const LOGIN_URL = D.loginUrl || '';
+// "Buy 4K" link for this title. Empty when billing is unconfigured — in which
+// case the server never marks a source 'upgrade' either, so nothing below needs
+// it (a 4K source is plain 'sắp ra mắt' then).
+const UPGRADE_URL = D.upgradeUrl || '';
 
 let player = null;
 let currentInfoHash = null;
@@ -461,7 +470,16 @@ function renderSourceChips() {
 				<span class="chip-lock">🔒 Đăng nhập</span>
 			</a>`;
 		}
-		// 4K sources are reserved for paid users for now: shown but not playable.
+		// Payable by this visitor: a real link, like the member chip, so it is
+		// keyboard- and middle-click-friendly.
+		if (v.lock === 'upgrade') {
+			return `<a class="chip locked upgrade" href="${escHtml(UPGRADE_URL)}"
+				title="Nâng cấp để xem chất lượng ${escHtml(v.resolution || 'này')}">
+				${badge}
+				<span class="chip-lock">🔒 Nâng cấp</span>
+			</a>`;
+		}
+		// Nobody can play this yet (billing unconfigured): shown but inert.
 		if (v.available === false) {
 			return `<span class="chip locked" title="Sắp ra mắt cho người dùng trả phí">
 				${badge}
@@ -478,15 +496,23 @@ function renderSourceChips() {
 // source. Built with DOM nodes rather than innerHTML so the player placeholder
 // stays a text-only surface (setPlayerStatus deliberately uses textContent) —
 // this must not become the one path that injects markup into it.
-function showLoginGate(v) {
-	const wrap = document.getElementById('player-wrap');
+// resetPlayerSurface tears down any live playback and empties the player slot,
+// so a gate can paint into it. Shared by the sign-in and upgrade gates — they
+// differ only in what they render afterwards.
+function resetPlayerSurface() {
 	remuxAbort?.abort();
 	remuxAbort = null;
 	if (player) { try { player.destroy(); } catch(e) {} player = null; }
 	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
 	if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
 	hideLoadNotice();
+	const wrap = document.getElementById('player-wrap');
 	wrap.innerHTML = '';
+	return wrap;
+}
+
+function showLoginGate(v) {
+	const wrap = resetPlayerSurface();
 
 	const ph = document.createElement('div');
 	ph.className = 'player-placeholder';
@@ -523,6 +549,45 @@ function showLoginGate(v) {
 	wrap.append(ph);
 }
 
+// showUpgradeGate paints the player slot with the "buy 4K" prompt, for a source
+// this visitor could play if they paid. Same DOM-node construction as
+// showLoginGate — the player placeholder must stay a text-only surface.
+function showUpgradeGate(v) {
+	const wrap = resetPlayerSurface();
+
+	const ph = document.createElement('div');
+	ph.className = 'player-placeholder';
+	const box = document.createElement('div');
+	box.className = 'login-gate';
+
+	const lock = document.createElement('div');
+	lock.className = 'login-gate-lock';
+	lock.textContent = '🔒';
+
+	const text = document.createElement('div');
+	text.className = 'login-gate-text';
+	text.textContent = 'Nâng cấp để xem chất lượng ' + ((v && v.resolution) || '2160p');
+
+	const hint = document.createElement('div');
+	hint.className = 'login-gate-hint';
+	hint.textContent = 'Thanh toán bằng tiền mã hoá. Các chất lượng thấp hơn vẫn xem được bình thường.';
+
+	box.append(lock, text, hint);
+
+	if (UPGRADE_URL) {
+		const a = document.createElement('a');
+		a.className = 'login-link';
+		a.href = UPGRADE_URL;
+		const label = document.createElement('span');
+		label.textContent = 'Xem các gói';
+		a.append(label);
+		box.append(a);
+	}
+
+	ph.append(box);
+	wrap.append(ph);
+}
+
 // playSource asks the viewer to add the chosen source to the streamer (the
 // browser never adds directly), then streams the returned file.
 async function playSource(videoID, opts = {}) {
@@ -533,7 +598,8 @@ async function playSource(videoID, opts = {}) {
 	// only catches programmatic calls, and must never tear down a live stream to
 	// show the prompt.
 	if (v && v.lock === 'member') { if (!player) showLoginGate(v); return; }
-	if (v && v.available === false) return; // paid-tier source — not playable yet
+	if (v && v.lock === 'upgrade') { if (!player) showUpgradeGate(v); return; }
+	if (v && v.available === false) return; // nobody can play this yet
 	setStatus('');
 	showLoadNotice();
 	showPlayerStatus('Đang chuẩn bị nguồn phát…');
@@ -544,6 +610,9 @@ async function playSource(videoID, opts = {}) {
 		// 401 means this quality needs an account — the session expired mid-watch,
 		// or the chip data is stale. Offer sign-in instead of a transport error.
 		if (res.status === 401) { showLoginGate(v); return; }
+		// 402 means this quality needs a purchase — the pass lapsed mid-watch, or
+		// the chip data is stale. Offer the upgrade instead of a transport error.
+		if (res.status === 402) { showUpgradeGate(v); return; }
 		if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
 		data = await res.json();
 	} catch(e) {
@@ -1189,12 +1258,16 @@ function resetSubStyle() {
 	// signed-in one on the newest non-4K source.
 	const defaultVideo = VIDEOS.find(v => !v.lock);
 	const memberVideo = VIDEOS.find(v => v.lock === 'member');
+	const upgradeVideo = VIDEOS.find(v => v.lock === 'upgrade');
 	if (defaultVideo) {
 		await playSource(defaultVideo.id);
 		if (SAVED_SUBS.length) applySavedSubtitle(SAVED_SUBS[0].id);
 	} else if (memberVideo) {
 		// Nothing free here — every source needs an account. Ask for one.
 		showLoginGate(memberVideo);
+	} else if (upgradeVideo) {
+		// Signed in, but every source here is paid. Sell the upgrade.
+		showUpgradeGate(upgradeVideo);
 	} else if (VIDEOS.length) {
 		showPlayerStatus('Các nguồn 4K hiện chưa khả dụng.', true);
 	}

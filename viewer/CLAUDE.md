@@ -151,20 +151,45 @@ Flat single `main` package.
   — seeing that a better quality exists is the whole point — but not always
   playable. Three tiers, from one predicate:
 
-  | | anonymous | signed in |
-  |---|---|---|
-  | 720p | plays | plays |
-  | 1080p (`memberResolutions`) | 🔒 sign-in chip | plays |
-  | 2160p (`lockedResolutions`) | 🔒 "sắp ra mắt" | 🔒 "sắp ra mắt" |
+  | | anonymous | signed in, unpaid | pass or title unlock |
+  |---|---|---|---|
+  | 720p | plays | plays | plays |
+  | 1080p (`memberResolutions`) | 🔒 sign-in chip | plays | plays |
+  | 2160p (`lockedResolutions`) | 🔒 sign-in chip | 🔒 "Nâng cấp" | plays |
 
-  1080p is gated to push registration; 4K is held back for the future paid tier
-  (`User.Plan` is the seam for that, and is still read nowhere). `resolutionLock`
-  returns `lockNone`/`lockMember`/`lockPaid` and is the **single source of
-  truth** for the chip copy, the default-source pick, and the enforcement.
+  1080p is gated to push registration; 4K is the **paid** tier. 4K shows a
+  sign-in chip rather than an upgrade chip to an anonymous visitor because
+  entitlements hang off an account — signing in is step one of paying.
+  `resolutionLock` returns `lockNone`/`lockMember`/`lockUpgrade`/`lockPaid` and
+  is the **single source of truth** for the chip copy, the default-source pick,
+  and the enforcement.
+  - **With billing unconfigured the 4K row collapses back to "sắp ra mắt" for
+    everyone** (`lockPaid`), which is exactly what the site did before billing
+    existed. That is the billing rollback, and it is why `resolutionLock` checks
+    `s.billing.enabled()` first — dangling an upgrade chip that leads to a `/goi`
+    page which is not even routed would be worse than no offer at all.
+  - Entitlement comes from two places, either of which is sufficient: an active
+    **time pass** (`users.plan_expires_at`, read for free off the user the session
+    middleware already loaded) or a **permanent per-title unlock**
+    (`user_title_unlocks`). `accessForTitle` builds that snapshot and is
+    deliberately lazy — it skips the `user_title_unlocks` query entirely unless a
+    paid-gated source is actually on the page (`hasLockedResolution`), so free
+    720p traffic pays nothing for a feature it cannot use.
   - **The chips are client-rendered and bypassable — `handlePrepareSource` is
     the only thing that actually enforces this.** It answers `401` for a member
-    lock and `403` for a paid one; the page turns that `401` into the sign-in
-    gate, which is also how a session expiring mid-watch recovers.
+    lock, `402` for an upgrade lock and `403` for a paid one; the page turns the
+    `401` into the sign-in gate and the `402` into the upgrade gate, which is also
+    how a session expiring (or a pass lapsing) mid-watch recovers. Entitlements
+    are per **title** but this endpoint is handed only a video id, and
+    `videos.title_id` is NULL for an episode — hence `TitleIDForVideo`, which
+    follows episode → season → title.
+  - **What the paywall actually protects is discovery, not bytes.** The gate
+    withholds `{infoHash, streamerPublicURL}`, but the streamer's stream endpoint
+    is unauthenticated with `Access-Control-Allow-Origin: *`, so a URL obtained
+    once works for anyone until the torrent is reaped. This was acceptable when
+    1080p was a registration nudge; it is a real (accepted, tracked) hole now that
+    money is involved. The fix is short-lived HMAC-signed stream URLs verified by
+    the streamer, which is a separate change spanning all four services.
   - `resolutionLock` is a **method on `*Server`** because the member tier must be
     inert when accounts are disabled (`s.google.enabled()`). Without that clause
     a `GOOGLE_CLIENT_ID=""` deploy — the documented rollback — would strand every

@@ -91,6 +91,7 @@
         <div class="user-meta">
           <span class="badge">{{ .Provider }}</span>
           <span class="badge plan-{{ .Plan }}">{{ .Plan }}</span>
+          {{ with .PlanExpiresAt }}<span class="badge">4K đến {{ .Format "02/01/2006" }}</span>{{ end }}
           {{ if not .EmailVerified }}<span class="badge unverified">chưa xác thực email</span>{{ end }}
           {{ if .IsBlocked }}<span class="badge blocked">bị khoá</span>{{ end }}
         </div>

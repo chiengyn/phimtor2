@@ -46,10 +46,13 @@ any module.
   catalog. It owns the two account tables too but never writes them.
 - **`viewer/` never migrates** and assumes the tables already exist
   (`viewer/main.go`). It only *reads* the catalog — with one exception: it is the
-  sole **writer** of the two account tables, `users` and `user_bookmarks`
-  (created by `admin/migrations/0007_users.sql`), which back Google sign-in and
-  the per-account watch-later list. It writes nothing else, ever.
-  **Deploy admin before viewer** so the migration lands first.
+  sole **writer** of the tables the admin declares but never touches. Those are
+  the two account tables, `users` and `user_bookmarks` (created by
+  `admin/migrations/0007_users.sql`), which back Google sign-in and the
+  per-account watch-later list, plus the **billing** tables from
+  `0008_billing.sql` (`payment_invoices`, `user_title_unlocks`,
+  `billing_chain_cursors`) behind the paid 4K tier. It writes nothing else, ever.
+  **Deploy admin before viewer** so the migrations land first.
 
 So schema changes live in `admin/` (a new numbered `admin/migrations/NNNN_*.sql`),
 and any new column the viewer should surface must be added to **both** modules'

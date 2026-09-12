@@ -115,8 +115,8 @@ type Subtitle struct {
 // and may change. The admin surfaces these read-only: there is no user
 // management UI, this is "who signed up".
 //
-// Plan / PlanExpiresAt are the seam for the future paid unlock; everyone is
-// "free" today and nothing reads them yet.
+// Plan / PlanExpiresAt carry the paid 4K unlock. The viewer writes them when an
+// invoice settles; the admin only reports them.
 type User struct {
 	ID            int64      `json:"id"`
 	Provider      string     `json:"provider"`
@@ -126,6 +126,9 @@ type User struct {
 	Name          string     `json:"name"`
 	AvatarURL     string     `json:"avatar_url"`
 	Plan          string     `json:"plan"`
+	// PlanExpiresAt is when the time-based 4K pass runs out, nil for an account
+	// that never bought one. A non-nil value in the past is an expired pass.
+	PlanExpiresAt *time.Time `json:"plan_expires_at,omitempty"`
 	IsBlocked     bool       `json:"is_blocked"`
 	LastLoginAt   *time.Time `json:"last_login_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`

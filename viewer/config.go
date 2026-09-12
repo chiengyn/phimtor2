@@ -50,6 +50,18 @@ type Config struct {
 	// boot so sign-in works with zero setup (sessions then die on restart).
 	SessionSecret string
 
+	// Crypto billing for the paid 4K tier. BillingEVMAddress is ONE plain receive
+	// address shared by every enabled EVM chain (the same 0x address is valid on
+	// all of them), and BillingEVMChains selects which are live, e.g.
+	// "base,arbitrum,bsc". These are watch-only: an invoice is identified by a
+	// unique exact amount, never by a derived address, so no key material — not
+	// even an xpub — ever reaches this service. All unset ⇒ billing is off and 4K
+	// falls back to the "sắp ra mắt" tier this shipped with, which is the clean
+	// rollback (see billingEnabled).
+	BillingEVMAddress  string
+	BillingEVMChains   string
+	BillingTronAddress string
+
 	// WatchHeartbeatTTL is how long (seconds) a watch session may go silent before
 	// the viewer treats the tab as gone and drops its torrent. Must comfortably
 	// exceed the watch page's heartbeat interval (10s) so a couple of missed beats
@@ -90,6 +102,10 @@ func loadConfig() Config {
 		ManagerInternalToken: envStr("MANAGER_INTERNAL_TOKEN", ""),
 		WatchHeartbeatTTL:    envInt("WATCH_HEARTBEAT_TTL", 30),
 
+		BillingEVMAddress:  envStr("BILLING_EVM_ADDRESS", ""),
+		BillingEVMChains:   envStr("BILLING_EVM_CHAINS", ""),
+		BillingTronAddress: envStr("BILLING_TRON_ADDRESS", ""),
+
 		SubtitleStorageBackend: envStr("SUBTITLE_STORAGE_BACKEND", "local"),
 		SubtitleStorageDir:     envStr("SUBTITLE_STORAGE_DIR", "./data/subtitles"),
 		S3Endpoint:             envStr("S3_ENDPOINT", ""),
@@ -120,6 +136,23 @@ func loadConfig() Config {
 // viewer serves exactly the anonymous-only site it did before accounts existed.
 func (c Config) accountsEnabled() bool {
 	return c.GoogleClientID != "" && c.GoogleClientSecret != ""
+}
+
+// billingEnabled reports whether at least one crypto rail is configured. When
+// false the paid tier is inert: /goi and /thanh-toan are never registered and a
+// 4K source shows "sắp ra mắt" exactly as it did before billing existed. That is
+// the documented rollback, so resolutionLock must keep honouring it.
+func (c Config) billingEnabled() bool {
+	// Billing REQUIRES accounts. An entitlement hangs off a user row, so with
+	// sign-in disabled nobody could ever hold one — and worse, resolutionLock
+	// would fall through to the member tier and render a 4K "Đăng nhập" chip
+	// whose link is empty, because /auth/google/* is not even routed. A paid
+	// tier nobody can buy is worse than no offer at all, so treat it as off.
+	if !c.accountsEnabled() {
+		return false
+	}
+	evm := c.BillingEVMAddress != "" && c.BillingEVMChains != ""
+	return evm || c.BillingTronAddress != ""
 }
 
 // oauthRedirectURL is the absolute callback URL Google sends the browser back

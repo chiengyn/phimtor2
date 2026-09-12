@@ -106,14 +106,20 @@ type Subtitle struct {
 // stable subject id, never the email address, which may change.
 //
 // This is the ONE part of the catalog the viewer writes (see store.go): a row is
-// created or refreshed on each login. Plan is the seam for the future paid
-// unlock and is "free" for everyone today.
+// created or refreshed on each login. Plan / PlanExpiresAt carry the paid 4K
+// pass: a purchase pushes the expiry out (see the billing settle path) rather
+// than writing a row to a subscriptions table, so the per-request entitlement
+// check costs nothing beyond the user load the session middleware already does.
 type User struct {
 	ID        int64
 	Email     string
 	Name      string
 	AvatarURL string
 	Plan      string
+	// PlanExpiresAt is when the time-based 4K pass runs out, nil for a user who
+	// has never bought one. Always compare through HasPass — a non-nil expiry in
+	// the past is an EXPIRED pass, not an active one.
+	PlanExpiresAt *time.Time
 
 	// SavedIDs is the set of title ids this user has saved for later, loaded
 	// alongside the user by the currentUser middleware so the header badge and
@@ -124,6 +130,13 @@ type User struct {
 
 // SavedCount is how many titles the user has saved, for the header badge.
 func (u *User) SavedCount() int { return len(u.SavedIDs) }
+
+// HasPass reports whether the time-based 4K pass is active right now. It is
+// nil-safe on both the receiver and the expiry so callers can ask it of an
+// anonymous visitor without a guard.
+func (u *User) HasPass(now time.Time) bool {
+	return u != nil && u.PlanExpiresAt != nil && u.PlanExpiresAt.After(now)
+}
 
 // DisplayName is what the header shows: the provider's name, falling back to the
 // local part of the email so the chip is never blank.

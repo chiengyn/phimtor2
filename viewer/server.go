@@ -62,6 +62,11 @@ type Server struct {
 	// the site then behaves exactly as it did before accounts existed.
 	google *googleClient
 	sess   *sessionSigner
+
+	// billing is the paid 4K tier. Like google it is nil-safe and reports
+	// enabled() == false when no crypto rail is configured, in which case 4K
+	// falls back to the "sắp ra mắt" tier the site shipped with.
+	billing *billingService
 }
 
 func NewServer(store *Store, cfg Config) (*Server, error) {
@@ -90,6 +95,14 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		log.Printf("Google sign-in enabled (redirect URI %s)", cfg.oauthRedirectURL())
 	} else {
 		log.Printf("Google sign-in disabled (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET unset)")
+	}
+	// Left nil when unconfigured (billingService is nil-safe), which is what makes
+	// resolutionLock fall back to the pre-billing "sắp ra mắt" 4K tier.
+	if cfg.billingEnabled() {
+		s.billing = newBillingService(cfg)
+		log.Printf("Crypto billing enabled (chains: %s)", strings.Join(s.billing.chains(), ", "))
+	} else {
+		log.Printf("Crypto billing disabled — 4K stays locked for everyone (needs accounts plus BILLING_EVM_ADDRESS + BILLING_EVM_CHAINS, or BILLING_TRON_ADDRESS)")
 	}
 	s.watcher = newWatchTracker(time.Duration(cfg.WatchHeartbeatTTL)*time.Second, s.manager.deleteTorrent)
 	if err := s.parseTemplates(); err != nil {
@@ -775,15 +788,20 @@ type watchData struct {
 	// {{block "content" .Data}}, so inside watch.html neither .User nor
 	// $.LoginURL is in scope — the handler's view model is the only contract.
 	LoginURL string
+	// UpgradeURL is the "buy 4K" link for THIS title, "" when billing is off.
+	// It lives here for the same reason LoginURL does, and it is built from the
+	// title id rather than OwnerID because OwnerID is the episode id on a series
+	// page while entitlements are per title.
+	UpgradeURL string
 	// Same-season episode navigation (episode watch page only; empty for movies).
 	SeasonNumber int
 	Episodes     []Episode
 }
 
-// lockedResolutions are video qualities reserved for the future PAID tier: the
-// viewer still lists them (so users can see the source exists) but nobody can
-// play them yet. 4K (2160p) is gated for now — remove the entry here to
-// re-enable playback.
+// lockedResolutions are video qualities reserved for the PAID tier: the viewer
+// still lists them (so users can see the source exists), but playing one needs
+// either an active time pass or a purchase of that specific title. With billing
+// unconfigured nobody can play them at all, which is the pre-billing behaviour.
 var lockedResolutions = map[string]bool{"2160p": true}
 
 // memberResolutions are qualities reserved for signed-in ACCOUNTS. Anonymous
@@ -793,35 +811,114 @@ var lockedResolutions = map[string]bool{"2160p": true}
 var memberResolutions = map[string]bool{"1080p": true}
 
 // Why a source is not playable for this visitor. The empty string means it is.
+// lockPaid and lockUpgrade are deliberately distinct: lockPaid is "nobody can
+// play this yet" (billing unconfigured) and lockUpgrade is "you, specifically,
+// could play this if you paid". They read as different copy and different HTTP
+// statuses, so the client stays dumb about which is which.
 const (
-	lockNone   = ""
-	lockPaid   = "paid"
-	lockMember = "member"
+	lockNone    = ""
+	lockPaid    = "paid"
+	lockMember  = "member"
+	lockUpgrade = "upgrade"
 )
+
+// titleAccess is the visitor's entitlement snapshot for ONE title. pass is the
+// time-based unlock (every 4K source, until it expires) and unlocked is the
+// permanent purchase of this title in particular — either one is sufficient.
+type titleAccess struct {
+	signedIn bool
+	pass     bool
+	unlocked bool
+}
 
 // resolutionLock reports why res is not playable for this visitor, or lockNone.
 // It is the single source of truth used by both the watch page (chip + default
 // selection) and the prepare endpoint.
 //
-// It is a method on *Server, not a bare function, because the member tier must
-// be OFF entirely when accounts are disabled: with no GOOGLE_CLIENT_ID there are
-// no /auth/google/* routes and no login button, so gating 1080p there would
-// strand every visitor at 720p with no way to unlock it. Turning the accounts
-// env vars off stays the clean rollback (see CLAUDE.md).
-func (s *Server) resolutionLock(res string, signedIn bool) string {
+// It is a method on *Server, not a bare function, because two tiers must switch
+// OFF entirely when their feature is unconfigured:
+//   - With no GOOGLE_CLIENT_ID there are no /auth/google/* routes and no login
+//     button, so gating 1080p would strand every visitor at 720p with no way to
+//     unlock it.
+//   - With no crypto rail there is no /goi page to send anyone to, so 4K must
+//     stay uniformly "sắp ra mắt" rather than dangle an unbuyable upgrade.
+//
+// Turning either feature's env vars off stays the clean rollback (see
+// CLAUDE.md). Test both configs whenever you touch this.
+func (s *Server) resolutionLock(res string, a titleAccess) string {
 	switch {
 	case lockedResolutions[res]:
-		return lockPaid
-	case memberResolutions[res] && !signedIn && s.google.enabled():
+		switch {
+		case !s.billing.enabled():
+			return lockPaid
+		case a.pass || a.unlocked:
+			return lockNone
+		case !a.signedIn:
+			// Entitlements hang off an account, so sign-in is step one of paying.
+			return lockMember
+		}
+		return lockUpgrade
+	case memberResolutions[res] && !a.signedIn && s.google.enabled():
 		return lockMember
 	}
 	return lockNone
 }
 
+// hasLockedResolution reports whether any of these sources is paid-gated. It is
+// the guard that keeps the entitlement lookup off the hot path: a page with only
+// 720p/1080p sources never queries user_title_unlocks at all.
+func hasLockedResolution(vs []Video) bool {
+	for _, v := range vs {
+		if lockedResolutions[v.Resolution] {
+			return true
+		}
+	}
+	return false
+}
+
+// accessForTitle builds the entitlement snapshot for one title. needsPaid says
+// whether a paid-gated source is actually in play; when it is false (the common
+// case) this costs nothing beyond reading the already-loaded user.
+//
+// It takes the request rather than a context so callers need no extra import,
+// matching loginURL. A store error degrades to "not entitled" and is logged,
+// the same way currentUser degrades to anonymous — a database blip must not
+// hand out 4K, but it also must not 500 the whole watch page.
+func (s *Server) accessForTitle(r *http.Request, titleID int64, needsPaid bool) titleAccess {
+	u := userFrom(r.Context())
+	a := titleAccess{signedIn: u != nil}
+	if u == nil || !needsPaid || !s.billing.enabled() {
+		return a
+	}
+	if a.pass = u.HasPass(time.Now()); a.pass {
+		return a // a pass covers every title, so skip the per-title lookup
+	}
+	if titleID == 0 {
+		return a
+	}
+	unlocked, err := s.store.HasTitleUnlock(r.Context(), u.ID, titleID)
+	if err != nil {
+		log.Printf("title unlock lookup failed (user %d, title %d): %v", u.ID, titleID, err)
+		return a
+	}
+	a.unlocked = unlocked
+	return a
+}
+
+// upgradeURL is the "buy 4K" link for a title, "" when billing is off (in which
+// case no source is ever marked lockUpgrade, so nothing renders it).
+func (s *Server) upgradeURL(titleID int64) string {
+	if !s.billing.enabled() {
+		return ""
+	}
+	return "/goi?title=" + strconv.FormatInt(titleID, 10)
+}
+
 // watchVideo is the browser-facing subset of a Video (no magnet — the viewer
 // adds it to the streamer server-side). Available is false for any gated
 // source, so the browser can show but not play it; Lock says which gate, so the
-// page can offer sign-in for a member source and "coming soon" for a paid one.
+// page can offer sign-in for a member source, an upgrade for a payable one, and
+// "coming soon" for one nobody can play yet.
 type watchVideo struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
@@ -840,10 +937,10 @@ type watchSubtitle struct {
 	DownloadCount int    `json:"download_count"`
 }
 
-func (s *Server) toWatchVideos(vs []Video, signedIn bool) []watchVideo {
+func (s *Server) toWatchVideos(vs []Video, a titleAccess) []watchVideo {
 	out := make([]watchVideo, 0, len(vs))
 	for _, v := range vs {
-		lock := s.resolutionLock(v.Resolution, signedIn)
+		lock := s.resolutionLock(v.Resolution, a)
 		out = append(out, watchVideo{
 			ID: v.ID, Name: v.Name, Resolution: v.Resolution, FileSize: v.FileSize,
 			Available: lock == lockNone, Lock: lock,
@@ -889,12 +986,12 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		s.renderNotFound(w, r)
 		return
 	}
-	signedIn := userFrom(r.Context()) != nil
 	videos, err := s.store.VideosForTitle(r.Context(), title.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	access := s.accessForTitle(r, title.ID, hasLockedResolution(videos))
 	subs, err := s.store.SubtitlesForTitle(r.Context(), title.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -906,10 +1003,11 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		BackHref:      titlePath(title.ID, title.Title, title.OriginalTitle),
 		OwnerKind:     "title",
 		OwnerID:       title.ID,
-		VideosJSON:    jsonOrEmpty(s.toWatchVideos(videos, signedIn)),
+		VideosJSON:    jsonOrEmpty(s.toWatchVideos(videos, access)),
 		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
 		HasVideo:      len(videos) > 0,
 		LoginURL:      s.loginURL(r),
+		UpgradeURL:    s.upgradeURL(title.ID),
 	}
 	s.render(w, r, s.watch, data)
 }
@@ -929,12 +1027,12 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		s.renderNotFound(w, r)
 		return
 	}
-	signedIn := userFrom(r.Context()) != nil
 	videos, err := s.store.VideosForEpisode(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	access := s.accessForTitle(r, ec.TitleID, hasLockedResolution(videos))
 	subs, err := s.store.SubtitlesForEpisode(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -955,10 +1053,11 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		BackHref:      titlePath(ec.TitleID, ec.TitleName, ""),
 		OwnerKind:     "episode",
 		OwnerID:       id,
-		VideosJSON:    jsonOrEmpty(s.toWatchVideos(videos, signedIn)),
+		VideosJSON:    jsonOrEmpty(s.toWatchVideos(videos, access)),
 		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
 		HasVideo:      len(videos) > 0,
 		LoginURL:      s.loginURL(r),
+		UpgradeURL:    s.upgradeURL(ec.TitleID),
 		SeasonNumber:  ec.SeasonNumber,
 		Episodes:      eps,
 	}
@@ -983,12 +1082,23 @@ func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "video not found")
 		return
 	}
+	// Entitlements are per TITLE, but this endpoint is handed only a video id, and
+	// videos.title_id is NULL for an episode — so resolve the owning title first.
+	titleID, err := s.store.TitleIDForVideo(r.Context(), id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	// The chips are rendered client-side and trivially bypassable, so this is the
-	// check that actually enforces the tiers. 401 vs 403 is what lets the page
-	// tell "sign in and you can" apart from "nobody can yet".
-	switch s.resolutionLock(video.Resolution, userFrom(r.Context()) != nil) {
+	// check that actually enforces the tiers. The three statuses are what let the
+	// page tell "sign in and you can" from "pay and you can" from "nobody can yet".
+	access := s.accessForTitle(r, titleID, lockedResolutions[video.Resolution])
+	switch s.resolutionLock(video.Resolution, access) {
 	case lockPaid:
 		writeJSONError(w, http.StatusForbidden, "nguồn này hiện không khả dụng")
+		return
+	case lockUpgrade:
+		writeJSONError(w, http.StatusPaymentRequired, "Nâng cấp để xem chất lượng "+video.Resolution)
 		return
 	case lockMember:
 		writeJSONError(w, http.StatusUnauthorized, "Đăng nhập để xem chất lượng "+video.Resolution)

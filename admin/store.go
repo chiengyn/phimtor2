@@ -1221,7 +1221,7 @@ func (s *Store) ListUsers(ctx context.Context, q string, limit, offset int) ([]U
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.id, u.provider, u.provider_uid, u.email, u.email_verified, u.name,
-		       u.avatar_url, u.plan, u.is_blocked, u.last_login_at, u.created_at,
+		       u.avatar_url, u.plan, u.plan_expires_at, u.is_blocked, u.last_login_at, u.created_at,
 		       (SELECT COUNT(*) FROM user_bookmarks b WHERE b.user_id = u.id)
 		FROM users u`+where+`
 		ORDER BY u.created_at DESC
@@ -1234,15 +1234,19 @@ func (s *Store) ListUsers(ctx context.Context, q string, limit, offset int) ([]U
 	var out []User
 	for rows.Next() {
 		var u User
-		var lastLogin sql.NullTime
+		var lastLogin, planExpires sql.NullTime
 		if err := rows.Scan(&u.ID, &u.Provider, &u.ProviderUID, &u.Email, &u.EmailVerified,
-			&u.Name, &u.AvatarURL, &u.Plan, &u.IsBlocked, &lastLogin, &u.CreatedAt,
+			&u.Name, &u.AvatarURL, &u.Plan, &planExpires, &u.IsBlocked, &lastLogin, &u.CreatedAt,
 			&u.BookmarkCount); err != nil {
 			return nil, err
 		}
 		if lastLogin.Valid {
 			t := lastLogin.Time
 			u.LastLoginAt = &t
+		}
+		if planExpires.Valid {
+			t := planExpires.Time
+			u.PlanExpiresAt = &t
 		}
 		out = append(out, u)
 	}

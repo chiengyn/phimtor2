@@ -684,6 +684,28 @@ func (s *Store) GetVideo(ctx context.Context, id int64) (*Video, error) {
 	return &v, nil
 }
 
+// TitleIDForVideo resolves a video id to the title it ultimately belongs to,
+// following episode -> season -> title for a TV source. The prepare endpoint
+// needs this because entitlements are per TITLE while it is handed only a video
+// id, and videos.title_id is set for movies but NULL for episodes. Returns
+// (0, nil) when no such video exists.
+func (s *Store) TitleIDForVideo(ctx context.Context, videoID int64) (int64, error) {
+	var titleID sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(v.title_id, se.title_id)
+		FROM videos v
+		LEFT JOIN episodes e  ON e.id = v.episode_id
+		LEFT JOIN seasons  se ON se.id = e.season_id
+		WHERE v.id = ?`, videoID).Scan(&titleID)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return titleID.Int64, nil
+}
+
 // --- Subtitles (read-only) -------------------------------------------------
 
 // subtitleColumns is the shared SELECT list / scan order for subtitle rows.
@@ -794,10 +816,11 @@ func (s *Store) UpsertGoogleUser(ctx context.Context, id *googleIdentity) (*User
 func (s *Store) UserByID(ctx context.Context, id int64) (*User, error) {
 	var u User
 	var email, name, avatar sql.NullString
+	var planExpires sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, email, name, avatar_url, plan
+		SELECT id, email, name, avatar_url, plan, plan_expires_at
 		FROM users WHERE id = ? AND is_blocked = 0`, id).
-		Scan(&u.ID, &email, &name, &avatar, &u.Plan)
+		Scan(&u.ID, &email, &name, &avatar, &u.Plan, &planExpires)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -807,12 +830,33 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*User, error) {
 	u.Email = email.String
 	u.Name = name.String
 	u.AvatarURL = avatar.String
+	if planExpires.Valid {
+		t := planExpires.Time
+		u.PlanExpiresAt = &t
+	}
 
 	u.SavedIDs, err = s.SavedTitleIDs(ctx, u.ID)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
+}
+
+// HasTitleUnlock reports whether this user has bought the permanent 4K unlock
+// for one title. Only consulted when a paid-gated source is actually on the
+// page, so free 720p traffic never pays for it.
+func (s *Store) HasTitleUnlock(ctx context.Context, userID, titleID int64) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM user_title_unlocks WHERE user_id = ? AND title_id = ?`,
+		userID, titleID).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // SavedTitleIDs is the set of title ids this user has saved, used to pre-mark
