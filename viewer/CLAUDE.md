@@ -228,6 +228,17 @@ Flat single `main` package.
     free instead of tracking and re-checking a pending set. Only ERC-20
     stablecoins are watched: a native ETH/BNB transfer emits no log, so
     `eth_getLogs` cannot see it.
+  - **A chain can look healthy while crediting nothing.** The cursor advances off
+    `eth_blockNumber`, which free RPC endpoints serve happily even when they
+    refuse `eth_getLogs` — publicnode answers Arbitrum log queries with "Archive
+    requests require a personal token" beyond ~20 blocks of the tip, and Arbitrum
+    mints blocks ~4x a second, so every scan is "archive". This shipped to
+    production on 2026-09-12 and was caught only by reading the container log.
+    **When adding or repointing a chain, test `eth_getLogs` at `evmScanChunk`
+    width, not just `eth_blockNumber`**, and watch for `billing: scan <chain>:`
+    lines afterwards. A stuck `billing_chain_cursors` row is the other tell —
+    the cursor is deliberately not advanced past a failed read, so nothing is
+    silently skipped, but nothing is credited either.
   - **Idempotency lives in one place**: `SettleInvoice`'s `AND status = 'pending'`
     guard. A repeated observation, a restart mid-settle and a rewound cursor all
     collapse to zero rows affected. Do not "simplify" it away.

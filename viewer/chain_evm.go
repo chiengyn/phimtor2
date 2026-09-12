@@ -29,6 +29,13 @@ const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4
 // evmScanChunk bounds one Scan call's block range. Public RPC endpoints cap how
 // wide an eth_getLogs span may be, and a cold start would otherwise ask for
 // millions of blocks and simply error.
+//
+// Before adding or changing a chain's RPC, test eth_getLogs at THIS width, not
+// just eth_blockNumber. Free endpoints commonly serve the cheap call and refuse
+// the log query — as an archive-token requirement or a hard range cap (1rpc.io
+// allows 50 blocks) — and that failure is invisible from the outside: the cursor
+// still advances off eth_blockNumber, so the chain looks alive while crediting
+// nothing. BILLING_EVM_RPC_<CHAIN> exists to point a chain at a paid provider.
 const evmScanChunk = 2000
 
 type evmToken struct {
@@ -71,7 +78,13 @@ var evmChainDefs = map[string]evmChainDef{
 		},
 	},
 	"arbitrum": {
-		Label: "Arbitrum One", ChainID: 42161, RPC: "https://arbitrum-one-rpc.publicnode.com", MinConf: 5,
+		// NOT publicnode: it serves eth_blockNumber fine but answers eth_getLogs
+		// with "Archive requests require a personal token" for anything more than
+		// ~20 blocks behind the tip. Arbitrum produces blocks roughly 4x a second,
+		// so every scan is "archive" by that definition and NO payment would ever
+		// be credited — while the chain still looked healthy, because the cursor
+		// advanced off eth_blockNumber. Verified in production, 2026-09-12.
+		Label: "Arbitrum One", ChainID: 42161, RPC: "https://arb1.arbitrum.io/rpc", MinConf: 5,
 		Tokens: []evmToken{
 			{"USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", 6},
 			{"USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", 6},
