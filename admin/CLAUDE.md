@@ -148,6 +148,41 @@ Flat single `main` package. Layers, in request order:
     Because this page carries no htmx, the action is a plain form POST + `303`
     modelled on the streamers dashboard, and each form posts `q`/`page` back so
     the redirect returns to the same list view rather than page 1.
+  - `GET /payments` (`payments.html`) — the **crypto-payment monitor**, and the
+    one admin page that reports on data the admin does not own: the viewer writes
+    `payment_invoices` (`0008`), this only SELECTs it. Read-only deliberately —
+    a "mark as paid" button would put a second writer on the settle path, able to
+    grant a paid entitlement no money paid for and to race the viewer's poller
+    for the same row. Gifts go through the comp on `/users` instead, which is why
+    they live in different columns.
+
+    Two halves. The **money** half is the totals strip (revenue all-time and over
+    30 days, pending/expired counts, conversion, plus the entitlements actually
+    in force — active passes, comps and title unlocks, counted from `users` /
+    `user_title_unlocks` rather than the ledger) and the paginated invoice table
+    (`?status=paid|pending|expired`, whitelisted in `invoiceStatuses` and never
+    interpolated). The **health** half exists because this subsystem fails
+    silently — it scans, advances cursors, logs nothing and credits nobody:
+    - *Tình trạng quét chain* reads `billing_chain_cursors` and flags any rail
+      whose cursor has not moved in `cursorStaleAfter` (10 min, against a 30s
+      default poll and chains producing blocks every few seconds). Note what the
+      page says out loud: a moving cursor only proves the RPC answers
+      `eth_blockNumber` — `eth_getLogs` is only called while an invoice is
+      pending, so crediting is not exercised by a quiet shop. That is exactly how
+      Arbitrum looked healthy while crediting nothing.
+    - *Địa chỉ nhận* groups the ledger by `pay_to`, newest use first, and checks
+      the shape of each. This is the detector for the YAML 1.1 incident (an
+      unquoted `0x` address read as an integer, five unpayable invoices, no error
+      anywhere). Two rules matter here. `PayToUse.Valid` is a deliberate small
+      duplicate of the viewer's `isEVMAddress`; do not "generalise" it into
+      *anything without an `0x` prefix belongs to another rail*, because the
+      decimal number this exists to catch has no prefix either — teach it Tron's
+      base58 `T…` shape specifically when that rail lands. And the banner fires
+      off `AddressFault`, which asks only whether the **most recently quoted**
+      address is malformed, not whether the ledger contains one: production
+      permanently holds those five bad rows, and an alarm that fired forever over
+      a fixed fault would be ignored by the time it mattered. Superseded bad
+      addresses stay visibly flagged in the table (`StaleAddresses`).
   - `GET /api/subtitles/search` (`?file=&query=&languages=&season=&episode=`) and
     `GET /api/subtitles/download` (`?file_id=`) — the live subtitle-provider proxy
     (`opensubtitles.go`, behind the `SubtitleProvider` interface so more providers
@@ -268,9 +303,10 @@ turned them into the live **time-based 4K pass**, which the viewer pushes forwar
 when a crypto invoice settles (a pass is an expiry on the user row, not a
 subscriptions table, so the per-request entitlement check needs no extra query).
 `0008` follows the same rule as `0007` — the admin declares the tables and
-reports on them at `GET /users`, the viewer is the only writer. Because the
-viewer writes these, **deploy the admin first** so the migration lands before a
-viewer that depends on it.
+reports on them (`GET /users` for the pass, `GET /payments` for the whole
+ledger), the viewer is the only writer. Because the viewer writes these,
+**deploy the admin first** so the migration lands before a viewer that depends on
+it.
 
 A new column the viewer should display must also be added to **`viewer/`'s** own
 `models.go`/`store.go` — the two services duplicate their query layers rather than

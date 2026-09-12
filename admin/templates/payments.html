@@ -1,0 +1,296 @@
+{{/* The crypto-payment monitor.
+
+     READ-ONLY on purpose. Every row here is written by the public VIEWER: it
+     opens an invoice when a visitor picks a plan and settles it when that
+     invoice's unique exact amount lands on-chain. The admin reports; it never
+     marks an invoice paid, because that would grant a paid entitlement no money
+     paid for and would race the viewer's poller for the same row. To give
+     somebody 4K for free, use "Tặng 4K" on /users — a comp is stored in
+     different columns precisely so gifts stay distinguishable from revenue.
+
+     The page has two halves. The money half (totals + ledger) answers "what
+     sold". The health half (rails + receive addresses) answers "would a payment
+     even be noticed", which is the question this system fails at SILENTLY: it
+     scans happily, advances its cursors, logs no errors, and credits nobody.
+     Both bugs that shipped on day one were of exactly that shape.
+
+     Plain <a> links and no htmx, like users.html — nothing here mutates. */}}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phimtor2 — Thanh toán</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0e1116; color: #e6edf3; line-height: 1.5;
+    }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 1180px; margin: 0 auto; padding: 1.5rem; }
+    a { color: #79c0ff; }
+    h2 { font-size: .95rem; margin: 2rem 0 .6rem; text-transform: uppercase; letter-spacing: .04em; color: #8b98a5; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82em; }
+
+    /* Alerts. Only rendered when something is actually wrong, so an empty page
+       stays quiet rather than crying wolf. */
+    .alert { padding: .7rem .9rem; border-radius: 10px; margin-top: 1rem; font-size: .9rem; border: 1px solid; }
+    .alert.bad { background: #2a141a; border-color: #5a2330; color: #ffb3ba; }
+    .alert.warn { background: #2b230f; border-color: #4d3f14; color: #f6d186; }
+    .alert.info { background: #11161d; border-color: #222b36; color: #8b98a5; }
+
+    /* Summary strip. */
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .6rem; margin-top: 1rem; }
+    .card { border: 1px solid #222b36; border-radius: 10px; background: #11161d; padding: .7rem .85rem; }
+    .card .k { font-size: .75rem; color: #8b98a5; }
+    .card .v { font-size: 1.35rem; font-weight: 700; margin-top: .1rem; }
+    .card .s { font-size: .75rem; color: #8b98a5; }
+    .card.revenue .v { color: #86efac; }
+
+    /* Tables. Wrapped in an overflow box so a narrow window scrolls the table
+       instead of the whole page. */
+    .tablewrap { overflow-x: auto; border: 1px solid #222b36; border-radius: 10px; background: #11161d; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th, td { text-align: left; padding: .55rem .7rem; white-space: nowrap; }
+    th { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: #8b98a5; border-bottom: 1px solid #222b36; font-weight: 600; }
+    tbody tr + tr td { border-top: 1px solid #1a212b; }
+    tbody tr:hover td { background: #151b24; }
+    td.wrap { white-space: normal; min-width: 15rem; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; }
+    .badge.paid { background: #0f2e1a; color: #86efac; }
+    .badge.pending { background: #2b230f; color: #f6d186; }
+    .badge.expired { background: #21262d; color: #8b98a5; }
+    .badge.stale { background: #2a141a; color: #ff8b94; }
+    .badge.live { background: #0f2e1a; color: #86efac; }
+
+    /* Status filter tabs. */
+    .tabs { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .6rem; }
+    .tabs a {
+      padding: .3rem .7rem; border-radius: 999px; border: 1px solid #303b48;
+      color: #c9d1d9; text-decoration: none; font-size: .82rem;
+    }
+    .tabs a:hover { background: #1f2733; }
+    .tabs a.current { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+    .empty { padding: 1.5rem; text-align: center; color: #8b98a5; font-size: .9rem; }
+
+    .pager { display: flex; gap: .3rem; align-items: center; justify-content: center; margin-top: 1.25rem; flex-wrap: wrap; }
+    .pager a, .pager span {
+      padding: .35rem .6rem; border-radius: 8px; border: 1px solid #303b48;
+      color: #c9d1d9; text-decoration: none; font-size: .85rem;
+    }
+    .pager a:hover { background: #1f2733; }
+    .pager .current { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .pager .disabled { opacity: .4; }
+    .pager .gap { border: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>💸 phimtor2 — Thanh toán</h1>
+    <span><a href="/users">Người dùng</a> · <a href="/">Danh sách phim</a></span>
+  </header>
+  <main>
+    <p class="muted">
+      Hoá đơn tiền mã hoá cho gói 4K. Trang này chỉ theo dõi, không sửa: mọi dòng ở đây
+      do trang công khai ghi khi người dùng đặt mua và khi khoản tiền đúng số lẻ được
+      ghi nhận trên chain. Muốn tặng 4K cho ai đó thì dùng “Tặng 4K” ở trang
+      <a href="/users">Người dùng</a>.
+    </p>
+
+    {{/* The two silent-failure alarms, shown only when they fire. */}}
+    {{ if .AddressFault }}
+    <div class="alert bad">
+      <b>Địa chỉ nhận đang dùng không hợp lệ.</b>
+      Hoá đơn tạo ra lúc này không ai trả được, và hệ thống sẽ không báo lỗi gì.
+      Kiểm tra <code>BILLING_EVM_ADDRESS</code> trong cấu hình deploy — giá trị 0x… phải được
+      đặt trong dấu ngoặc kép, nếu không YAML sẽ đọc nó thành một số nguyên. Xem bảng
+      “Địa chỉ nhận” bên dưới.
+    </div>
+    {{ end }}
+    {{ if gt .StaleCursors 0 }}
+    <div class="alert warn">
+      <b>{{ .StaleCursors }} chain đã ngừng quét.</b>
+      Con trỏ quét không nhích trong hơn 10 phút, trong khi các chain này sinh block vài giây một lần.
+      Nghĩa là bộ quét đã dừng, endpoint RPC đang lỗi, hoặc chain đó đã bị bỏ khỏi
+      <code>BILLING_EVM_CHAINS</code>. Hoá đơn mới sẽ không được ghi nhận trên chain đó.
+    </div>
+    {{ end }}
+
+    <div class="cards">
+      <div class="card revenue">
+        <div class="k">Đã thu</div>
+        <div class="v">{{ .Totals.PaidUSD }}</div>
+        <div class="s">{{ .Totals.PaidCount }} hoá đơn đã trả</div>
+      </div>
+      <div class="card">
+        <div class="k">30 ngày qua</div>
+        <div class="v">{{ .Totals.USD30d }}</div>
+        <div class="s">tính theo ngày thanh toán</div>
+      </div>
+      <div class="card">
+        <div class="k">Đang chờ trả</div>
+        <div class="v">{{ .Totals.PendingNow }}</div>
+        <div class="s">{{ .Totals.ExpiredCount }} đã hết hạn</div>
+      </div>
+      <div class="card">
+        <div class="k">Tỷ lệ chốt</div>
+        <div class="v">{{ .Totals.Conversion }}%</div>
+        <div class="s">trên {{ .Totals.Invoices }} hoá đơn</div>
+      </div>
+      <div class="card">
+        <div class="k">Gói 4K còn hiệu lực</div>
+        <div class="v">{{ .Totals.ActivePasses }}</div>
+        <div class="s">{{ .Totals.ActiveComps }} tài khoản được tặng</div>
+      </div>
+      <div class="card">
+        <div class="k">Phim đã mở khoá</div>
+        <div class="v">{{ .Totals.TitleUnlocks }}</div>
+        <div class="s">mở khoá vĩnh viễn theo phim</div>
+      </div>
+    </div>
+
+    <h2>Tình trạng quét chain</h2>
+    {{ if .Cursors }}
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Chain</th><th>Con trỏ quét</th><th>Nhích lần cuối</th><th>Tình trạng</th></tr>
+        </thead>
+        <tbody>
+          {{- range .Cursors }}
+          <tr>
+            <td><b>{{ .Label }}</b></td>
+            <td><code>{{ .Cursor }}</code></td>
+            <td>{{ .Age }} <span class="muted">({{ .UpdatedAt.Format "02/01 15:04" }})</span></td>
+            <td>{{ if .Stale }}<span class="badge stale">đã dừng</span>{{ else }}<span class="badge live">đang quét</span>{{ end }}</td>
+          </tr>
+          {{- end }}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">
+      Con trỏ nhích chỉ chứng minh RPC của chain còn trả lời. Nó <b>không</b> chứng minh
+      tiền sẽ được ghi nhận: việc đọc log giao dịch chỉ chạy khi đang có hoá đơn chờ trả,
+      nên đường ghi nhận thật sự chỉ được kiểm chứng bằng một lần trả tiền thật.
+    </p>
+    {{ else }}
+    <div class="tablewrap"><div class="empty">Chưa có chain nào ghi nhận tiến độ quét — bộ quét chưa từng chạy, hoặc chưa cấu hình <code>BILLING_EVM_CHAINS</code>.</div></div>
+    {{ end }}
+
+    <h2>Địa chỉ nhận</h2>
+    {{ if .PayTo }}
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Địa chỉ đã báo cho người mua</th><th class="num">Hoá đơn</th><th>Dùng lần cuối</th><th>Tình trạng</th></tr>
+        </thead>
+        <tbody>
+          {{/* Ordered by last use, so row 0 is the address in force. */}}
+          {{- range $i, $a := .PayTo }}
+          <tr>
+            <td><code>{{ $a.Address }}</code></td>
+            <td class="num">{{ $a.Invoices }}</td>
+            <td>{{ $a.LastUsed.Format "02/01/2006 15:04" }}</td>
+            <td>
+              {{- if eq $i 0 }}
+                {{- if $a.Valid }}<span class="badge live">đang dùng · hợp lệ</span>
+                {{- else }}<span class="badge stale">đang dùng · SAI ĐỊNH DẠNG</span>{{ end }}
+              {{- else if $a.Valid }}<span class="badge expired">đã thay thế</span>
+              {{- else }}<span class="badge expired">đã thay thế · sai định dạng</span>{{ end }}
+            </td>
+          </tr>
+          {{- end }}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">
+      Đối chiếu dòng đầu với <code>BILLING_EVM_ADDRESS</code> đang chạy: đó là địa chỉ đang thực sự
+      được báo cho người mua. Một địa chỉ sai vẫn tạo hoá đơn bình thường và không bao giờ báo lỗi.
+      {{ if gt .StaleAddresses 0 }}Các dòng sau là dấu vết của sự cố cũ đã được thay thế, nên không
+      bị báo động ở đầu trang.{{ end }}
+    </p>
+    {{ else }}
+    <div class="tablewrap"><div class="empty">Chưa có hoá đơn nào nên chưa có địa chỉ nào được báo ra.</div></div>
+    {{ end }}
+
+    <h2>Sổ hoá đơn</h2>
+    <div class="tabs">
+      <a href="/payments" {{ if .StatusIs "" }}class="current"{{ end }}>Tất cả</a>
+      <a href="/payments?status=paid" {{ if .StatusIs "paid" }}class="current"{{ end }}>Đã thanh toán</a>
+      <a href="/payments?status=pending" {{ if .StatusIs "pending" }}class="current"{{ end }}>Đang chờ</a>
+      <a href="/payments?status=expired" {{ if .StatusIs "expired" }}class="current"{{ end }}>Hết hạn</a>
+    </div>
+
+    {{ if .Invoices }}
+    <p class="muted">{{ .Total }} hoá đơn.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Tạo lúc</th>
+            <th>Người mua</th>
+            <th>Sản phẩm</th>
+            <th class="num">Giá</th>
+            <th>Số tiền chờ nhận</th>
+            <th>Chain</th>
+            <th>Trạng thái</th>
+            <th>Giao dịch</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{- range .Invoices }}
+          <tr>
+            <td>{{ .CreatedAt.Format "02/01 15:04" }}</td>
+            <td class="wrap">
+              <div>{{ .Buyer }}</div>
+              <div class="muted"><code>{{ .ShortRef }}</code></div>
+            </td>
+            <td class="wrap">{{ .Product }}</td>
+            <td class="num">{{ .USD }}</td>
+            <td><code>{{ .Amount }}</code></td>
+            <td>
+              {{ .SettledChain }}
+              {{ if .ChainSwitched }}<div class="muted">báo giá trên {{ .QuotedChain }}</div>{{ end }}
+            </td>
+            <td>
+              <span class="badge {{ .StatusClass }}">{{ .StatusLabel }}</span>
+              {{ if .PaidAt }}<div class="muted">{{ .PaidAt.Format "02/01 15:04" }}</div>{{ end }}
+            </td>
+            <td>
+              {{/* An explorer link needs a chain this build knows about; an
+                   unknown one still shows the hash, just not as a link. */}}
+              {{ if .TxHash }}
+                {{ if .ExplorerURL }}<a href="{{ .ExplorerURL }}" target="_blank" rel="noopener noreferrer"><code>{{ .ShortTx }}</code></a>
+                {{ else }}<code>{{ .ShortTx }}</code>{{ end }}
+              {{ else }}
+                <span class="muted">—</span>
+              {{ end }}
+            </td>
+          </tr>
+          {{- end }}
+        </tbody>
+      </table>
+    </div>
+    {{ else }}
+    <div class="tablewrap"><div class="empty">
+      {{ if .StatusIs "" }}Chưa có hoá đơn nào. Chưa ai đặt mua gói 4K.{{ else }}Không có hoá đơn nào ở trạng thái này.{{ end }}
+    </div></div>
+    {{ end }}
+
+    {{ with .Pager }}{{ if .Show }}
+    <nav class="pager" aria-label="Phân trang">
+      {{ if .PrevURL }}<a href="{{ .PrevURL }}" rel="prev">‹ Trước</a>{{ else }}<span class="disabled">‹ Trước</span>{{ end }}
+      {{ range .Links }}{{ if .Gap }}<span class="gap">…</span>{{ else if .Current }}<span class="current" aria-current="page">{{ .Num }}</span>{{ else }}<a href="{{ .URL }}">{{ .Num }}</a>{{ end }}{{ end }}
+      {{ if .NextURL }}<a href="{{ .NextURL }}" rel="next">Sau ›</a>{{ else }}<span class="disabled">Sau ›</span>{{ end }}
+    </nav>
+    {{ end }}{{ end }}
+  </main>
+</body>
+</html>

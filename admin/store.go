@@ -1288,3 +1288,171 @@ func (s *Store) SetUserComp(ctx context.Context, userID int64, until *time.Time)
 		`UPDATE users SET comp_expires_at = ?, comp_granted_at = NOW() WHERE id = ?`, *until, userID)
 	return err
 }
+
+// --- Billing, read-only -------------------------------------------------------
+//
+// Everything below is SELECT only, and must stay that way. The viewer is the
+// sole writer of payment_invoices / user_title_unlocks / billing_chain_cursors
+// (migrations/0008_billing.sql declares them here because the admin owns the
+// schema, not because it owns the data). The admin reports on them at
+// GET /payments; writing one from here would put a second writer on the settle
+// path, racing the poller for the same row. Gifts go through SetUserComp.
+
+// invoiceStatuses are the filter values the payments monitor accepts. The filter
+// is matched against this set and never interpolated into SQL.
+var invoiceStatuses = map[string]bool{"paid": true, "pending": true, "expired": true}
+
+// invoiceStatusWhere builds the status filter. An unknown or empty status
+// matches everything, so a hand-edited query string degrades to "all" rather
+// than to an error.
+func invoiceStatusWhere(status string) (string, []any) {
+	if !invoiceStatuses[status] {
+		return "", nil
+	}
+	return " WHERE i.status = ?", []any{status}
+}
+
+// CountInvoices is how many invoices match the (optional) status filter.
+func (s *Store) CountInvoices(ctx context.Context, status string) (int, error) {
+	where, args := invoiceStatusWhere(status)
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM payment_invoices i`+where, args...).Scan(&n)
+	return n, err
+}
+
+// ListInvoices returns one page of invoices, newest first, each with the buyer
+// and (for a title unlock) the film it bought. Both joins are LEFT: the title FK
+// is ON DELETE SET NULL precisely so a receipt outlives the catalog row, and an
+// INNER join would make those purchases vanish from the ledger.
+func (s *Store) ListInvoices(ctx context.Context, status string, limit, offset int) ([]Invoice, error) {
+	where, args := invoiceStatusWhere(status)
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.id, i.ref, i.user_id, i.kind, i.plan_code, i.title_id, i.amount_usd_cents,
+		       i.chain, i.pay_to, i.pay_amount, i.token, i.status, i.received, i.paid_chain,
+		       i.tx_hash, i.expires_at, i.paid_at, i.created_at,
+		       COALESCE(u.email, ''), COALESCE(u.name, ''), COALESCE(t.title, '')
+		FROM payment_invoices i
+		LEFT JOIN users  u ON u.id = i.user_id
+		LEFT JOIN titles t ON t.id = i.title_id`+where+`
+		ORDER BY i.created_at DESC
+		LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Invoice
+	for rows.Next() {
+		var inv Invoice
+		var titleID sql.NullInt64
+		var paidAt sql.NullTime
+		if err := rows.Scan(&inv.ID, &inv.Ref, &inv.UserID, &inv.Kind, &inv.PlanCode,
+			&titleID, &inv.AmountUSDCents, &inv.Chain, &inv.PayTo, &inv.PayAmount,
+			&inv.Token, &inv.Status, &inv.Received, &inv.PaidChain, &inv.TxHash,
+			&inv.ExpiresAt, &paidAt, &inv.CreatedAt,
+			&inv.UserEmail, &inv.UserName, &inv.TitleName); err != nil {
+			return nil, err
+		}
+		if titleID.Valid {
+			inv.TitleID = &titleID.Int64
+		}
+		if paidAt.Valid {
+			t := paidAt.Time
+			inv.PaidAt = &t
+		}
+		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
+// PaymentTotals summarises the ledger and the entitlements currently in force.
+// Two queries because they are two different questions: the first counts what
+// the ledger recorded, the second what is live right now.
+//
+// Every aggregate is wrapped in COALESCE because SUM() over an empty table is
+// NULL, and this table is empty until the first sale.
+func (s *Store) PaymentTotals(ctx context.Context) (PaymentTotals, error) {
+	var t PaymentTotals
+	// Every SUM is CAST to SIGNED, not merely COALESCEd. SUM() returns DECIMAL in
+	// both MySQL and MariaDB, the driver hands a DECIMAL back as text, and text
+	// with a fractional part will not scan into an int. The CAST makes the wire
+	// format an integer regardless of how the server chose to type the sum.
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*),
+		       CAST(COALESCE(SUM(status = 'paid'), 0) AS SIGNED),
+		       CAST(COALESCE(SUM(CASE WHEN status = 'paid'
+		                             THEN amount_usd_cents ELSE 0 END), 0) AS SIGNED),
+		       CAST(COALESCE(SUM(CASE WHEN status = 'paid'
+		                              AND paid_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+		                             THEN amount_usd_cents ELSE 0 END), 0) AS SIGNED),
+		       CAST(COALESCE(SUM(status = 'pending' AND expires_at > NOW()), 0) AS SIGNED),
+		       CAST(COALESCE(SUM(status = 'expired'), 0) AS SIGNED)
+		FROM payment_invoices`).Scan(
+		&t.Invoices, &t.PaidCount, &t.PaidCents, &t.Cents30d, &t.PendingNow, &t.ExpiredCount)
+	if err != nil {
+		return PaymentTotals{}, err
+	}
+	err = s.db.QueryRowContext(ctx, `
+		SELECT (SELECT COUNT(*) FROM users WHERE plan_expires_at > NOW()),
+		       (SELECT COUNT(*) FROM users WHERE comp_expires_at > NOW()),
+		       (SELECT COUNT(*) FROM user_title_unlocks)`).Scan(
+		&t.ActivePasses, &t.ActiveComps, &t.TitleUnlocks)
+	if err != nil {
+		return PaymentTotals{}, err
+	}
+	return t, nil
+}
+
+// ListChainCursors returns every chain the viewer's poller has ever recorded
+// progress for, most recently advanced first. A chain that disappeared from
+// BILLING_EVM_CHAINS keeps its row and simply goes stale, which is the point —
+// silently dropping a rail is exactly what this page should make visible.
+func (s *Store) ListChainCursors(ctx context.Context) ([]ChainCursor, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT chain, scan_cursor, updated_at
+		FROM billing_chain_cursors
+		ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ChainCursor
+	for rows.Next() {
+		var c ChainCursor
+		if err := rows.Scan(&c.Chain, &c.Cursor, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ListPayToAddresses returns the receive addresses the ledger has actually
+// quoted to buyers, most recent first. See PayToUse for why this is worth a
+// panel of its own: a misconfigured address fails silently, and this is where it
+// becomes obvious.
+func (s *Store) ListPayToAddresses(ctx context.Context, limit int) ([]PayToUse, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT pay_to, COUNT(*), MAX(created_at)
+		FROM payment_invoices
+		GROUP BY pay_to
+		ORDER BY MAX(created_at) DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PayToUse
+	for rows.Next() {
+		var p PayToUse
+		if err := rows.Scan(&p.Address, &p.Invoices, &p.LastUsed); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

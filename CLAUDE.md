@@ -10,7 +10,7 @@ viewer) share a single MySQL database; the streamer(s) and manager stand alone.
 
 | Module | Purpose | Default port | Storage | Detail |
 |--------|---------|--------------|---------|--------|
-| **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard + featured-titles curation | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
+| **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard + featured-titles curation + payment monitor | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
 | **`viewer/`** | Public browse/discovery + watch UI + Google sign-in | `8082` | MySQL (read-only catalog; writes `users`/`user_bookmarks`) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
 | **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage); **N interchangeable instances** | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
 | **`manager/`** | Control plane that load-balances torrents across streamers (token-gated; public host + internal alias) | `8083` | enrollment JSON file | [`manager/CLAUDE.md`](manager/CLAUDE.md) |
@@ -45,7 +45,10 @@ any module.
   `admin/migrations/` on startup (`admin/store.go`) and is the only writer of the
   catalog. It owns the account tables too and writes exactly **two columns**
   across them — `users.comp_expires_at` / `users.comp_granted_at`, the
-  admin-granted 4K unlock (`0009_comp_premium.sql`) — and nothing else there.
+  admin-granted 4K unlock (`0009_comp_premium.sql`) — and nothing else there. It
+  *reads* more than it writes: `GET /payments` reports on the billing ledger the
+  viewer writes, with no write path of its own (a "mark as paid" button there
+  would be a second writer of the settle path).
 - **`viewer/` never migrates** and assumes the tables already exist
   (`viewer/main.go`). It only *reads* the catalog — with one exception: it is the
   sole **writer** of the tables the admin declares but never touches. Those are

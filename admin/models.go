@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"html/template"
 	"strings"
 	"time"
 )
@@ -223,4 +225,335 @@ func (u User) Initial() string {
 		return strings.ToUpper(string(r))
 	}
 	return "?"
+}
+
+// --- Billing, read-only -------------------------------------------------------
+//
+// The VIEWER owns these rows: it opens an invoice when a visitor picks a plan
+// and settles it when that invoice's unique exact amount lands on-chain
+// (migrations/0008_billing.sql). This service only ever READS them, for the
+// /payments monitor.
+//
+// Keep it that way. A "mark as paid" button here would make the admin a second
+// writer of the settle path — able to grant a paid entitlement no money paid
+// for, and able to race the poller for the same row. When the intent is to give
+// somebody 4K for free, that is what the comp is for (SetUserComp): it is
+// recorded in different columns precisely so revenue stays distinguishable from
+// gifts.
+
+// Invoice is one payment attempt. Money amounts come in two shapes and neither
+// is a float: AmountUSDCents is the price in integer cents, and PayAmount /
+// Received are the on-chain token amounts as DECIMAL(36,18) rendered to strings
+// (18 decimals does not fit a float64 without losing the dust that identifies
+// the payment). Only ever display them — never parse and re-emit.
+type Invoice struct {
+	ID             int64
+	Ref            string // opaque public id used in the viewer's URLs
+	UserID         int64
+	Kind           string // "pass" | "title"
+	PlanCode       string
+	TitleID        *int64
+	AmountUSDCents int
+	Chain          string // the chain the buyer was OFFERED
+	PayTo          string
+	PayAmount      string
+	Token          string
+	Status         string // "pending" | "paid" | "expired"
+	Received       string
+	PaidChain      string // where it actually landed, may differ from Chain
+	TxHash         string
+	ExpiresAt      time.Time
+	PaidAt         *time.Time
+	CreatedAt      time.Time
+	// Joined in for display — the invoice row itself holds only ids.
+	UserEmail string
+	UserName  string
+	TitleName string
+}
+
+func (i Invoice) Paid() bool    { return i.Status == "paid" }
+func (i Invoice) Pending() bool { return i.Status == "pending" }
+
+// Expired covers both an invoice the poller has already marked expired and one
+// that is still 'pending' but out of time (the poller flips those on its next
+// tick, so for up to one interval the row lags reality).
+func (i Invoice) Expired() bool {
+	return i.Status == "expired" || (i.Pending() && i.ExpiresAt.Before(time.Now()))
+}
+
+// StatusClass is the badge CSS class, and StatusLabel its Vietnamese text.
+func (i Invoice) StatusClass() string {
+	switch {
+	case i.Paid():
+		return "paid"
+	case i.Expired():
+		return "expired"
+	}
+	return "pending"
+}
+
+func (i Invoice) StatusLabel() string {
+	switch {
+	case i.Paid():
+		return "Đã thanh toán"
+	case i.Status == "expired":
+		return "Hết hạn"
+	case i.Expired():
+		return "Hết hạn (chờ dọn)"
+	}
+	return "Đang chờ"
+}
+
+// USD renders the price. Integer cents, so no rounding happens here.
+func (i Invoice) USD() string {
+	return fmt.Sprintf("$%d.%02d", i.AmountUSDCents/100, i.AmountUSDCents%100)
+}
+
+// Amount is the exact token amount owed, with the trailing zeros DECIMAL(36,18)
+// pads it with removed. The dust at the end is not noise — it is what identifies
+// this invoice among every other one sharing the receive address — so it is
+// deliberately shown in full rather than rounded for looks.
+func (i Invoice) Amount() string { return trimDecimal(i.PayAmount) + " " + i.Token }
+
+// Product describes what was bought. A title unlock names the film when the
+// title still exists (the FK is ON DELETE SET NULL, so a purchase outlives the
+// catalog row and must still render).
+func (i Invoice) Product() string {
+	if i.Kind == "title" {
+		if i.TitleName != "" {
+			return "Mở khoá vĩnh viễn: " + i.TitleName
+		}
+		return "Mở khoá vĩnh viễn (phim đã bị xoá)"
+	}
+	switch i.PlanCode {
+	case "pass30":
+		return "Gói 30 ngày"
+	case "pass365":
+		return "Gói 1 năm"
+	}
+	if i.PlanCode != "" {
+		return i.PlanCode
+	}
+	return "Gói 4K"
+}
+
+// Buyer is who paid, falling back through name → email → user id so the column
+// is never blank.
+func (i Invoice) Buyer() string {
+	if i.UserName != "" {
+		return i.UserName
+	}
+	if i.UserEmail != "" {
+		return i.UserEmail
+	}
+	return fmt.Sprintf("#%d", i.UserID)
+}
+
+// SettledChain is where the money actually arrived, which is the interesting
+// one: an invoice quoted on Base may legitimately be paid on BSC, because every
+// EVM chain shares one receive address and one amount-reservation namespace.
+func (i Invoice) SettledChain() string {
+	if i.PaidChain != "" {
+		return chainLabel(i.PaidChain)
+	}
+	return chainLabel(i.Chain)
+}
+
+// QuotedChain is the chain the invoice was quoted on, labelled — shown next to
+// SettledChain only when the two differ.
+func (i Invoice) QuotedChain() string { return chainLabel(i.Chain) }
+
+// ChainSwitched reports whether the buyer paid on a different chain than the one
+// they were quoted. Harmless by design, but worth showing rather than hiding.
+func (i Invoice) ChainSwitched() bool {
+	return i.PaidChain != "" && i.PaidChain != i.Chain
+}
+
+// ShortTx is the transaction hash abbreviated for a table cell.
+func (i Invoice) ShortTx() string { return shortHex(i.TxHash) }
+
+// ExplorerURL links the settling transaction to a block explorer, empty when
+// there is no hash yet or the chain is unknown to the table below. It is
+// template.URL because the value is built here from a fixed map plus a hash the
+// scanner produced, not from anything a visitor can set.
+func (i Invoice) ExplorerURL() template.URL {
+	if i.TxHash == "" {
+		return ""
+	}
+	chain := i.PaidChain
+	if chain == "" {
+		chain = i.Chain
+	}
+	base, ok := chainExplorers[chain]
+	if !ok {
+		return ""
+	}
+	return template.URL(base + i.TxHash)
+}
+
+// ShortRef abbreviates the 32-char public invoice ref.
+func (i Invoice) ShortRef() string {
+	if len(i.Ref) <= 10 {
+		return i.Ref
+	}
+	return i.Ref[:10] + "…"
+}
+
+// PaymentTotals is the summary strip at the top of the monitor: the ledger's
+// own numbers plus what is actually live right now, which are different
+// questions. Revenue is in integer cents.
+type PaymentTotals struct {
+	Invoices     int
+	PaidCount    int
+	PaidCents    int
+	Cents30d     int
+	PendingNow   int
+	ExpiredCount int
+	// ActivePasses / ActiveComps / TitleUnlocks are the entitlements in force,
+	// counted from users and user_title_unlocks rather than the ledger — a pass
+	// bought last year is revenue but not an active entitlement.
+	ActivePasses int
+	ActiveComps  int
+	TitleUnlocks int
+}
+
+func (t PaymentTotals) PaidUSD() string { return usdFromCents(t.PaidCents) }
+func (t PaymentTotals) USD30d() string  { return usdFromCents(t.Cents30d) }
+func (t PaymentTotals) NoRevenue() bool { return t.PaidCount == 0 }
+func (t PaymentTotals) Conversion() int {
+	if t.Invoices == 0 {
+		return 0
+	}
+	return t.PaidCount * 100 / t.Invoices
+}
+
+// ChainCursor is how far one chain's scan has got, straight out of
+// billing_chain_cursors. It is the closest thing to a liveness signal for the
+// viewer's poller that this database holds.
+type ChainCursor struct {
+	Chain     string
+	Cursor    string
+	UpdatedAt time.Time
+}
+
+func (c ChainCursor) Label() string { return chainLabel(c.Chain) }
+
+// cursorStaleAfter is when a motionless cursor stops being normal. Every chain
+// on offer produces blocks every few seconds and the poller's default interval
+// is 30s, so ten minutes without movement means the poller is stopped, the RPC
+// endpoint is failing, or the chain was removed from BILLING_EVM_CHAINS.
+const cursorStaleAfter = 10 * time.Minute
+
+func (c ChainCursor) Stale() bool { return time.Since(c.UpdatedAt) > cursorStaleAfter }
+
+// Age is how long since the cursor last moved, in words.
+func (c ChainCursor) Age() string { return shortDuration(time.Since(c.UpdatedAt)) }
+
+// PayToUse is one receive address the ledger has actually quoted to buyers, with
+// how many invoices carry it.
+//
+// This exists because of a specific production failure: Kamal's YAML 1.1 parser
+// read the unquoted 0x… address as an integer, and four invoices went out asking
+// buyers to pay a 48-digit decimal number that no wallet could send to. Nothing
+// errored — the poller scanned happily against a garbage log filter. Surfacing
+// the addresses the ledger is really using, and flagging any that is not a valid
+// address, turns that whole class of silent misconfiguration into something
+// visible at a glance.
+type PayToUse struct {
+	Address  string
+	Invoices int
+	LastUsed time.Time
+}
+
+// Valid reports whether this address is a payable EVM one: 0x plus 40 hex
+// digits. Deliberately a small duplicate of the viewer's isEVMAddress, because
+// the two services share no package and a monitor that imported the thing it
+// monitors would be worse.
+//
+// It must NOT be relaxed into "anything without an 0x prefix is some other
+// rail's format" — the failure this catches, a decimal number where the address
+// should be, has no 0x prefix either. When a non-EVM rail (Tron's base58 T…)
+// lands, teach this about that shape specifically.
+func (p PayToUse) Valid() bool {
+	if len(p.Address) != 42 || !strings.HasPrefix(p.Address, "0x") {
+		return false
+	}
+	for _, r := range p.Address[2:] {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// chainLabel turns a stored chain key into its display name. A key this map has
+// never heard of is shown as-is rather than hidden, so adding a rail to the
+// viewer without touching the admin degrades to "bsc" instead of a blank cell.
+func chainLabel(chain string) string {
+	if l, ok := chainLabels[chain]; ok {
+		return l
+	}
+	if chain == "" {
+		return "—"
+	}
+	return chain
+}
+
+var chainLabels = map[string]string{
+	"ethereum": "Ethereum",
+	"base":     "Base",
+	"arbitrum": "Arbitrum One",
+	"bsc":      "BNB Smart Chain",
+	"polygon":  "Polygon",
+	"tron":     "Tron",
+}
+
+// chainExplorers maps a chain key to its explorer's transaction URL prefix.
+var chainExplorers = map[string]string{
+	"ethereum": "https://etherscan.io/tx/",
+	"base":     "https://basescan.org/tx/",
+	"arbitrum": "https://arbiscan.io/tx/",
+	"bsc":      "https://bscscan.com/tx/",
+	"polygon":  "https://polygonscan.com/tx/",
+	"tron":     "https://tronscan.org/#/transaction/",
+}
+
+func usdFromCents(cents int) string {
+	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
+}
+
+// trimDecimal drops the zero padding DECIMAL(36,18) returns ("5.000100000..." ->
+// "5.0001"), by string surgery only. Parsing these into a float to tidy them up
+// would corrupt the very digits that identify an invoice.
+func trimDecimal(s string) string {
+	if !strings.Contains(s, ".") {
+		return s
+	}
+	s = strings.TrimRight(s, "0")
+	return strings.TrimSuffix(s, ".")
+}
+
+// shortHex abbreviates a long hash for a table cell, keeping both ends so it can
+// still be eyeballed against an explorer.
+func shortHex(s string) string {
+	if len(s) <= 18 {
+		return s
+	}
+	return s[:10] + "…" + s[len(s)-6:]
+}
+
+// shortDuration renders an age in Vietnamese, coarsely — this is for "is the
+// poller alive", where minutes matter and seconds do not.
+func shortDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "vừa xong"
+	case d < time.Hour:
+		return fmt.Sprintf("%d phút trước", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d giờ trước", int(d.Hours()))
+	}
+	return fmt.Sprintf("%d ngày trước", int(d.Hours()/24))
 }

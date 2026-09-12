@@ -186,6 +186,7 @@ func (s *Server) setupRouter() {
 	r.Get("/featured", s.handleFeaturedPage)
 	r.Get("/users", s.handleUsersPage)
 	r.Post("/users/{id}/comp", s.handleSetUserComp)
+	r.Get("/payments", s.handlePaymentsPage)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
 	r.Get("/videos/{id}/play", s.handlePlayVideo)
@@ -642,6 +643,132 @@ func usersListURL(q, page string) string {
 		return "/users"
 	}
 	return "/users?" + v.Encode()
+}
+
+// paymentsPageSize is how many invoices one /payments page holds. Denser than
+// the catalogue's 24 because these are table rows, not poster cards, and the
+// question the page answers ("what has been happening") wants more of them in
+// one view.
+const paymentsPageSize = 50
+
+// paymentsPage is the billing monitor: the ledger the VIEWER writes, reported on
+// here. Read-only by design — see the note above store.CountInvoices.
+type paymentsPage struct {
+	Invoices []Invoice
+	Totals   PaymentTotals
+	// Cursors and PayTo are the health half of the page rather than the money
+	// half: how far each chain's scan has got, and which receive addresses the
+	// ledger is really quoting. Both exist because this system's failures are
+	// silent — it scans happily and credits nobody.
+	Cursors []ChainCursor
+	PayTo   []PayToUse
+	// Status is the active filter ("" for all); Page the clamped page shown.
+	Status string
+	Total  int
+	Page   int
+	Pager  pager
+}
+
+// StatusIs reports whether the filter is set to s, for marking the active tab.
+func (p paymentsPage) StatusIs(s string) bool { return p.Status == s }
+
+// StaleCursors is how many rails have stopped advancing, so the page can say so
+// at the top instead of relying on the admin to read the table.
+func (p paymentsPage) StaleCursors() int {
+	n := 0
+	for _, c := range p.Cursors {
+		if c.Stale() {
+			n++
+		}
+	}
+	return n
+}
+
+// CurrentPayTo is the address the ledger quoted most recently, which is the one
+// in force — PayTo comes back ordered by last use. Nil before the first invoice.
+func (p paymentsPage) CurrentPayTo() *PayToUse {
+	if len(p.PayTo) == 0 {
+		return nil
+	}
+	return &p.PayTo[0]
+}
+
+// AddressFault reports whether the address currently being quoted is malformed,
+// meaning invoices going out right now cannot be paid by anybody.
+//
+// It deliberately asks about the CURRENT address rather than counting every
+// malformed one in the ledger. The ledger permanently holds five invoices
+// carrying the decimal number YAML 1.1 made of the receive address, and an alarm
+// that fired forever over a fault already fixed would be ignored by the time it
+// mattered. Superseded addresses stay visibly flagged in the table instead.
+func (p paymentsPage) AddressFault() bool {
+	cur := p.CurrentPayTo()
+	return cur != nil && !cur.Valid()
+}
+
+// StaleAddresses is how many superseded addresses are malformed — history worth
+// showing, not an alarm.
+func (p paymentsPage) StaleAddresses() int {
+	n := 0
+	for _, a := range p.PayTo[min(len(p.PayTo), 1):] {
+		if !a.Valid() {
+			n++
+		}
+	}
+	return n
+}
+
+// loadPaymentsPage fetches one page of the invoice ledger plus the summary and
+// rail-health panels. Mirrors loadUsersPage: plain page URLs, since this page
+// carries no htmx either.
+func (s *Server) loadPaymentsPage(ctx context.Context, status string, page int) (paymentsPage, error) {
+	if !invoiceStatuses[status] {
+		status = "" // unknown filter means "all", not an error
+	}
+	total, err := s.store.CountInvoices(ctx, status)
+	if err != nil {
+		return paymentsPage{}, err
+	}
+	pages := totalPages(total, paymentsPageSize)
+	page = clampPage(page, pages)
+	invoices, err := s.store.ListInvoices(ctx, status, paymentsPageSize, (page-1)*paymentsPageSize)
+	if err != nil {
+		return paymentsPage{}, err
+	}
+	totals, err := s.store.PaymentTotals(ctx)
+	if err != nil {
+		return paymentsPage{}, err
+	}
+	cursors, err := s.store.ListChainCursors(ctx)
+	if err != nil {
+		return paymentsPage{}, err
+	}
+	payTo, err := s.store.ListPayToAddresses(ctx, 8)
+	if err != nil {
+		return paymentsPage{}, err
+	}
+	return paymentsPage{
+		Invoices: invoices,
+		Totals:   totals,
+		Cursors:  cursors,
+		PayTo:    payTo,
+		Status:   status,
+		Total:    total,
+		Page:     page,
+		Pager: buildPager(page, pages, func(n int) template.URL {
+			return template.URL(fmt.Sprintf("/payments?page=%d&status=%s", n, url.QueryEscape(status)))
+		}),
+	}, nil
+}
+
+// handlePaymentsPage renders the crypto-payment monitor.
+func (s *Server) handlePaymentsPage(w http.ResponseWriter, r *http.Request) {
+	page, err := s.loadPaymentsPage(r.Context(), r.URL.Query().Get("status"), pageFromQuery(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	render(w, "payments.html", page)
 }
 
 // handleListFeatured returns the ordered featured-list fragment, re-fetched
