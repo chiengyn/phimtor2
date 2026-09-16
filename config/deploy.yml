@@ -64,6 +64,13 @@ env:
     SUBTITLE_STORAGE_DIR: /data/subtitles
     OPENSUBTITLES_USER_AGENT: phimtor2 v1.0
     SUBSOURCE_USER_AGENT: phimtor2 v1.0
+    # Automatic crawl schedule (minutes; 0 disables). Quoted so YAML keeps them
+    # strings; the fallbacks match the binary defaults so CI needs no Variables.
+    CRAWL_YTS_INTERVAL_MIN: "<%= ENV.fetch("CRAWL_YTS_INTERVAL_MIN", "720") %>"
+    CRAWL_YTS_LIMIT: "<%= ENV.fetch("CRAWL_YTS_LIMIT", "20") %>"
+    CRAWL_TOP_RATED_INTERVAL_MIN: "<%= ENV.fetch("CRAWL_TOP_RATED_INTERVAL_MIN", "2880") %>"
+    CRAWL_TOP_RATED_START_PAGE: "<%= ENV.fetch("CRAWL_TOP_RATED_START_PAGE", "1") %>"
+    CRAWL_TOP_RATED_END_PAGE: "<%= ENV.fetch("CRAWL_TOP_RATED_END_PAGE", "5") %>"
   secret:
     - ADMIN_PASSWORD
     - DB_PASSWORD

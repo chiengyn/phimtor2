@@ -24,11 +24,20 @@ type Config struct {
 	TMDBFallbackLang                   string
 	TMDBTranslationBackfillIntervalMin int
 
-	// YTSBaseURL is the base of YTS's movie API, used by the manually
-	// triggered crawl jobs (crawl.go) to discover movies/torrents. yts.mx
+	// YTSBaseURL is the base of YTS's movie API, used by the crawl jobs
+	// (crawl.go) to discover movies/torrents. yts.mx
 	// itself is dead (NXDOMAIN); the default points at a working mirror, but
 	// this rotates over time, so check it if crawling starts failing.
 	YTSBaseURL string
+
+	// Crawl schedule (crawl.go runSchedule). Each job also runs on its own
+	// interval (minutes) besides the manual trigger on /crawl; 0 disables that
+	// job's schedule. Scheduled runs never fetch subtitles.
+	CrawlYTSIntervalMin      int
+	CrawlYTSLimit            int
+	CrawlTopRatedIntervalMin int
+	CrawlTopRatedStartPage   int
+	CrawlTopRatedEndPage     int
 
 	// HTTP Basic auth. Password is env-only (a secret) and required.
 	AdminUser     string
@@ -92,6 +101,12 @@ func loadConfig() Config {
 
 		YTSBaseURL: envStr("YTS_BASE_URL", "https://movies-api.accel.li/api/v2"),
 
+		CrawlYTSIntervalMin:      envInt("CRAWL_YTS_INTERVAL_MIN", 12*60),
+		CrawlYTSLimit:            envInt("CRAWL_YTS_LIMIT", 20),
+		CrawlTopRatedIntervalMin: envInt("CRAWL_TOP_RATED_INTERVAL_MIN", 48*60),
+		CrawlTopRatedStartPage:   envInt("CRAWL_TOP_RATED_START_PAGE", 1),
+		CrawlTopRatedEndPage:     envInt("CRAWL_TOP_RATED_END_PAGE", 5),
+
 		AdminUser:     envStr("ADMIN_USER", "admin"),
 		AdminPassword: envStr("ADMIN_PASSWORD", ""),
 
@@ -128,6 +143,11 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.TMDBFallbackLang, "tmdb-fallback", cfg.TMDBFallbackLang, "Fallback TMDB language")
 	flag.IntVar(&cfg.TMDBTranslationBackfillIntervalMin, "tmdb-translation-backfill-interval-min", cfg.TMDBTranslationBackfillIntervalMin, "Minutes between localized metadata backfill items; 0 disables")
 	flag.StringVar(&cfg.YTSBaseURL, "yts-base-url", cfg.YTSBaseURL, "Base URL of YTS's movie API (used by the crawl jobs)")
+	flag.IntVar(&cfg.CrawlYTSIntervalMin, "crawl-yts-interval-min", cfg.CrawlYTSIntervalMin, "Minutes between scheduled YTS new-movies crawls; 0 disables")
+	flag.IntVar(&cfg.CrawlYTSLimit, "crawl-yts-limit", cfg.CrawlYTSLimit, "Number of newest YTS movies a scheduled crawl checks")
+	flag.IntVar(&cfg.CrawlTopRatedIntervalMin, "crawl-top-rated-interval-min", cfg.CrawlTopRatedIntervalMin, "Minutes between scheduled TMDB top-rated crawls; 0 disables")
+	flag.IntVar(&cfg.CrawlTopRatedStartPage, "crawl-top-rated-start-page", cfg.CrawlTopRatedStartPage, "First TMDB top-rated page a scheduled crawl imports")
+	flag.IntVar(&cfg.CrawlTopRatedEndPage, "crawl-top-rated-end-page", cfg.CrawlTopRatedEndPage, "Last TMDB top-rated page a scheduled crawl imports")
 	flag.StringVar(&cfg.AdminUser, "admin-user", cfg.AdminUser, "HTTP Basic auth user")
 	flag.StringVar(&cfg.ManagerInternalURL, "manager-url", cfg.ManagerInternalURL, "Base URL of the streamer manager (control plane)")
 	flag.IntVar(&cfg.HarvestIntervalMin, "harvest-interval-min", cfg.HarvestIntervalMin, "How often (minutes) to backfill .torrent files for magnet-only sources; 0 disables")

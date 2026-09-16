@@ -70,6 +70,13 @@ func main() {
 	harvester := newHarvester(store, manager, time.Duration(cfg.HarvestIntervalMin)*time.Minute)
 	go harvester.run(ctx)
 	go runTranslationBackfill(ctx, store, tmdb, time.Duration(cfg.TMDBTranslationBackfillIntervalMin)*time.Minute)
+	go server.crawler.runSchedule(ctx, crawlSchedule{
+		YTSInterval:       time.Duration(cfg.CrawlYTSIntervalMin) * time.Minute,
+		YTSLimit:          cfg.CrawlYTSLimit,
+		TopRatedInterval:  time.Duration(cfg.CrawlTopRatedIntervalMin) * time.Minute,
+		TopRatedStartPage: cfg.CrawlTopRatedStartPage,
+		TopRatedEndPage:   cfg.CrawlTopRatedEndPage,
+	})
 
 	go func() {
 		log.Printf("phimtor2-admin listening on http://%s", addr)

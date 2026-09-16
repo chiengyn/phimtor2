@@ -3,15 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"sort"
 	"sync"
 	"time"
 )
 
-// crawl.go runs the two catalog-discovery jobs the admin UI can trigger
-// manually (server.go's /api/crawl/* routes): pulling new releases from
-// YTS, and backfilling TMDB's top-rated list. Both end up importing through
+// crawl.go runs the two catalog-discovery jobs, triggered manually from the
+// admin UI (server.go's /api/crawl/* routes) and on a schedule (runSchedule):
+// pulling new releases from YTS, and backfilling TMDB's top-rated list. Both
+// end up importing through
 // importMovie, the shared core that upserts a title and adds any of its YTS
 // torrents not already stored.
 
@@ -114,6 +116,54 @@ func (c *crawler) StartTopRatedCrawl(startPage, endPage int, subOpts subtitleOpt
 		c.finish(&c.topRated, summary, err)
 	}()
 	return true
+}
+
+// crawlSchedule configures runSchedule. A non-positive interval disables
+// that job's schedule.
+type crawlSchedule struct {
+	YTSInterval       time.Duration
+	YTSLimit          int
+	TopRatedInterval  time.Duration
+	TopRatedStartPage int
+	TopRatedEndPage   int
+}
+
+// runSchedule starts both crawl jobs on their own interval until ctx is
+// cancelled. Nothing runs at startup — the first run is one interval in, so
+// deploys don't trigger crawls. A tick that finds the job already running
+// (e.g. started manually) is skipped. Scheduled runs never fetch subtitles.
+func (c *crawler) runSchedule(ctx context.Context, sched crawlSchedule) {
+	// A nil channel never fires, which is how a disabled job sits out the select.
+	var ytsC, topRatedC <-chan time.Time
+	if sched.YTSInterval > 0 {
+		t := time.NewTicker(sched.YTSInterval)
+		defer t.Stop()
+		ytsC = t.C
+		log.Printf("crawl schedule: YTS new movies every %s (limit %d)", sched.YTSInterval, sched.YTSLimit)
+	}
+	if sched.TopRatedInterval > 0 {
+		t := time.NewTicker(sched.TopRatedInterval)
+		defer t.Stop()
+		topRatedC = t.C
+		log.Printf("crawl schedule: TMDB top rated every %s (pages %d-%d)", sched.TopRatedInterval, sched.TopRatedStartPage, sched.TopRatedEndPage)
+	}
+	if ytsC == nil && topRatedC == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ytsC:
+			if !c.StartNewMoviesCrawl(sched.YTSLimit, subtitleOptions{}) {
+				log.Printf("crawl schedule: YTS new movies already running, skipped")
+			}
+		case <-topRatedC:
+			if !c.StartTopRatedCrawl(sched.TopRatedStartPage, sched.TopRatedEndPage, subtitleOptions{}) {
+				log.Printf("crawl schedule: TMDB top rated already running, skipped")
+			}
+		}
+	}
 }
 
 func (c *crawler) finish(status *CrawlStatus, summary string, err error) {

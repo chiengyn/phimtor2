@@ -52,6 +52,15 @@ unset).
 - TMDB: `TMDB_API_KEY`, `TMDB_LANGUAGE` (`vi-VN`), `TMDB_FALLBACK_LANGUAGE`
   (`en-US`), and `TMDB_TRANSLATION_BACKFILL_INTERVAL_MIN` (1; one existing title
   refreshed per interval, 0 disables the background backfill).
+- Crawl schedule (`crawl.go` `runSchedule`): the two catalog crawls on `/crawl`
+  also run on their own interval — `CRAWL_YTS_INTERVAL_MIN` (720, i.e. 12h;
+  checks the newest `CRAWL_YTS_LIMIT` = 20 YTS movies) and
+  `CRAWL_TOP_RATED_INTERVAL_MIN` (2880, i.e. 48h; TMDB top-rated pages
+  `CRAWL_TOP_RATED_START_PAGE`..`CRAWL_TOP_RATED_END_PAGE`, 1..5). `0` disables a
+  job's schedule. Nothing runs at boot (first run is one interval in, so deploys
+  don't crawl), a tick that finds the job already running (e.g. started manually)
+  is skipped, and scheduled runs never fetch subtitles. Runs go through the same
+  `Start*Crawl` as the buttons, so they show in the page's status.
 - MySQL: `MYSQL_DSN` (overrides the rest when set) or `DB_HOST`/`DB_PORT`/
   `DB_USER`/`DB_PASSWORD`/`DB_NAME`. The DSN is built with
   `parseTime=true&charset=utf8mb4` so dates scan into `time.Time` and Vietnamese
