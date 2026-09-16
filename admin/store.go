@@ -46,6 +46,59 @@ func NewStore(dsn string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+type translationBackfillItem struct {
+	ID     int64
+	TMDBID int
+	Type   string
+}
+
+// NextMissingTranslation returns one catalog item that has not yet received the
+// requested locale. One-at-a-time processing keeps TMDB traffic predictable,
+// especially for TV titles whose seasons require additional requests.
+func (s *Store) NextMissingTranslation(ctx context.Context, locale string, afterID int64) (*translationBackfillItem, error) {
+	var item translationBackfillItem
+	err := s.db.QueryRowContext(ctx, `
+		SELECT t.id, t.tmdb_id, t.type
+		FROM titles t
+		WHERE t.id > ? AND (
+			NOT EXISTS (
+				SELECT 1 FROM title_translations tr
+				WHERE tr.title_id = t.id AND tr.locale = ?
+			)
+			OR EXISTS (
+				SELECT 1 FROM title_genres tg
+				WHERE tg.title_id = t.id AND NOT EXISTS (
+					SELECT 1 FROM genre_translations gr
+					WHERE gr.genre_id = tg.genre_id AND gr.locale = ?
+				)
+			)
+			OR EXISTS (
+				SELECT 1 FROM seasons se
+				WHERE se.title_id = t.id AND NOT EXISTS (
+					SELECT 1 FROM season_translations sr
+					WHERE sr.season_id = se.id AND sr.locale = ?
+				)
+			)
+			OR EXISTS (
+				SELECT 1 FROM episodes ep
+				JOIN seasons se ON se.id = ep.season_id
+				WHERE se.title_id = t.id AND NOT EXISTS (
+					SELECT 1 FROM episode_translations er
+					WHERE er.episode_id = ep.id AND er.locale = ?
+				)
+			)
+		)
+		ORDER BY t.id
+		LIMIT 1`, afterID, locale, locale, locale, locale).Scan(&item.ID, &item.TMDBID, &item.Type)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 // Migrate applies every embedded migration in migrations/ that has not yet run,
 // in filename order, recording each one in the schema_migrations table so it is
 // never applied twice. Add new schema changes as additional numbered .sql files
@@ -169,6 +222,22 @@ func (s *Store) UpsertTitle(ctx context.Context, t *Title) error {
 		return err
 	}
 	t.ID = titleID
+	for _, tr := range t.Translations {
+		if strings.TrimSpace(tr.Locale) == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO title_translations
+				(title_id, locale, title, overview, poster_path, backdrop_path)
+			VALUES (?,?,?,?,?,?)
+			ON DUPLICATE KEY UPDATE
+				title = VALUES(title), overview = VALUES(overview),
+				poster_path = VALUES(poster_path), backdrop_path = VALUES(backdrop_path)`,
+			titleID, tr.Locale, tr.Title, nullStr(tr.Overview),
+			nullStr(tr.PosterPath), nullStr(tr.BackdropPath)); err != nil {
+			return fmt.Errorf("upsert title translation %s: %w", tr.Locale, err)
+		}
+	}
 
 	// Genres + join rows (replace the set wholesale).
 	if _, err := tx.ExecContext(ctx, `DELETE FROM title_genres WHERE title_id = ?`, titleID); err != nil {
@@ -179,6 +248,16 @@ func (s *Store) UpsertTitle(ctx context.Context, t *Title) error {
 			`INSERT INTO genres (id, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name)`,
 			g.ID, g.Name); err != nil {
 			return fmt.Errorf("upsert genre: %w", err)
+		}
+		for _, tr := range g.Translations {
+			if strings.TrimSpace(tr.Locale) == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO genre_translations (genre_id, locale, name) VALUES (?,?,?)
+				ON DUPLICATE KEY UPDATE name = VALUES(name)`, g.ID, tr.Locale, tr.Name); err != nil {
+				return fmt.Errorf("upsert genre translation %s: %w", tr.Locale, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO title_genres (title_id, genre_id) VALUES (?, ?)`,
@@ -209,6 +288,18 @@ func (s *Store) UpsertTitle(ctx context.Context, t *Title) error {
 			return err
 		}
 		se.ID = seasonID
+		for _, tr := range se.Translations {
+			if strings.TrimSpace(tr.Locale) == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO season_translations (season_id, locale, name, overview, poster_path)
+				VALUES (?,?,?,?,?)
+				ON DUPLICATE KEY UPDATE name = VALUES(name), overview = VALUES(overview), poster_path = VALUES(poster_path)`,
+				seasonID, tr.Locale, tr.Name, nullStr(tr.Overview), nullStr(tr.PosterPath)); err != nil {
+				return fmt.Errorf("upsert season translation %s: %w", tr.Locale, err)
+			}
+		}
 
 		// Upsert episodes keyed on uniq_episode (season_id, episode_number) rather
 		// than delete-and-reinsert, so an existing episode keeps its id — and thus
@@ -231,8 +322,22 @@ func (s *Store) UpsertTitle(ctx context.Context, t *Title) error {
 			if err != nil {
 				return fmt.Errorf("upsert episode: %w", err)
 			}
-			if epID, err := eres.LastInsertId(); err == nil {
-				ep.ID = epID
+			epID, err := eres.LastInsertId()
+			if err != nil {
+				return err
+			}
+			ep.ID = epID
+			for _, tr := range ep.Translations {
+				if strings.TrimSpace(tr.Locale) == "" {
+					continue
+				}
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO episode_translations (episode_id, locale, name, overview)
+					VALUES (?,?,?,?)
+					ON DUPLICATE KEY UPDATE name = VALUES(name), overview = VALUES(overview)`,
+					epID, tr.Locale, tr.Name, nullStr(tr.Overview)); err != nil {
+					return fmt.Errorf("upsert episode translation %s: %w", tr.Locale, err)
+				}
 			}
 		}
 	}

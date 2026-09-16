@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"sort"
 	"strings"
 	"time"
@@ -64,18 +63,30 @@ type TitleSummary struct {
 	AirDate       string
 	PosterPath    string
 	VoteAverage   float64
-	// HasVietsub marks a movie with a saved Vietnamese subtitle (the card's
-	// "Vietsub" chip). Movie-only by design: the SELECT gates on type so TV
-	// cards never carry it.
-	HasVietsub bool
+	// HasSubtitle marks a movie with a saved subtitle matching the current UI
+	// locale. Movie-only by design; TV subtitles live on episodes.
+	HasSubtitle bool
 }
 
 // TitleFilter narrows the discovery list. Zero values mean "no constraint".
 type TitleFilter struct {
-	Query   string // free-text match against the (localized) title or original title
-	GenreID int    // TMDB genre id; 0 = any
-	Type    string // "movie" | "tv"; anything else = any
-	Vietsub bool   // when set, only movies carrying a Vietnamese subtitle
+	Query    string // free-text match against the (localized) title or original title
+	GenreID  int    // TMDB genre id; 0 = any
+	Type     string // "movie" | "tv"; anything else = any
+	Subtitle string // "vi" | "en"; empty means any subtitle state
+}
+
+const titleLocaleJoins = `
+	LEFT JOIN title_translations tl ON tl.title_id = t.id AND tl.locale = ?
+	LEFT JOIN title_translations tf ON tf.title_id = t.id AND tf.locale = ?`
+
+const localizedTitleExpr = `COALESCE(NULLIF(tl.title, ''), NULLIF(tf.title, ''), t.title)`
+const localizedOverviewExpr = `COALESCE(NULLIF(tl.overview, ''), NULLIF(tf.overview, ''), t.overview)`
+const localizedPosterExpr = `COALESCE(NULLIF(tl.poster_path, ''), NULLIF(tf.poster_path, ''), t.poster_path)`
+const localizedBackdropExpr = `COALESCE(NULLIF(tl.backdrop_path, ''), NULLIF(tf.backdrop_path, ''), t.backdrop_path)`
+
+func catalogLocaleArgs(locale Locale) []any {
+	return []any{string(locale), string(fallbackLocale(locale))}
 }
 
 // titleFilterClause builds the shared WHERE clause (and its args) for the
@@ -86,21 +97,20 @@ func titleFilterClause(f TitleFilter) (string, []any) {
 	var args []any
 
 	if q := strings.TrimSpace(f.Query); q != "" {
-		where = append(where, "(title LIKE ? OR original_title LIKE ?)")
-		args = append(args, "%"+q+"%", "%"+q+"%")
+		where = append(where, "("+localizedTitleExpr+" LIKE ? OR t.original_title LIKE ? OR EXISTS (SELECT 1 FROM title_translations ts WHERE ts.title_id = t.id AND ts.title LIKE ?))")
+		args = append(args, "%"+q+"%", "%"+q+"%", "%"+q+"%")
 	}
 	if f.GenreID > 0 {
-		where = append(where, "id IN (SELECT title_id FROM title_genres WHERE genre_id = ?)")
+		where = append(where, "t.id IN (SELECT title_id FROM title_genres WHERE genre_id = ?)")
 		args = append(args, f.GenreID)
 	}
 	if f.Type == "movie" || f.Type == "tv" {
-		where = append(where, "type = ?")
+		where = append(where, "t.type = ?")
 		args = append(args, f.Type)
 	}
-	if f.Vietsub {
-		// Vietsub is a movie-only flag (has_vietsub is set only on movies), so
-		// gating on it also implies the movie type.
-		where = append(where, "type = 'movie' AND has_vietsub")
+	if f.Subtitle == "vi" || f.Subtitle == "en" {
+		where = append(where, "t.type = 'movie' AND EXISTS (SELECT 1 FROM subtitles sf WHERE sf.title_id = t.id AND sf.language = ?)")
+		args = append(args, f.Subtitle)
 	}
 	if len(where) == 0 {
 		return "", nil
@@ -116,14 +126,15 @@ func titleFilterClause(f TitleFilter) (string, []any) {
 // The columns are qualified with the alias "t", so every caller must select
 // `FROM titles t` — otherwise a query that joins another table carrying an `id`
 // column (SavedTitles does) would be ambiguous.
-const titleSummaryColumns = `t.id, t.tmdb_id, t.type, t.title, t.original_title, t.air_date, t.poster_path, t.vote_average, (t.type = 'movie' AND t.has_vietsub)`
+const titleSummaryColumns = `t.id, t.tmdb_id, t.type, ` + localizedTitleExpr + `, t.original_title, t.air_date, ` + localizedPosterExpr + `, t.vote_average,
+	(t.type = 'movie' AND EXISTS (SELECT 1 FROM subtitles sp WHERE sp.title_id = t.id AND sp.language = ?))`
 
 func scanTitleSummary(sc interface{ Scan(...any) error }) (TitleSummary, error) {
 	var t TitleSummary
 	var origTitle, poster sql.NullString
 	var air sql.NullTime
 	var vote sql.NullFloat64
-	if err := sc.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote, &t.HasVietsub); err != nil {
+	if err := sc.Scan(&t.ID, &t.TMDBID, &t.Type, &t.Title, &origTitle, &air, &poster, &vote, &t.HasSubtitle); err != nil {
 		return TitleSummary{}, err
 	}
 	t.OriginalTitle = origTitle.String
@@ -135,18 +146,22 @@ func scanTitleSummary(sc interface{ Scan(...any) error }) (TitleSummary, error) 
 
 // CountTitles returns how many titles match the filter, for computing the total
 // number of discovery-grid pages.
-func (s *Store) CountTitles(ctx context.Context, f TitleFilter) (int, error) {
+func (s *Store) CountTitles(ctx context.Context, locale Locale, f TitleFilter) (int, error) {
 	clause, args := titleFilterClause(f)
+	args = append(catalogLocaleArgs(locale), args...)
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM titles`+clause, args...).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM titles t`+titleLocaleJoins+clause, args...).Scan(&n)
 	return n, err
 }
 
 // ListTitles returns one page of title summaries matching the filter, newest
 // first; offset skips earlier pages.
-func (s *Store) ListTitles(ctx context.Context, f TitleFilter, limit, offset int) ([]TitleSummary, error) {
-	clause, args := titleFilterClause(f)
-	query := `SELECT ` + titleSummaryColumns + ` FROM titles t` +
+func (s *Store) ListTitles(ctx context.Context, locale Locale, f TitleFilter, limit, offset int) ([]TitleSummary, error) {
+	clause, filterArgs := titleFilterClause(f)
+	args := []any{string(locale)}
+	args = append(args, catalogLocaleArgs(locale)...)
+	args = append(args, filterArgs...)
+	query := `SELECT ` + titleSummaryColumns + ` FROM titles t` + titleLocaleJoins +
 		clause + " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
@@ -167,6 +182,35 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter, limit, offset int
 	return out, rows.Err()
 }
 
+// TitleCardsByIDs loads public card metadata for the anonymous bookmark list.
+// Result ordering is unspecified; the browser restores its local saved order.
+func (s *Store) TitleCardsByIDs(ctx context.Context, locale Locale, ids []int64) ([]TitleSummary, error) {
+	if len(ids) == 0 {
+		return []TitleSummary{}, nil
+	}
+	marks := make([]string, len(ids))
+	args := []any{string(locale), string(locale), string(fallbackLocale(locale))}
+	for i, id := range ids {
+		marks[i] = "?"
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+titleSummaryColumns+` FROM titles t `+titleLocaleJoins+
+		` WHERE t.id IN (`+strings.Join(marks, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TitleSummary, 0, len(ids))
+	for rows.Next() {
+		title, err := scanTitleSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, title)
+	}
+	return out, rows.Err()
+}
+
 // SitemapEntry is one indexable title for the XML sitemap. Title/OriginalTitle
 // feed the SEO slug in the emitted <loc>.
 type SitemapEntry struct {
@@ -179,9 +223,10 @@ type SitemapEntry struct {
 // SitemapTitles lists every title with its last-modified time, newest first,
 // for sitemap.xml. Missing timestamps fall back to "now" so the entry is still
 // emitted with a valid <lastmod>.
-func (s *Store) SitemapTitles(ctx context.Context) ([]SitemapEntry, error) {
+func (s *Store) SitemapTitles(ctx context.Context, locale Locale) ([]SitemapEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, title, original_title, updated_at FROM titles ORDER BY updated_at DESC`)
+		`SELECT t.id, `+localizedTitleExpr+`, t.original_title, t.updated_at
+		 FROM titles t `+titleLocaleJoins+` ORDER BY t.updated_at DESC`, catalogLocaleArgs(locale)...)
 	if err != nil {
 		return nil, err
 	}
@@ -213,29 +258,24 @@ const rowLimit = 10
 
 // Row is a labelled horizontal strip of titles on the browse home page.
 type Row struct {
-	Key    string // query string that re-filters to this row, e.g. "type=movie"
-	Label  string
-	Titles []TitleSummary
+	Key      string // query string that re-filters to this row, e.g. "type=movie"
+	Label    string
+	LabelKey string
+	Titles   []TitleSummary
 	// Ranked marks the "Top 10" strip: a true rating-ordered ranking the browse
 	// page renders with oversized rank numerals (and no "see all" link, since the
 	// ranking — not a filter — is what the row is about).
 	Ranked bool
 }
 
-// Href is the browse link for this row. It returns a template.URL so
-// html/template does not query-escape the "=" in Key (which would turn
-// "/?type=movie" into "/?type%3dmovie" and break the filter).
-func (r Row) Href() template.URL {
-	return template.URL("/?" + r.Key)
-}
-
 // ListRows groups every title into Netflix-style browse rows: one row per type
 // (movies, then TV) followed by one row per genre, newest titles first within
 // each row. Empty rows are omitted.
-func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
+func (s *Store) ListRows(ctx context.Context, locale Locale) ([]Row, error) {
 	// Load every title once, newest first.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+titleSummaryColumns+` FROM titles t ORDER BY t.updated_at DESC`)
+		`SELECT `+titleSummaryColumns+` FROM titles t `+titleLocaleJoins+` ORDER BY t.updated_at DESC`,
+		string(locale), string(locale), string(fallbackLocale(locale)))
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +283,7 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 
 	var order []int64 // title ids in newest-first order
 	byID := map[int64]TitleSummary{}
-	var all, movies, tv, vietsub []TitleSummary
+	var all, movies, tv, subtitled []TitleSummary
 	for rows.Next() {
 		t, err := scanTitleSummary(rows)
 		if err != nil {
@@ -258,8 +298,8 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 		case "tv":
 			tv = append(tv, t)
 		}
-		if t.HasVietsub {
-			vietsub = append(vietsub, t)
+		if t.HasSubtitle {
+			subtitled = append(subtitled, t)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -270,9 +310,11 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 	// alphabetical; titles are bucketed by walking `order` so each genre row
 	// stays newest-first.
 	grows, err := s.db.QueryContext(ctx, `
-		SELECT tg.title_id, g.id, g.name FROM title_genres tg
+		SELECT tg.title_id, g.id, COALESCE(NULLIF(gl.name, ''), NULLIF(gf.name, ''), g.name) FROM title_genres tg
 		JOIN genres g ON g.id = tg.genre_id
-		ORDER BY g.name`)
+		LEFT JOIN genre_translations gl ON gl.genre_id = g.id AND gl.locale = ?
+		LEFT JOIN genre_translations gf ON gf.genre_id = g.id AND gf.locale = ?
+		ORDER BY COALESCE(NULLIF(gl.name, ''), NULLIF(gf.name, ''), g.name)`, string(locale), string(fallbackLocale(locale)))
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +365,7 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 				top = append(top, t)
 			}
 		}
-		out = append(out, Row{Label: "Top 10 nổi bật hôm nay", Titles: top, Ranked: true})
+		out = append(out, Row{LabelKey: "row.top10", Titles: top, Ranked: true})
 	} else {
 		top := make([]TitleSummary, 0, len(all))
 		for _, t := range all {
@@ -336,20 +378,19 @@ func (s *Store) ListRows(ctx context.Context) ([]Row, error) {
 			if len(top) > 10 {
 				top = top[:10]
 			}
-			out = append(out, Row{Label: "Top 10 nổi bật hôm nay", Titles: top, Ranked: true})
+			out = append(out, Row{LabelKey: "row.top10", Titles: top, Ranked: true})
 		}
 	}
-	// Latest movies that carry a Vietnamese subtitle (has_vietsub), placed right
-	// below the Top 10 featured row; its heading links to the vietsub=1 grid for
-	// the full list.
-	if len(vietsub) > 0 {
-		out = append(out, Row{Key: "vietsub=1", Label: "Phim lẻ Vietsub mới cập nhật", Titles: capRow(vietsub)})
+	// Latest movies that carry a subtitle for the current locale, placed right
+	// below the Top 10 row; its heading links to the matching filtered grid.
+	if len(subtitled) > 0 {
+		out = append(out, Row{Key: "subtitle=" + string(locale), LabelKey: "row.subtitled", Titles: capRow(subtitled)})
 	}
 	if len(movies) > 0 {
-		out = append(out, Row{Key: "type=movie", Label: "Phim lẻ", Titles: capRow(movies)})
+		out = append(out, Row{Key: "type=movie", LabelKey: "row.movies", Titles: capRow(movies)})
 	}
 	if len(tv) > 0 {
-		out = append(out, Row{Key: "type=tv", Label: "Phim bộ", Titles: capRow(tv)})
+		out = append(out, Row{Key: "type=tv", LabelKey: "row.tv", Titles: capRow(tv)})
 	}
 	for _, gid := range genreOrder {
 		if ts := genreTitles[gid]; len(ts) > 0 {
@@ -393,11 +434,13 @@ func (s *Store) FeaturedTitleIDs(ctx context.Context, limit int) ([]int64, error
 
 // ListGenres returns only the genres actually attached to at least one title,
 // for the discovery filter dropdown.
-func (s *Store) ListGenres(ctx context.Context) ([]Genre, error) {
+func (s *Store) ListGenres(ctx context.Context, locale Locale) ([]Genre, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT g.id, g.name FROM genres g
+		SELECT DISTINCT g.id, COALESCE(NULLIF(gl.name, ''), NULLIF(gf.name, ''), g.name) FROM genres g
 		JOIN title_genres tg ON tg.genre_id = g.id
-		ORDER BY g.name`)
+		LEFT JOIN genre_translations gl ON gl.genre_id = g.id AND gl.locale = ?
+		LEFT JOIN genre_translations gf ON gf.genre_id = g.id AND gf.locale = ?
+		ORDER BY COALESCE(NULLIF(gl.name, ''), NULLIF(gf.name, ''), g.name)`, string(locale), string(fallbackLocale(locale)))
 	if err != nil {
 		return nil, err
 	}
@@ -415,17 +458,17 @@ func (s *Store) ListGenres(ctx context.Context) ([]Genre, error) {
 
 // GetTitle loads a full title including genres and (for TV) seasons + episodes.
 // Returns (nil, nil) when no such title exists.
-func (s *Store) GetTitle(ctx context.Context, id int64) (*Title, error) {
+func (s *Store) GetTitle(ctx context.Context, locale Locale, id int64) (*Title, error) {
 	var t Title
 	var overview, poster, backdrop, lang, status sql.NullString
 	var air sql.NullTime
 	var runtime sql.NullInt64
 	var vote sql.NullFloat64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tmdb_id, type, title, original_title, overview, air_date, runtime,
-		       poster_path, backdrop_path, vote_average, original_language, status,
-		       created_at, updated_at
-		FROM titles WHERE id = ?`, id).Scan(
+		SELECT t.id, t.tmdb_id, t.type, `+localizedTitleExpr+`, t.original_title, `+localizedOverviewExpr+`, t.air_date, t.runtime,
+		       `+localizedPosterExpr+`, `+localizedBackdropExpr+`, t.vote_average, t.original_language, t.status,
+		       t.created_at, t.updated_at
+		FROM titles t `+titleLocaleJoins+` WHERE t.id = ?`, string(locale), string(fallbackLocale(locale)), id).Scan(
 		&t.ID, &t.TMDBID, &t.Type, &t.Title, &t.OriginalTitle, &overview, &air, &runtime,
 		&poster, &backdrop, &vote, &lang, &status, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -446,22 +489,25 @@ func (s *Store) GetTitle(ctx context.Context, id int64) (*Title, error) {
 	t.OriginalLanguage = lang.String
 	t.Status = status.String
 
-	if t.Genres, err = s.loadGenres(ctx, id); err != nil {
+	if t.Genres, err = s.loadGenres(ctx, locale, id); err != nil {
 		return nil, err
 	}
 	if t.Type == "tv" {
-		if t.Seasons, err = s.loadSeasons(ctx, id); err != nil {
+		if t.Seasons, err = s.loadSeasons(ctx, locale, id); err != nil {
 			return nil, err
 		}
 	}
 	return &t, nil
 }
 
-func (s *Store) loadGenres(ctx context.Context, titleID int64) ([]Genre, error) {
+func (s *Store) loadGenres(ctx context.Context, locale Locale, titleID int64) ([]Genre, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT g.id, g.name FROM genres g
+		SELECT g.id, COALESCE(NULLIF(gl.name, ''), NULLIF(gf.name, ''), g.name) FROM genres g
 		JOIN title_genres tg ON tg.genre_id = g.id
-		WHERE tg.title_id = ? ORDER BY g.name`, titleID)
+		LEFT JOIN genre_translations gl ON gl.genre_id = g.id AND gl.locale = ?
+		LEFT JOIN genre_translations gf ON gf.genre_id = g.id AND gf.locale = ?
+		WHERE tg.title_id = ? ORDER BY COALESCE(NULLIF(gl.name, ''), NULLIF(gf.name, ''), g.name)`,
+		string(locale), string(fallbackLocale(locale)), titleID)
 	if err != nil {
 		return nil, err
 	}
@@ -477,10 +523,16 @@ func (s *Store) loadGenres(ctx context.Context, titleID int64) ([]Genre, error) 
 	return out, rows.Err()
 }
 
-func (s *Store) loadSeasons(ctx context.Context, titleID int64) ([]Season, error) {
+func (s *Store) loadSeasons(ctx context.Context, locale Locale, titleID int64) ([]Season, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, season_number, name, overview, air_date, poster_path
-		FROM seasons WHERE title_id = ? ORDER BY season_number`, titleID)
+		SELECT s.id, s.season_number,
+		       COALESCE(NULLIF(sl.name, ''), NULLIF(sf.name, ''), s.name),
+		       COALESCE(NULLIF(sl.overview, ''), NULLIF(sf.overview, ''), s.overview),
+		       s.air_date, COALESCE(NULLIF(sl.poster_path, ''), NULLIF(sf.poster_path, ''), s.poster_path)
+		FROM seasons s
+		LEFT JOIN season_translations sl ON sl.season_id = s.id AND sl.locale = ?
+		LEFT JOIN season_translations sf ON sf.season_id = s.id AND sf.locale = ?
+		WHERE s.title_id = ? ORDER BY s.season_number`, string(locale), string(fallbackLocale(locale)), titleID)
 	if err != nil {
 		return nil, err
 	}
@@ -511,9 +563,14 @@ func (s *Store) loadSeasons(ctx context.Context, titleID int64) ([]Season, error
 	}
 
 	erows, err := s.db.QueryContext(ctx, `
-		SELECT e.season_id, e.id, e.episode_number, e.name, e.overview, e.air_date, e.runtime, e.still_path
+		SELECT e.season_id, e.id, e.episode_number,
+		       COALESCE(NULLIF(el.name, ''), NULLIF(ef.name, ''), e.name),
+		       COALESCE(NULLIF(el.overview, ''), NULLIF(ef.overview, ''), e.overview),
+		       e.air_date, e.runtime, e.still_path
 		FROM episodes e JOIN seasons s ON s.id = e.season_id
-		WHERE s.title_id = ? ORDER BY e.episode_number`, titleID)
+		LEFT JOIN episode_translations el ON el.episode_id = e.id AND el.locale = ?
+		LEFT JOIN episode_translations ef ON ef.episode_id = e.id AND ef.locale = ?
+		WHERE s.title_id = ? ORDER BY e.episode_number`, string(locale), string(fallbackLocale(locale)), titleID)
 	if err != nil {
 		return nil, err
 	}
@@ -552,15 +609,20 @@ type EpisodeContext struct {
 
 // GetEpisodeContext resolves a single episode id to its parent title and
 // season/episode numbers. Returns (nil, nil) when no such episode exists.
-func (s *Store) GetEpisodeContext(ctx context.Context, episodeID int64) (*EpisodeContext, error) {
+func (s *Store) GetEpisodeContext(ctx context.Context, locale Locale, episodeID int64) (*EpisodeContext, error) {
 	var ec EpisodeContext
 	var name sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT t.id, t.title, s.season_number, e.episode_number, e.name
+		SELECT t.id, COALESCE(NULLIF(tl.title, ''), NULLIF(tf.title, ''), t.title),
+		       s.season_number, e.episode_number, COALESCE(NULLIF(el.name, ''), NULLIF(ef.name, ''), e.name)
 		FROM episodes e
 		JOIN seasons s ON s.id = e.season_id
 		JOIN titles t ON t.id = s.title_id
-		WHERE e.id = ?`, episodeID).Scan(
+		LEFT JOIN title_translations tl ON tl.title_id = t.id AND tl.locale = ?
+		LEFT JOIN title_translations tf ON tf.title_id = t.id AND tf.locale = ?
+		LEFT JOIN episode_translations el ON el.episode_id = e.id AND el.locale = ?
+		LEFT JOIN episode_translations ef ON ef.episode_id = e.id AND ef.locale = ?
+		WHERE e.id = ?`, string(locale), string(fallbackLocale(locale)), string(locale), string(fallbackLocale(locale)), episodeID).Scan(
 		&ec.TitleID, &ec.TitleName, &ec.SeasonNumber, &ec.EpisodeNumber, &name)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -574,12 +636,17 @@ func (s *Store) GetEpisodeContext(ctx context.Context, episodeID int64) (*Episod
 
 // EpisodesInSeasonOf returns all episodes sharing the given episode's season,
 // ordered by episode number, for same-season navigation on the watch page.
-func (s *Store) EpisodesInSeasonOf(ctx context.Context, episodeID int64) ([]Episode, error) {
+func (s *Store) EpisodesInSeasonOf(ctx context.Context, locale Locale, episodeID int64) ([]Episode, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT e.id, e.episode_number, e.name, e.overview, e.air_date, e.runtime, e.still_path
+		SELECT e.id, e.episode_number,
+		       COALESCE(NULLIF(el.name, ''), NULLIF(ef.name, ''), e.name),
+		       COALESCE(NULLIF(el.overview, ''), NULLIF(ef.overview, ''), e.overview),
+		       e.air_date, e.runtime, e.still_path
 		FROM episodes e
+		LEFT JOIN episode_translations el ON el.episode_id = e.id AND el.locale = ?
+		LEFT JOIN episode_translations ef ON ef.episode_id = e.id AND ef.locale = ?
 		WHERE e.season_id = (SELECT season_id FROM episodes WHERE id = ?)
-		ORDER BY e.episode_number`, episodeID)
+		ORDER BY e.episode_number`, string(locale), string(fallbackLocale(locale)), episodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -1092,13 +1159,14 @@ func (s *Store) SavedTitleIDs(ctx context.Context, userID int64) (map[int64]bool
 // SavedTitles returns the user's saved titles, newest save first, using the same
 // column list as the discovery grid so /bookmarks can render them with the very
 // same "card" partial.
-func (s *Store) SavedTitles(ctx context.Context, userID int64) ([]TitleSummary, error) {
+func (s *Store) SavedTitles(ctx context.Context, locale Locale, userID int64) ([]TitleSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+titleSummaryColumns+`
 		FROM titles t
+		`+titleLocaleJoins+`
 		JOIN user_bookmarks b ON b.title_id = t.id
 		WHERE b.user_id = ?
-		ORDER BY b.created_at DESC`, userID)
+		ORDER BY b.created_at DESC`, string(locale), string(locale), string(fallbackLocale(locale)), userID)
 	if err != nil {
 		return nil, err
 	}

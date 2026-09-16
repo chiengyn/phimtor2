@@ -13,9 +13,9 @@ import (
 
 const tmdbBaseURL = "https://api.themoviedb.org/3"
 
-// TMDBClient fetches movie/TV metadata. Every field is requested in the primary
-// language (Vietnamese) and any field that comes back empty is backfilled from
-// a second request in the fallback language (English).
+// TMDBClient fetches movie/TV metadata in both configured languages. The
+// primary response still feeds the legacy columns, with the fallback filling
+// blanks, while both unmerged responses are retained as translation rows.
 type TMDBClient struct {
 	apiKey       string
 	lang         string
@@ -129,19 +129,21 @@ type tmdbTV struct {
 }
 
 type tmdbSeason struct {
-	SeasonNumber int    `json:"season_number"`
-	Name         string `json:"name"`
-	Overview     string `json:"overview"`
-	AirDate      string `json:"air_date"`
-	PosterPath   string `json:"poster_path"`
-	Episodes     []struct {
-		EpisodeNumber int    `json:"episode_number"`
-		Name          string `json:"name"`
-		Overview      string `json:"overview"`
-		AirDate       string `json:"air_date"`
-		Runtime       *int   `json:"runtime"`
-		StillPath     string `json:"still_path"`
-	} `json:"episodes"`
+	SeasonNumber int           `json:"season_number"`
+	Name         string        `json:"name"`
+	Overview     string        `json:"overview"`
+	AirDate      string        `json:"air_date"`
+	PosterPath   string        `json:"poster_path"`
+	Episodes     []tmdbEpisode `json:"episodes"`
+}
+
+type tmdbEpisode struct {
+	EpisodeNumber int    `json:"episode_number"`
+	Name          string `json:"name"`
+	Overview      string `json:"overview"`
+	AirDate       string `json:"air_date"`
+	Runtime       *int   `json:"runtime"`
+	StillPath     string `json:"still_path"`
 }
 
 func (c *TMDBClient) fetchMovie(ctx context.Context, id int) (*Title, error) {
@@ -149,18 +151,22 @@ func (c *TMDBClient) fetchMovie(ctx context.Context, id int) (*Title, error) {
 	if err := c.get(ctx, "/movie/"+strconv.Itoa(id), c.lang, &m); err != nil {
 		return nil, err
 	}
-	if m.Overview == "" || m.Title == "" || len(m.Genres) == 0 {
-		var fb tmdbMovie
-		if err := c.get(ctx, "/movie/"+strconv.Itoa(id), c.fallbackLang, &fb); err == nil {
-			m.Title = fill(m.Title, fb.Title)
-			m.Overview = fill(m.Overview, fb.Overview)
-			if len(m.Genres) == 0 {
-				m.Genres = fb.Genres
-			}
-		}
+	var fb tmdbMovie
+	fallbackOK := c.fallbackLang == c.lang
+	if fallbackOK {
+		fb = m
+	} else if err := c.get(ctx, "/movie/"+strconv.Itoa(id), c.fallbackLang, &fb); err == nil {
+		fallbackOK = true
 	}
 
-	return &Title{
+	primaryRaw := m
+	m.Title = fill(m.Title, fb.Title)
+	m.Overview = fill(m.Overview, fb.Overview)
+	m.PosterPath = fill(m.PosterPath, fb.PosterPath)
+	m.BackdropPath = fill(m.BackdropPath, fb.BackdropPath)
+	m.Genres = mergeLocalizedGenres(m.Genres, fb.Genres, c.lang, c.fallbackLang, fallbackOK)
+
+	title := &Title{
 		TMDBID:           m.ID,
 		Type:             "movie",
 		Title:            m.Title,
@@ -174,7 +180,12 @@ func (c *TMDBClient) fetchMovie(ctx context.Context, id int) (*Title, error) {
 		OriginalLanguage: m.OriginalLanguage,
 		Status:           m.Status,
 		Genres:           m.Genres,
-	}, nil
+	}
+	title.Translations = append(title.Translations, movieTranslation(primaryRaw, canonicalLocale(c.lang)))
+	if fallbackOK && canonicalLocale(c.fallbackLang) != canonicalLocale(c.lang) {
+		title.Translations = append(title.Translations, movieTranslation(fb, canonicalLocale(c.fallbackLang)))
+	}
+	return title, nil
 }
 
 func (c *TMDBClient) fetchTV(ctx context.Context, id int) (*Title, error) {
@@ -182,15 +193,22 @@ func (c *TMDBClient) fetchTV(ctx context.Context, id int) (*Title, error) {
 	if err := c.get(ctx, "/tv/"+strconv.Itoa(id), c.lang, &t); err != nil {
 		return nil, err
 	}
-	if t.Overview == "" || t.Name == "" || len(t.Genres) == 0 {
-		var fb tmdbTV
-		if err := c.get(ctx, "/tv/"+strconv.Itoa(id), c.fallbackLang, &fb); err == nil {
-			t.Name = fill(t.Name, fb.Name)
-			t.Overview = fill(t.Overview, fb.Overview)
-			if len(t.Genres) == 0 {
-				t.Genres = fb.Genres
-			}
-		}
+	var fb tmdbTV
+	fallbackOK := c.fallbackLang == c.lang
+	if fallbackOK {
+		fb = t
+	} else if err := c.get(ctx, "/tv/"+strconv.Itoa(id), c.fallbackLang, &fb); err == nil {
+		fallbackOK = true
+	}
+
+	primaryRaw := t
+	t.Name = fill(t.Name, fb.Name)
+	t.Overview = fill(t.Overview, fb.Overview)
+	t.PosterPath = fill(t.PosterPath, fb.PosterPath)
+	t.BackdropPath = fill(t.BackdropPath, fb.BackdropPath)
+	t.Genres = mergeLocalizedGenres(t.Genres, fb.Genres, c.lang, c.fallbackLang, fallbackOK)
+	if len(t.Seasons) == 0 && fallbackOK {
+		t.Seasons = fb.Seasons
 	}
 
 	var runtime *int
@@ -213,6 +231,10 @@ func (c *TMDBClient) fetchTV(ctx context.Context, id int) (*Title, error) {
 		Status:           t.Status,
 		Genres:           t.Genres,
 	}
+	title.Translations = append(title.Translations, tvTranslation(primaryRaw, canonicalLocale(c.lang)))
+	if fallbackOK && canonicalLocale(c.fallbackLang) != canonicalLocale(c.lang) {
+		title.Translations = append(title.Translations, tvTranslation(fb, canonicalLocale(c.fallbackLang)))
+	}
 
 	for _, s := range t.Seasons {
 		season, err := c.fetchSeason(ctx, id, s.SeasonNumber)
@@ -230,31 +252,26 @@ func (c *TMDBClient) fetchSeason(ctx context.Context, tvID, seasonNumber int) (*
 	if err := c.get(ctx, path, c.lang, &s); err != nil {
 		return nil, err
 	}
-
-	// Backfill empty overviews (season-level or any episode) from the fallback
-	// language with a single extra request.
-	needFallback := s.Overview == ""
-	for _, ep := range s.Episodes {
-		if ep.Overview == "" || ep.Name == "" {
-			needFallback = true
-			break
-		}
+	var fb tmdbSeason
+	fallbackOK := c.fallbackLang == c.lang
+	if fallbackOK {
+		fb = s
+	} else if err := c.get(ctx, path, c.fallbackLang, &fb); err == nil {
+		fallbackOK = true
 	}
-	if needFallback {
-		var fb tmdbSeason
-		if err := c.get(ctx, path, c.fallbackLang, &fb); err == nil {
-			s.Name = fill(s.Name, fb.Name)
-			s.Overview = fill(s.Overview, fb.Overview)
-			fbEp := map[int]int{} // episode_number -> index in fb.Episodes
-			for i, e := range fb.Episodes {
-				fbEp[e.EpisodeNumber] = i
-			}
-			for i := range s.Episodes {
-				if j, ok := fbEp[s.Episodes[i].EpisodeNumber]; ok {
-					s.Episodes[i].Name = fill(s.Episodes[i].Name, fb.Episodes[j].Name)
-					s.Episodes[i].Overview = fill(s.Episodes[i].Overview, fb.Episodes[j].Overview)
-				}
-			}
+	primaryRaw := s
+	s.Name = fill(s.Name, fb.Name)
+	s.Overview = fill(s.Overview, fb.Overview)
+	s.PosterPath = fill(s.PosterPath, fb.PosterPath)
+	if len(s.Episodes) == 0 && fallbackOK {
+		s.Episodes = fb.Episodes
+	}
+	fbEpisodes := make(map[int]struct {
+		Name, Overview string
+	})
+	if fallbackOK {
+		for _, ep := range fb.Episodes {
+			fbEpisodes[ep.EpisodeNumber] = struct{ Name, Overview string }{ep.Name, ep.Overview}
 		}
 	}
 
@@ -265,17 +282,98 @@ func (c *TMDBClient) fetchSeason(ctx context.Context, tvID, seasonNumber int) (*
 		AirDate:      s.AirDate,
 		PosterPath:   s.PosterPath,
 	}
+	season.Translations = append(season.Translations, SeasonTranslation{
+		Locale: canonicalLocale(c.lang), Name: primaryRaw.Name,
+		Overview: primaryRaw.Overview, PosterPath: primaryRaw.PosterPath,
+	})
+	if fallbackOK && canonicalLocale(c.fallbackLang) != canonicalLocale(c.lang) {
+		season.Translations = append(season.Translations, SeasonTranslation{
+			Locale: canonicalLocale(c.fallbackLang), Name: fb.Name,
+			Overview: fb.Overview, PosterPath: fb.PosterPath,
+		})
+	}
 	for _, e := range s.Episodes {
-		season.Episodes = append(season.Episodes, Episode{
+		ep := Episode{
 			EpisodeNumber: e.EpisodeNumber,
-			Name:          e.Name,
-			Overview:      e.Overview,
+			Name:          fill(e.Name, fbEpisodes[e.EpisodeNumber].Name),
+			Overview:      fill(e.Overview, fbEpisodes[e.EpisodeNumber].Overview),
 			AirDate:       e.AirDate,
 			Runtime:       e.Runtime,
 			StillPath:     e.StillPath,
-		})
+		}
+		if raw, ok := seasonEpisode(primaryRaw, e.EpisodeNumber); ok {
+			ep.Translations = append(ep.Translations, EpisodeTranslation{
+				Locale: canonicalLocale(c.lang), Name: raw.Name, Overview: raw.Overview,
+			})
+		}
+		if fallbackOK && canonicalLocale(c.fallbackLang) != canonicalLocale(c.lang) {
+			raw, _ := seasonEpisode(fb, e.EpisodeNumber)
+			ep.Translations = append(ep.Translations, EpisodeTranslation{
+				Locale: canonicalLocale(c.fallbackLang), Name: raw.Name, Overview: raw.Overview,
+			})
+		}
+		season.Episodes = append(season.Episodes, ep)
 	}
 	return season, nil
+}
+
+func canonicalLocale(language string) string {
+	language = strings.ToLower(strings.TrimSpace(language))
+	if i := strings.IndexAny(language, "-_"); i >= 0 {
+		language = language[:i]
+	}
+	return language
+}
+
+func movieTranslation(m tmdbMovie, locale string) TitleTranslation {
+	return TitleTranslation{Locale: locale, Title: m.Title, Overview: m.Overview, PosterPath: m.PosterPath, BackdropPath: m.BackdropPath}
+}
+
+func tvTranslation(t tmdbTV, locale string) TitleTranslation {
+	return TitleTranslation{Locale: locale, Title: t.Name, Overview: t.Overview, PosterPath: t.PosterPath, BackdropPath: t.BackdropPath}
+}
+
+func mergeLocalizedGenres(primary, fallback []Genre, primaryLang, fallbackLang string, fallbackOK bool) []Genre {
+	byID := make(map[int]Genre, len(primary)+len(fallback))
+	order := make([]int, 0, len(primary)+len(fallback))
+	for _, g := range primary {
+		byID[g.ID] = g
+		order = append(order, g.ID)
+	}
+	for _, g := range fallback {
+		if _, ok := byID[g.ID]; !ok {
+			byID[g.ID] = g
+			order = append(order, g.ID)
+		}
+	}
+	fallbackNames := make(map[int]string, len(fallback))
+	for _, g := range fallback {
+		fallbackNames[g.ID] = g.Name
+	}
+	primaryNames := make(map[int]string, len(primary))
+	for _, g := range primary {
+		primaryNames[g.ID] = g.Name
+	}
+	out := make([]Genre, 0, len(order))
+	for _, id := range order {
+		g := byID[id]
+		g.Name = fill(primaryNames[id], fallbackNames[id])
+		g.Translations = append(g.Translations, GenreTranslation{Locale: canonicalLocale(primaryLang), Name: primaryNames[id]})
+		if fallbackOK && canonicalLocale(fallbackLang) != canonicalLocale(primaryLang) {
+			g.Translations = append(g.Translations, GenreTranslation{Locale: canonicalLocale(fallbackLang), Name: fallbackNames[id]})
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
+func seasonEpisode(s tmdbSeason, number int) (tmdbEpisode, bool) {
+	for _, ep := range s.Episodes {
+		if ep.EpisodeNumber == number {
+			return ep, true
+		}
+	}
+	return tmdbEpisode{}, false
 }
 
 func (c *TMDBClient) get(ctx context.Context, path, language string, out any) error {

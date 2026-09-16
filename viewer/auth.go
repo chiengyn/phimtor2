@@ -8,6 +8,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 )
 
 // ctxKey is a private type so nothing outside this file can collide with our
@@ -87,7 +88,7 @@ func (s *Server) handleGoogleStart(w http.ResponseWriter, r *http.Request) {
 	nonce, err := randomToken(32)
 	if err != nil {
 		log.Printf("auth: nonce: %v", err)
-		http.Redirect(w, r, "/?login=error", http.StatusFound)
+		http.Redirect(w, r, authErrorURL(next, "error"), http.StatusFound)
 		return
 	}
 	s.sess.setState(w, nonce, next)
@@ -103,7 +104,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 
 	if !ok || nonce == "" || !secureEqual(nonce, r.URL.Query().Get("state")) {
 		log.Printf("auth: state mismatch from %s", r.RemoteAddr)
-		http.Redirect(w, r, "/?login=error", http.StatusFound)
+		http.Redirect(w, r, authErrorURL(next, "error"), http.StatusFound)
 		return
 	}
 	next = safeNext(next)
@@ -116,14 +117,14 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Redirect(w, r, "/?login=error", http.StatusFound)
+		http.Redirect(w, r, authErrorURL(next, "error"), http.StatusFound)
 		return
 	}
 
 	id, err := s.google.exchange(r.Context(), code)
 	if err != nil {
 		log.Printf("auth: exchange: %v", err)
-		http.Redirect(w, r, "/?login=error", http.StatusFound)
+		http.Redirect(w, r, authErrorURL(next, "error"), http.StatusFound)
 		return
 	}
 	// Google verifies email for accounts.google.com logins, but be explicit: an
@@ -131,18 +132,24 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	// payment or a support request on.
 	if !id.EmailVerified {
 		log.Printf("auth: unverified email for sub %s", id.Sub)
-		http.Redirect(w, r, "/?login=unverified", http.StatusFound)
+		http.Redirect(w, r, authErrorURL(next, "unverified"), http.StatusFound)
 		return
 	}
 
 	user, err := s.store.UpsertGoogleUser(r.Context(), id)
 	if err != nil {
 		log.Printf("auth: upsert: %v", err)
-		http.Redirect(w, r, "/?login=error", http.StatusFound)
+		http.Redirect(w, r, authErrorURL(next, "error"), http.StatusFound)
 		return
 	}
 	s.sess.setSession(w, user.ID)
 	http.Redirect(w, r, next, http.StatusFound)
+}
+
+func authErrorURL(next, reason string) string {
+	next = safeNext(next)
+	locale := localeFromRequestPath(next)
+	return localeHome(locale) + "?login=" + url.QueryEscape(reason)
 }
 
 // handleLogout clears the session. POST-only (the header renders it as a form)

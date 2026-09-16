@@ -1,6 +1,6 @@
-{{define "head_title"}}Phim đã lưu – phimnet{{end}}
+{{define "head_title"}}{{t "bookmarks.title"}} – phimnet{{end}}
 {{define "head_extra"}}
-<meta name="description" content="Danh sách phim bạn đã lưu để xem sau trên phimnet.">
+<meta name="description" content="{{t "bookmarks.description"}}">
 {{/* A personal list: nothing for a crawler to index, and no URL that would
      reproduce it. Kept out of sitemap.xml too. This must stay even now that the
      signed-in list is server-rendered — crawlers are never signed in, but the
@@ -10,8 +10,8 @@
 {{define "content"}}
 <section class="bookmarks wrap">
 	<div class="bookmarks-head">
-		<h1>Phim đã lưu</h1>
-		<button class="clear-btn" type="button" id="bookmark-clear" hidden>Xoá tất cả</button>
+		<h1>{{t "bookmarks.title"}}</h1>
+		<button class="clear-btn" type="button" id="bookmark-clear" hidden>{{t "bookmarks.clear"}}</button>
 	</div>
 	{{if .LoggedIn}}
 	{{/* Signed in: the list comes from the database, so it follows the visitor
@@ -21,17 +21,17 @@
 	     removes nodes here, it never builds them. */}}
 	<div class="grid" id="bookmark-grid">{{range .Titles}}{{template "card" .}}{{end}}</div>
 	<p class="empty" id="bookmark-empty" {{if .Titles}}hidden{{end}}>
-		Bạn chưa lưu phim nào. Bấm vào biểu tượng dấu trang trên áp phích phim để lưu xem sau.
+		{{t "bookmarks.empty"}}
 	</p>
 	{{else}}
 	{{/* Anonymous: filled by /static/bookmarks.js from localStorage — the server
 	     sends no data, so the list still works with no account at all. */}}
 	<div class="grid" id="bookmark-grid"></div>
 	<p class="empty" id="bookmark-empty" hidden>
-		Bạn chưa lưu phim nào. Bấm vào biểu tượng dấu trang trên áp phích phim để lưu xem sau.
+		{{t "bookmarks.empty"}}
 	</p>
 	<p class="bookmarks-hint">
-		Danh sách này chỉ lưu trên trình duyệt hiện tại. Đăng nhập để đồng bộ trên mọi thiết bị.
+		{{t "bookmarks.local_note"}}
 	</p>
 	{{end}}
 </section>

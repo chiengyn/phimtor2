@@ -48,7 +48,7 @@ type plansData struct {
 	// year 9999 reads as a bug.
 	PassForever bool
 
-	// Set when arriving from a watch page (/goi?title=123): the per-title unlock
+	// Set when arriving from a watch page (/vi/plans?title=123 or /en/plans): the per-title unlock
 	// is only meaningful with a title in hand.
 	TitleID   int64
 	TitleName string
@@ -73,6 +73,7 @@ type invoiceData struct {
 }
 
 func (s *Server) handlePlansPage(w http.ResponseWriter, r *http.Request) {
+	locale := localeFromContext(r.Context())
 	u := userFrom(r.Context())
 	now := time.Now()
 	data := plansData{
@@ -86,7 +87,7 @@ func (s *Server) handlePlansPage(w http.ResponseWriter, r *http.Request) {
 		if until.Year() >= 9999 {
 			data.PassForever = true
 		} else {
-			data.PassUntil = until.Format("02/01/2006")
+			data.PassUntil = formatDate(locale, *until)
 		}
 	}
 	for _, c := range s.billing.chains() {
@@ -99,7 +100,7 @@ func (s *Server) handlePlansPage(w http.ResponseWriter, r *http.Request) {
 	// just cannot offer the per-title unlock (there is no title to unlock).
 	if raw := r.URL.Query().Get("title"); raw != "" {
 		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			if t, err := s.store.GetTitle(r.Context(), id); err == nil && t != nil {
+			if t, err := s.store.GetTitle(r.Context(), locale, id); err == nil && t != nil {
 				data.TitleID = t.ID
 				data.TitleName = t.Title
 				if u != nil {
@@ -116,16 +117,21 @@ func (s *Server) handlePlansPage(w http.ResponseWriter, r *http.Request) {
 			continue // nothing to unlock
 		}
 		pv := planView{
-			Code: p.Code, Name: p.Name, Kind: p.Kind,
+			Code: p.Code, Kind: p.Kind,
 			USD: usdString(p.Cents), VND: vndString(s.billing.vnd(p.Cents)),
 		}
 		switch p.Kind {
 		case "pass":
-			pv.Note = "Mở khoá mọi phim 4K trong thời hạn của gói."
+			if p.Code == "pass365" {
+				pv.Name = tr(locale, "plans.pass365")
+			} else {
+				pv.Name = tr(locale, "plans.pass30")
+			}
+			pv.Note = tr(locale, "plans.pass_note")
 			pv.Current = data.HasPass
 		case "title":
-			pv.Name = "Mở khoá vĩnh viễn: " + data.TitleName
-			pv.Note = "Xem 4K phim này mãi mãi, không giới hạn thời gian."
+			pv.Name = tr(locale, "plans.title_unlock", data.TitleName)
+			pv.Note = tr(locale, "plans.title_note")
 			pv.Current = data.Unlocked
 		}
 		data.Plans = append(data.Plans, pv)
@@ -135,38 +141,47 @@ func (s *Server) handlePlansPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateInvoice(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
+	requestLocale, localeOK := parseLocale(r.Header.Get("X-Phimnet-Locale"))
+	if !localeOK {
+		requestLocale = LocaleVI
+	}
 	var body struct {
 		PlanCode string `json:"plan_code"`
 		TitleID  int64  `json:"title_id"`
 		Chain    string `json:"chain"`
+		Locale   string `json:"locale"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "yêu cầu không hợp lệ")
+		writeJSONError(w, http.StatusBadRequest, tr(requestLocale, "billing.invalid_request"))
 		return
+	}
+	invoiceLocale, ok := parseLocale(body.Locale)
+	if !ok {
+		invoiceLocale = requestLocale
 	}
 	p, ok := s.billing.planByCode(body.PlanCode)
 	if !ok {
-		writeJSONError(w, http.StatusBadRequest, "gói không tồn tại")
+		writeJSONError(w, http.StatusBadRequest, tr(invoiceLocale, "billing.invalid_plan"))
 		return
 	}
 	if _, ok := s.billing.watcher(body.Chain); !ok {
-		writeJSONError(w, http.StatusBadRequest, "mạng thanh toán không hợp lệ")
+		writeJSONError(w, http.StatusBadRequest, tr(invoiceLocale, "billing.invalid_chain"))
 		return
 	}
 
 	var titleID *int64
 	if p.Kind == "title" {
 		if body.TitleID <= 0 {
-			writeJSONError(w, http.StatusBadRequest, "thiếu phim cần mở khoá")
+			writeJSONError(w, http.StatusBadRequest, tr(invoiceLocale, "billing.missing_title"))
 			return
 		}
-		t, err := s.store.GetTitle(r.Context(), body.TitleID)
+		t, err := s.store.GetTitle(r.Context(), invoiceLocale, body.TitleID)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if t == nil {
-			writeJSONError(w, http.StatusNotFound, "không tìm thấy phim")
+			writeJSONError(w, http.StatusNotFound, tr(invoiceLocale, "billing.title_not_found"))
 			return
 		}
 		// Refuse to sell something already owned. A pass is different — buying
@@ -177,7 +192,7 @@ func (s *Server) handleCreateInvoice(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if already {
-			writeJSONError(w, http.StatusConflict, "bạn đã mở khoá phim này rồi")
+			writeJSONError(w, http.StatusConflict, tr(invoiceLocale, "billing.already_unlocked"))
 			return
 		}
 		titleID = &t.ID
@@ -190,7 +205,7 @@ func (s *Server) handleCreateInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ref": inv.Ref,
-		"url": "/thanh-toan/" + inv.Ref,
+		"url": localeURL(invoiceLocale, "/payment/"+inv.Ref),
 	})
 }
 
@@ -210,6 +225,7 @@ func (s *Server) loadOwnedInvoice(r *http.Request) (*Invoice, bool) {
 }
 
 func (s *Server) handleInvoicePage(w http.ResponseWriter, r *http.Request) {
+	locale := localeFromContext(r.Context())
 	if userFrom(r.Context()) == nil {
 		// Anonymous: send them through sign-in and back, rather than 404ing a
 		// page that would work a moment later.
@@ -236,8 +252,8 @@ func (s *Server) handleInvoicePage(w http.ResponseWriter, r *http.Request) {
 		Status:      inv.Status,
 		Paid:        inv.Paid(),
 		Expired:     inv.Status == "expired",
-		ExpiresAt:   inv.ExpiresAt.Format("15:04 02/01/2006"),
-		BackHref:    "/goi",
+		ExpiresAt:   inv.ExpiresAt.Format("15:04") + " " + formatDate(locale, inv.ExpiresAt),
+		BackHref:    localeURL(locale, "/plans"),
 	}
 	if wch, ok := s.billing.watcher(inv.Chain); ok {
 		data.ChainLabel = wch.Label()
@@ -274,15 +290,19 @@ func (s *Server) handleInvoiceStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) productName(r *http.Request, inv *Invoice) string {
+	locale := localeFromContext(r.Context())
 	if p, ok := s.billing.planByCode(inv.PlanCode); ok && p.Kind == "pass" {
-		return p.Name
+		if p.Code == "pass365" {
+			return tr(locale, "plans.pass365")
+		}
+		return tr(locale, "plans.pass30")
 	}
 	if inv.TitleID != nil {
-		if t, err := s.store.GetTitle(r.Context(), *inv.TitleID); err == nil && t != nil {
-			return "Mở khoá 4K: " + t.Title
+		if t, err := s.store.GetTitle(r.Context(), localeFromContext(r.Context()), *inv.TitleID); err == nil && t != nil {
+			return tr(locale, "plans.title_unlock", t.Title)
 		}
 	}
-	return "Mở khoá 4K"
+	return tr(locale, "plans.title")
 }
 
 func usdString(cents int) string {

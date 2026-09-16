@@ -69,6 +69,7 @@ func main() {
 	// metainfo streamers have already resolved for live torrents.
 	harvester := newHarvester(store, manager, time.Duration(cfg.HarvestIntervalMin)*time.Minute)
 	go harvester.run(ctx)
+	go runTranslationBackfill(ctx, store, tmdb, time.Duration(cfg.TMDBTranslationBackfillIntervalMin)*time.Minute)
 
 	go func() {
 		log.Printf("phimtor2-admin listening on http://%s", addr)

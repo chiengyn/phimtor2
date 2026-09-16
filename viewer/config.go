@@ -164,7 +164,7 @@ func (c Config) accountsEnabled() bool {
 }
 
 // billingEnabled reports whether at least one crypto rail is configured. When
-// false the paid tier is inert: /goi and /thanh-toan are never registered and a
+// false the paid tier is inert: localized plan/payment pages are not registered and a
 // 4K source shows "sắp ra mắt" exactly as it did before billing existed. That is
 // the documented rollback, so resolutionLock must keep honouring it.
 func (c Config) billingEnabled() bool {

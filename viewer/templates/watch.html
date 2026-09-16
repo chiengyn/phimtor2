@@ -1,6 +1,6 @@
-{{define "head_title"}}{{.Heading}} – Xem – phimnet{{end}}
+{{define "head_title"}}{{.Heading}} – {{t "watch.action"}} – phimnet{{end}}
 {{define "head_extra"}}
-<meta name="description" content="Xem {{.Heading}} online tại phimnet.">
+<meta name="description" content="{{t "watch.description" .Heading}}">
 <meta name="robots" content="noindex, follow">
 <link rel="canonical" href="{{abs .BackHref}}">
 {{end}}
@@ -205,7 +205,7 @@
 	data-subs="{{.SubtitlesJSON}}"
 	data-login-url="{{.LoginURL}}"
 	data-upgrade-url="{{.UpgradeURL}}">
-	<a href="{{.BackHref}}" class="back-link">← Quay lại</a>
+	<a href="{{.BackHref}}" class="back-link">← {{t "watch.back"}}</a>
 	<div class="watch-meta-top">
 		<h1>{{.Heading}}</h1>
 		{{if .Sub}}<p class="watch-sub">{{.Sub}}</p>{{end}}
@@ -214,7 +214,7 @@
 	{{if .HasVideo}}
 	<div class="load-notice" id="load-notice" hidden>
 		<span class="spinner"></span>
-		<span>Phim đang được chuẩn bị — quá trình ban đầu có thể mất thời gian lâu hơn. Vui lòng chờ, video sẽ tự động phát khi sẵn sàng.</span>
+		<span>{{t "watch.notice"}}</span>
 	</div>
 
 	<div class="player" id="player-wrap">
@@ -222,59 +222,59 @@
 	</div>
 
 	<div class="ctrl-group">
-		<span class="ctrl-label">Nguồn phát</span>
+		<span class="ctrl-label">{{t "watch.sources"}}</span>
 		<div class="source-chips" id="source-chips"></div>
 	</div>
 
 	<div class="ctrl-group">
-		<span class="ctrl-label">Phím tắt</span>
+		<span class="ctrl-label">{{t "watch.shortcuts"}}</span>
 		<div class="shortcuts">
-			<span class="shortcut"><kbd>Space</kbd> Phát / Dừng</span>
-			<span class="shortcut"><kbd>←</kbd><kbd>→</kbd> Tua 10 giây</span>
-			<span class="shortcut"><kbd>↑</kbd><kbd>↓</kbd> Âm lượng</span>
-			<span class="shortcut"><kbd>M</kbd> Tắt tiếng</span>
-			<span class="shortcut"><kbd>F</kbd> Toàn màn hình</span>
+			<span class="shortcut"><kbd>Space</kbd> {{t "watch.play_pause"}}</span>
+			<span class="shortcut"><kbd>←</kbd><kbd>→</kbd> {{t "watch.seek"}}</span>
+			<span class="shortcut"><kbd>↑</kbd><kbd>↓</kbd> {{t "watch.volume"}}</span>
+			<span class="shortcut"><kbd>M</kbd> {{t "watch.mute"}}</span>
+			<span class="shortcut"><kbd>F</kbd> {{t "watch.fullscreen"}}</span>
 		</div>
 	</div>
 
 	<div class="sub-section">
 		<div class="sub-head">
-			<span class="ctrl-label">Phụ đề</span>
-			<label class="btn btn-sm" for="subtitle-input">＋ Tải tệp .srt/.vtt</label>
+			<span class="ctrl-label">{{t "watch.subtitles"}}</span>
+			<label class="btn btn-sm" for="subtitle-input">＋ {{t "watch.upload_subtitle"}}</label>
 			<input type="file" id="subtitle-input" accept=".srt,.vtt" hidden onchange="loadSubtitleFile(this.files[0]); this.value=''">
-			<button class="btn btn-sm btn-clear" id="sub-style-btn" onclick="toggleSubStyle()">🅰 Tùy chỉnh hiển thị</button>
-			<button class="btn btn-sm btn-clear" id="sub-off-btn" onclick="clearSubtitle()" hidden>Tắt phụ đề</button>
+			<button class="btn btn-sm btn-clear" id="sub-style-btn" onclick="toggleSubStyle()">🅰 {{t "watch.customize_subtitle"}}</button>
+			<button class="btn btn-sm btn-clear" id="sub-off-btn" onclick="clearSubtitle()" hidden>{{t "watch.subtitle_off"}}</button>
 		</div>
 
 		<div class="sub-style" id="sub-style" hidden>
 			<div class="sub-style-grid">
 				<div class="sub-field">
-					<label>Cỡ chữ <span class="val" id="ss-size-val"></span></label>
+					<label>{{t "watch.font_size"}} <span class="val" id="ss-size-val"></span></label>
 					<input type="range" id="ss-size" min="12" max="44" step="1">
 				</div>
 				<div class="sub-field">
-					<label for="ss-color">Màu chữ</label>
+					<label for="ss-color">{{t "watch.text_color"}}</label>
 					<input type="color" id="ss-color">
 				</div>
 				<div class="sub-field">
-					<label for="ss-bg-color">Màu nền</label>
+					<label for="ss-bg-color">{{t "watch.background_color"}}</label>
 					<input type="color" id="ss-bg-color">
 				</div>
 				<div class="sub-field">
-					<label>Độ mờ nền <span class="val" id="ss-bg-opacity-val"></span></label>
+					<label>{{t "watch.background_opacity"}} <span class="val" id="ss-bg-opacity-val"></span></label>
 					<input type="range" id="ss-bg-opacity" min="0" max="100" step="5">
 				</div>
 				<div class="sub-field">
-					<label for="ss-edge">Viền chữ</label>
+					<label for="ss-edge">{{t "watch.text_edge"}}</label>
 					<select id="ss-edge">
-						<option value="none">Không</option>
-						<option value="shadow">Bóng đổ</option>
-						<option value="outline">Viền đen</option>
+						<option value="none">{{t "watch.edge_none"}}</option>
+						<option value="shadow">{{t "watch.edge_shadow"}}</option>
+						<option value="outline">{{t "watch.edge_outline"}}</option>
 					</select>
 				</div>
 			</div>
 			<div class="sub-style-actions">
-				<button class="btn btn-sm btn-clear" onclick="resetSubStyle()">Đặt lại mặc định</button>
+				<button class="btn btn-sm btn-clear" onclick="resetSubStyle()">{{t "watch.reset"}}</button>
 			</div>
 		</div>
 
@@ -285,24 +285,24 @@
 	<div id="debug-zone" hidden>
 		<div class="progress-wrap">
 			<div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-			<div class="progress-text" id="progress-text">Đang chuẩn bị…</div>
+			<div class="progress-text" id="progress-text">{{t "watch.preparing"}}</div>
 		</div>
 		<div class="stats" id="stats"><span class="loading-text">…</span></div>
 	</div>
 
 	<div class="status-msg" id="status-msg"></div>
 	{{else}}
-	<p class="no-source">Chưa có nguồn phát cho nội dung này.</p>
+	<p class="no-source">{{t "watch.no_source"}}</p>
 	{{end}}
 
 	{{if .Episodes}}
 	<div class="ctrl-group">
-		<span class="ctrl-label">Phần {{.SeasonNumber}}</span>
+		<span class="ctrl-label">{{t "detail.season" .SeasonNumber}}</span>
 		<div class="ep-nav">
 			{{range .Episodes}}
 			<a class="ep-chip{{if eq .ID $.OwnerID}} active{{end}}"
 				href="{{watchEpisodePath .ID .EpisodeNumber $.Heading}}"
-				title="{{if .Name}}{{.Name}}{{else}}Tập {{.EpisodeNumber}}{{end}}">{{.EpisodeNumber}}</a>
+				title="{{if .Name}}{{.Name}}{{else}}{{t "detail.episode" .EpisodeNumber}}{{end}}">{{.EpisodeNumber}}</a>
 			{{end}}
 		</div>
 	</div>
@@ -314,6 +314,32 @@
 <script>
 const ROOT = document.querySelector('.watch');
 const D = ROOT.dataset;
+const LOCALE = document.body.dataset.locale || 'vi';
+const I18N = {
+	signInQuality: {{js (t "watch.sign_in_quality")}}, signIn: {{js (t "watch.sign_in")}},
+	upgradeQuality: {{js (t "watch.upgrade_quality")}}, upgrade: {{js (t "watch.upgrade")}},
+	comingSoonTitle: {{js (t "watch.coming_soon_title")}}, comingSoon: {{js (t "watch.coming_soon")}},
+	freeHint: {{js (t "watch.free_hint")}}, signInGoogle: {{js (t "account.sign_in_google")}},
+	cryptoHint: {{js (t "watch.crypto_hint")}}, viewPlans: {{js (t "watch.view_plans")}},
+	preparingSource: {{js (t "watch.preparing_source")}}, preparing: {{js (t "watch.preparing")}},
+	prepareError: {{js (t "watch.prepare_error")}}, loadingInfo: {{js (t "watch.loading_info")}},
+	loadingInfoSeconds: {{js (t "watch.loading_info_seconds")}}, buffering: {{js (t "watch.buffering")}},
+	slow: {{js (t "watch.slow")}}, compatibility: {{js (t "watch.compatibility")}},
+	reconnecting: {{js (t "watch.reconnecting")}}, downloading: {{js (t "watch.downloading")}},
+	muted: {{js (t "watch.mute")}}, metadata: {{js (t "watch.metadata")}},
+	debugShown: {{js (t "watch.debug_shown")}}, debugHidden: {{js (t "watch.debug_hidden")}},
+	unsupportedSubtitle: {{js (t "watch.unsupported_subtitle")}}, subtitleError: {{js (t "watch.subtitle_error")}},
+	subtitleEnabled: {{js (t "watch.subtitle_enabled")}}, noSavedSubtitle: {{js (t "watch.no_saved_subtitle")}},
+	subtitleName: {{js (t "watch.subtitle_name")}}, subtitleLoadError: {{js (t "watch.subtitle_load_error")}},
+	unavailable4K: {{js (t "watch.unavailable_4k")}}, analyzing: {{js (t "watch.analyzing")}}, seeking: {{js (t "watch.seeking")}},
+	statDownload: {{js (t "watch.stat_download")}}, statUpload: {{js (t "watch.stat_upload")}},
+	statSeeders: {{js (t "watch.stat_seeders")}}, statPeers: {{js (t "watch.stat_peers")}},
+	statPending: {{js (t "watch.stat_pending")}}, statHalfOpen: {{js (t "watch.stat_half_open")}}, statPieces: {{js (t "watch.stat_pieces")}},
+};
+function i18nFormat(value, ...args) {
+	let i = 0;
+	return String(value).replace(/%[sd]/g, () => String(args[i++] ?? '')).replace(/%%/g, '%');
+}
 // The owning streamer's public base URL is not known up front anymore: the
 // prepare call picks a streamer and returns it. The browser then hits that
 // streamer's stats + stream endpoints directly.
@@ -325,6 +351,7 @@ if (!Array.isArray(VIDEOS)) VIDEOS = [];
 let SAVED_SUBS = [];
 try { SAVED_SUBS = JSON.parse(D.subs || '[]'); } catch(e) { SAVED_SUBS = []; }
 if (!Array.isArray(SAVED_SUBS)) SAVED_SUBS = [];
+SAVED_SUBS.sort((a, b) => (a.language === LOCALE ? -1 : 0) - (b.language === LOCALE ? -1 : 0));
 // Sign-in link back to this page. Empty when the visitor is already signed in
 // or accounts are disabled — in which case the server never marks a source
 // 'member' either, so nothing below ever needs it.
@@ -465,25 +492,25 @@ function renderSourceChips() {
 		// middle-click-friendly, and lands back here after Google.
 		if (v.lock === 'member') {
 			return `<a class="chip locked member" href="${escHtml(LOGIN_URL)}"
-				title="Đăng nhập để xem chất lượng ${escHtml(v.resolution || 'này')}">
+				title="${escHtml(i18nFormat(I18N.signInQuality, v.resolution || ''))}">
 				${badge}
-				<span class="chip-lock">🔒 Đăng nhập</span>
+				<span class="chip-lock">🔒 ${escHtml(I18N.signIn)}</span>
 			</a>`;
 		}
 		// Payable by this visitor: a real link, like the member chip, so it is
 		// keyboard- and middle-click-friendly.
 		if (v.lock === 'upgrade') {
 			return `<a class="chip locked upgrade" href="${escHtml(UPGRADE_URL)}"
-				title="Nâng cấp để xem chất lượng ${escHtml(v.resolution || 'này')}">
+				title="${escHtml(i18nFormat(I18N.upgradeQuality, v.resolution || ''))}">
 				${badge}
-				<span class="chip-lock">🔒 Nâng cấp</span>
+				<span class="chip-lock">🔒 ${escHtml(I18N.upgrade)}</span>
 			</a>`;
 		}
 		// Nobody can play this yet (billing unconfigured): shown but inert.
 		if (v.available === false) {
-			return `<span class="chip locked" title="Sắp ra mắt cho người dùng trả phí">
+			return `<span class="chip locked" title="${escHtml(I18N.comingSoonTitle)}">
 				${badge}
-				<span class="chip-lock">🔒 Sắp ra mắt</span>
+				<span class="chip-lock">🔒 ${escHtml(I18N.comingSoon)}</span>
 			</span>`;
 		}
 		return `<span class="chip${v.id === activeVideoID ? ' active' : ''}" onclick="playSource(${v.id})">
@@ -525,11 +552,11 @@ function showLoginGate(v) {
 
 	const text = document.createElement('div');
 	text.className = 'login-gate-text';
-	text.textContent = 'Đăng nhập để xem chất lượng ' + ((v && v.resolution) || '1080p');
+	text.textContent = i18nFormat(I18N.signInQuality, (v && v.resolution) || '1080p');
 
 	const hint = document.createElement('div');
 	hint.className = 'login-gate-hint';
-	hint.textContent = 'Tài khoản miễn phí. Chất lượng 720p xem được ngay không cần đăng nhập.';
+	hint.textContent = I18N.freeHint;
 
 	box.append(lock, text, hint);
 
@@ -540,7 +567,7 @@ function showLoginGate(v) {
 		a.innerHTML = '<svg class="google-icon" viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62Z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18Z"/><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33Z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58Z"/></svg>';
 		// Not .login-label: the mobile breakpoint hides that class in the header.
 		const label = document.createElement('span');
-		label.textContent = 'Đăng nhập với Google';
+		label.textContent = I18N.signInGoogle;
 		a.append(label);
 		box.append(a);
 	}
@@ -566,11 +593,11 @@ function showUpgradeGate(v) {
 
 	const text = document.createElement('div');
 	text.className = 'login-gate-text';
-	text.textContent = 'Nâng cấp để xem chất lượng ' + ((v && v.resolution) || '2160p');
+	text.textContent = i18nFormat(I18N.upgradeQuality, (v && v.resolution) || '2160p');
 
 	const hint = document.createElement('div');
 	hint.className = 'login-gate-hint';
-	hint.textContent = 'Thanh toán bằng tiền mã hoá. Các chất lượng thấp hơn vẫn xem được bình thường.';
+	hint.textContent = I18N.cryptoHint;
 
 	box.append(lock, text, hint);
 
@@ -579,7 +606,7 @@ function showUpgradeGate(v) {
 		a.className = 'login-link';
 		a.href = UPGRADE_URL;
 		const label = document.createElement('span');
-		label.textContent = 'Xem các gói';
+		label.textContent = I18N.viewPlans;
 		a.append(label);
 		box.append(a);
 	}
@@ -602,11 +629,11 @@ async function playSource(videoID, opts = {}) {
 	if (v && v.available === false) return; // nobody can play this yet
 	setStatus('');
 	showLoadNotice();
-	showPlayerStatus('Đang chuẩn bị nguồn phát…');
-	document.getElementById('progress-text').textContent = 'Đang chuẩn bị…';
+	showPlayerStatus(I18N.preparingSource);
+	document.getElementById('progress-text').textContent = I18N.preparing;
 	let data;
 	try {
-		const res = await fetch(`/api/sources/${videoID}/prepare`, { method: 'POST' });
+		const res = await fetch(`/api/sources/${videoID}/prepare`, { method: 'POST', headers: { 'X-Phimnet-Locale': LOCALE } });
 		// 401 means this quality needs an account — the session expired mid-watch,
 		// or the chip data is stale. Offer sign-in instead of a transport error.
 		if (res.status === 401) { showLoginGate(v); return; }
@@ -616,7 +643,7 @@ async function playSource(videoID, opts = {}) {
 		if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
 		data = await res.json();
 	} catch(e) {
-		showPlayerStatus('Không thể chuẩn bị nguồn phát: ' + e.message, true);
+		showPlayerStatus(i18nFormat(I18N.prepareError, e.message), true);
 		return;
 	}
 	currentInfoHash = data.infoHash;
@@ -631,7 +658,7 @@ async function playSource(videoID, opts = {}) {
 	// the stream endpoint 404s, and attaching the <video> to it then raises a fatal
 	// MediaError that kills the player. So wait until the streamer can actually
 	// serve the file before pointing the player at it.
-	setPlayerStatus('Đang tải thông tin…');
+	setPlayerStatus(I18N.loadingInfo);
 	const ready = await waitForStreamReady(data.infoHash, videoID);
 	if (!ready) return; // timed out, or the user switched sources mid-wait
 	const src = `${streamerBase}/api/torrents/${data.infoHash}/files/${data.fileIndex}/stream`;
@@ -682,7 +709,7 @@ async function prebufferStream(streamURL, videoID) {
 			if (done) break;
 			got += value.length;
 			const pct = Math.min(99, Math.round(got / PREBUFFER_BYTES * 100));
-			setPlayerStatus(`Đang tải bộ đệm đầu phim… ${pct}%`);
+			setPlayerStatus(i18nFormat(I18N.buffering, pct));
 			if (got >= PREBUFFER_BYTES) { controller.abort(); break; }
 		}
 	} catch(e) {
@@ -722,12 +749,12 @@ async function waitForStreamReady(infoHash, videoID) {
 			}
 		} catch(e) { /* transient network blip — keep polling */ }
 		const secs = Math.round((Date.now() - start) / 1000);
-		document.getElementById('progress-text').textContent = `Đang tải thông tin… (${secs}s)`;
-		setPlayerStatus(`Đang tải thông tin… (${secs}s)`);
+		document.getElementById('progress-text').textContent = i18nFormat(I18N.loadingInfoSeconds, secs);
+		setPlayerStatus(i18nFormat(I18N.loadingInfoSeconds, secs));
 		await sleep(1000);
 	}
 	if (activeVideoID === videoID) {
-		showPlayerStatus('Nguồn phát đang tải chậm hoặc không có seeder. Vui lòng thử lại hoặc chọn nguồn khác.', true);
+		showPlayerStatus(I18N.slow, true);
 	}
 	return false;
 }
@@ -782,7 +809,7 @@ function fallbackToTranscode(video, streamURL) {
 	fellBackToTranscode = true;
 	remuxAbort?.abort();
 	if (remuxController) { try { remuxController.destroy(); } catch(e) {} remuxController = null; }
-	setStatus('Định dạng chưa được hỗ trợ trực tiếp, đang chuyển sang chế độ tương thích…');
+	setStatus(I18N.compatibility);
 	video.querySelectorAll('source').forEach(el => el.remove());
 	video.removeAttribute('src');
 	const source = document.createElement('source');
@@ -806,6 +833,7 @@ async function attachClientRemux(video, streamURL) {
 		abort.signal.throwIfAborted();
 		const controller = await mod.attachRemuxedSource(video, rawStreamURL(streamURL), {
 			onStatus: setPlayerStatus,
+			messages: { analyzing: I18N.analyzing, seeking: I18N.seeking },
 			onLog: (info) => console.log('[mkvplayer] probe', info),
 			onError: () => fallbackToTranscode(video, streamURL),
 			signal: abort.signal,
@@ -868,7 +896,7 @@ function buildPlayer(streamURL, resumeAt, contentType) {
 			return;
 		}
 		if (recovering) return; // a recovery re-prepare is already in flight
-		setStatus('Mất kết nối nguồn phát, đang kết nối lại…');
+		setStatus(I18N.reconnecting);
 		recoverStream();
 	});
 
@@ -877,7 +905,7 @@ function buildPlayer(streamURL, resumeAt, contentType) {
 	const armWatchdog = () => {
 		if (bufferWatchdog) clearTimeout(bufferWatchdog);
 		bufferWatchdog = setTimeout(() => {
-			setStatus('Đang tải dữ liệu… nguồn có thể đang thiếu seeder.');
+			setStatus(I18N.downloading);
 		}, 20000);
 	};
 	video.addEventListener('waiting', armWatchdog);
@@ -979,7 +1007,7 @@ document.addEventListener('keydown', (e) => {
 			break;
 		case 'm': case 'M':
 			player.muted = !player.muted;
-			showKbdToast(player.muted ? '🔇 Tắt tiếng' : '🔊 ' + volumePct() + '%');
+			showKbdToast(player.muted ? '🔇 ' + I18N.muted : '🔊 ' + volumePct() + '%');
 			break;
 		case 'f': case 'F':
 			player.fullscreen.toggle();
@@ -1008,7 +1036,7 @@ async function refreshStats() {
 		document.getElementById('progress-fill').style.width = pct + '%';
 		document.getElementById('progress-text').textContent = s.totalBytes
 			? `${pct}% · ${formatBytes(s.bytesCompleted)} / ${formatBytes(s.totalBytes)}`
-			: 'Đang tải metadata…';
+			: I18N.metadata;
 		document.getElementById('stats').innerHTML = statsChips(s);
 	} catch(e) { /* ignore poll errors */ }
 }
@@ -1024,13 +1052,13 @@ function formatSpeed(bps) { return formatBytes(bps || 0) + '/s'; }
 function statsChips(s) {
 	if (!s) return '<span class="stat loading-text">…</span>';
 	return `
-		<span class="stat" title="Tốc độ tải xuống">↓ <b>${formatSpeed(s.downloadSpeed)}</b></span>
-		<span class="stat" title="Tốc độ tải lên">↑ <b>${formatSpeed(s.uploadSpeed)}</b></span>
-		<span class="stat" title="Seeder đang kết nối">🌱 <b>${s.connectedSeeders || 0}</b></span>
-		<span class="stat" title="Peer hoạt động / tổng">👥 <b>${s.activePeers || 0}</b> / ${s.totalPeers || 0}</span>
-		<span class="stat" title="Peer đang chờ">⏳ ${s.pendingPeers || 0}</span>
-		<span class="stat" title="Kết nối nửa mở">◐ ${s.halfOpenPeers || 0}</span>
-		${s.piecesTotal ? `<span class="stat" title="Mảnh đã hoàn thành">🧩 ${s.piecesComplete || 0}/${s.piecesTotal}</span>` : ''}`;
+		<span class="stat" title="${escHtml(I18N.statDownload)}">↓ <b>${formatSpeed(s.downloadSpeed)}</b></span>
+		<span class="stat" title="${escHtml(I18N.statUpload)}">↑ <b>${formatSpeed(s.uploadSpeed)}</b></span>
+		<span class="stat" title="${escHtml(I18N.statSeeders)}">🌱 <b>${s.connectedSeeders || 0}</b></span>
+		<span class="stat" title="${escHtml(I18N.statPeers)}">👥 <b>${s.activePeers || 0}</b> / ${s.totalPeers || 0}</span>
+		<span class="stat" title="${escHtml(I18N.statPending)}">⏳ ${s.pendingPeers || 0}</span>
+		<span class="stat" title="${escHtml(I18N.statHalfOpen)}">◐ ${s.halfOpenPeers || 0}</span>
+		${s.piecesTotal ? `<span class="stat" title="${escHtml(I18N.statPieces)}">🧩 ${s.piecesComplete || 0}/${s.piecesTotal}</span>` : ''}`;
 }
 
 // streamDebug toggles the hidden progress/stats panel — call streamDebug() from
@@ -1038,7 +1066,7 @@ function statsChips(s) {
 window.streamDebug = function(show) {
 	if (show === undefined) show = true;
 	document.getElementById('debug-zone').hidden = !show;
-	return show ? 'Đã hiện bảng gỡ lỗi tải xuống.' : 'Đã ẩn bảng gỡ lỗi.';
+	return show ? I18N.debugShown : I18N.debugHidden;
 };
 
 // --- Subtitles ------------------------------------------------------------
@@ -1059,12 +1087,12 @@ async function loadSubtitleFile(file) {
 		let vtt;
 		if (ext === 'vtt') vtt = text.replace(/^﻿/, '');
 		else if (ext === 'srt') vtt = srtToVtt(text);
-		else throw new Error('định dạng không hỗ trợ (dùng .srt hoặc .vtt)');
+		else throw new Error(I18N.unsupportedSubtitle);
 		activeSavedId = null;
 		setSubtitle(vtt, file.name);
 		renderSubList();
 	} catch(e) {
-		alert('Lỗi phụ đề: ' + e.message);
+		alert(i18nFormat(I18N.subtitleError, e.message));
 	}
 }
 
@@ -1083,7 +1111,7 @@ function setSubtitle(vttText, label) {
 	activeVtt = vttText;
 	activeVttLabel = label;
 	applyVtt(vttText, label);
-	document.getElementById('subtitle-status').textContent = 'Đang bật: ' + label;
+	document.getElementById('subtitle-status').textContent = i18nFormat(I18N.subtitleEnabled, label);
 	document.getElementById('sub-off-btn').hidden = false;
 }
 
@@ -1124,16 +1152,16 @@ function clearSubtitle() {
 function renderSubList() {
 	const box = document.getElementById('sub-list');
 	if (!SAVED_SUBS.length) {
-		box.innerHTML = '<span class="sub-empty">Chưa có phụ đề đã lưu cho nội dung này.</span>';
+		box.innerHTML = '<span class="sub-empty">' + escHtml(I18N.noSavedSubtitle) + '</span>';
 		return;
 	}
 	box.innerHTML = SAVED_SUBS.map(s => {
 		const meta = [];
-		if (typeof s.download_count === 'number') meta.push('⬇ ' + s.download_count.toLocaleString('vi-VN'));
+		if (typeof s.download_count === 'number') meta.push('⬇ ' + s.download_count.toLocaleString(LOCALE));
 		if (s.provider) meta.push(s.provider);
 		return `<div class="sub-row${s.id === activeSavedId ? ' active' : ''}" onclick="applySavedSubtitle(${s.id})">
 			<span class="lang">${escHtml(s.language || '?')}</span>
-			<span class="sub-name" title="${escHtml(s.name || '')}">${escHtml(s.name || 'Phụ đề')}</span>
+			<span class="sub-name" title="${escHtml(s.name || '')}">${escHtml(s.name || I18N.subtitleName)}</span>
 			${meta.length ? `<span class="sub-meta">${escHtml(meta.join(' · '))}</span>` : ''}
 		</div>`;
 	}).join('');
@@ -1147,10 +1175,10 @@ async function applySavedSubtitle(id) {
 		if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
 		const vtt = await res.text();
 		activeSavedId = id;
-		setSubtitle(vtt, s.name || s.language || 'Phụ đề');
+		setSubtitle(vtt, s.name || s.language || I18N.subtitleName);
 		renderSubList();
 	} catch(e) {
-		alert('Không tải được phụ đề đã lưu: ' + e.message);
+		alert(i18nFormat(I18N.subtitleLoadError, e.message));
 	}
 }
 
@@ -1252,7 +1280,7 @@ function resetSubStyle() {
 	applySubStyle();
 	renderSourceChips();
 	renderSubList();
-	console.info('phimnet: nhập streamDebug() vào console để xem tiến trình tải & số liệu gỡ lỗi.');
+	console.info('phimnet: call streamDebug() to show download progress and diagnostics.');
 	// Default = latest added source this visitor may actually play. The store
 	// orders newest first, so an anonymous visitor lands on the newest 720p and a
 	// signed-in one on the newest non-4K source.
@@ -1269,7 +1297,7 @@ function resetSubStyle() {
 		// Signed in, but every source here is paid. Sell the upgrade.
 		showUpgradeGate(upgradeVideo);
 	} else if (VIDEOS.length) {
-		showPlayerStatus('Các nguồn 4K hiện chưa khả dụng.', true);
+		showPlayerStatus(I18N.unavailable4K, true);
 	}
 })();
 </script>

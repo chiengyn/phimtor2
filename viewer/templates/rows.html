@@ -1,14 +1,14 @@
 {{define "rows"}}{{range .}}
 <section class="row{{if .Ranked}} row-ranked{{end}}">
 	<h2 class="row-title">
-		{{if .Ranked}}<span>{{.Label}}</span>{{else}}<a href="{{.Href}}">{{.Label}} <span class="row-chevron">›</span></a>{{end}}
+		{{if .Ranked}}<span>{{if .Label}}{{.Label}}{{else}}{{t .LabelKey}}{{end}}</span>{{else}}<a href="{{rowHref .}}">{{if .Label}}{{.Label}}{{else}}{{t .LabelKey}}{{end}} <span class="row-chevron">›</span></a>{{end}}
 	</h2>
 	<div class="row-rail">
-		<button class="row-arrow row-arrow-prev" type="button" aria-label="Cuộn về trước" hidden>‹</button>
+		<button class="row-arrow row-arrow-prev" type="button" aria-label="{{t "row.prev"}}" hidden>‹</button>
 		<div class="row-track">
 			{{if .Ranked}}
 				{{range $i, $t := .Titles}}
-				<a class="rank-card" href="{{titlePath $t.ID $t.Title $t.OriginalTitle}}" aria-label="Hạng {{inc $i}}: {{$t.Title}}">
+				<a class="rank-card" href="{{titlePath $t.ID $t.Title $t.OriginalTitle}}" aria-label="{{t "row.rank" (inc $i) $t.Title}}">
 					<span class="rank-num" aria-hidden="true">{{inc $i}}</span>
 					<div class="rank-poster">
 						{{$p := img "w342" $t.PosterPath}}
@@ -20,11 +20,11 @@
 				{{range .Titles}}{{template "card" .}}{{end}}
 			{{end}}
 		</div>
-		<button class="row-arrow row-arrow-next" type="button" aria-label="Cuộn tiếp">›</button>
+		<button class="row-arrow row-arrow-next" type="button" aria-label="{{t "row.next"}}">›</button>
 	</div>
 </section>
 {{else}}
-<p class="empty">Chưa có phim nào.</p>
+<p class="empty">{{t "card.none"}}</p>
 {{end}}
 <script>
 // Carousel arrows: scroll each row by ~one viewport of cards and hide the arrow

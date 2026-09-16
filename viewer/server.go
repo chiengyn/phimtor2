@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,11 +28,11 @@ const tmdbImageBase = "https://image.tmdb.org/t/p/"
 type Server struct {
 	store     *Store
 	router    chi.Router
-	home      *template.Template
-	detail    *template.Template
-	watch     *template.Template
-	bookmarks *template.Template
-	notFound  *template.Template
+	home      localizedTemplate
+	detail    localizedTemplate
+	watch     localizedTemplate
+	bookmarks localizedTemplate
+	notFound  localizedTemplate
 
 	// manager is the server-side client the viewer uses to add torrents via the
 	// streamer manager (the browser never adds directly). The manager returns the
@@ -68,11 +69,16 @@ type Server struct {
 	// falls back to the "sắp ra mắt" tier the site shipped with.
 	billing *billingService
 
-	plans   *template.Template
-	invoice *template.Template
+	plans   localizedTemplate
+	invoice localizedTemplate
 }
 
+type localizedTemplate map[Locale]*template.Template
+
 func NewServer(store *Store, cfg Config) (*Server, error) {
+	if err := validateMessages(); err != nil {
+		return nil, err
+	}
 	blobs, err := newReadOnlyBlobStores(cfg)
 	if err != nil {
 		return nil, err
@@ -142,16 +148,32 @@ var baseFuncMap = template.FuncMap{
 
 // funcMap returns the template helpers for this server: the pure baseFuncMap
 // plus SEO closures (abs / jsonLD / siteJSONLD) that need the public origin.
-func (s *Server) funcMap() template.FuncMap {
+func (s *Server) funcMap(locale Locale) template.FuncMap {
 	fm := template.FuncMap{
-		"abs":        s.abs,
-		"jsonLD":     s.titleJSONLD,
-		"siteJSONLD": s.siteJSONLD,
+		"abs": s.abs,
+		"js": func(value string) template.JS {
+			encoded, _ := json.Marshal(value)
+			return template.JS(encoded)
+		},
+		"jsonLD":     func(t *Title) template.JS { return s.titleJSONLD(locale, t) },
+		"siteJSONLD": func() template.JS { return s.siteJSONLD(locale) },
+		"t":          func(key string, args ...any) string { return tr(locale, key, args...) },
+		"typeName": func(kind string) string {
+			if kind == "tv" {
+				return tr(locale, "type.tv")
+			}
+			return tr(locale, "type.movie")
+		},
 		// URL builders for slugged detail/watch links, so templates and
 		// server-side SEO output produce identical "<slug>-<id>" paths.
-		"titlePath":        titlePath,
-		"watchMoviePath":   watchMoviePath,
-		"watchEpisodePath": watchEpisodePath,
+		"homePath":       func() string { return localeHome(locale) },
+		"pagePath":       func(path string) string { return localeURL(locale, path) },
+		"titlePath":      func(id int64, name, original string) string { return titlePath(locale, id, name, original) },
+		"watchMoviePath": func(id int64, name, original string) string { return watchMoviePath(locale, id, name, original) },
+		"watchEpisodePath": func(id int64, epNum int, titleName string) string {
+			return watchEpisodePath(locale, id, epNum, titleName)
+		},
+		"rowHref": func(row Row) template.URL { return template.URL(localeHome(locale) + "?" + row.Key) },
 		// discordURL exposes the configured support-channel invite link (empty
 		// when unset, so templates can hide the link).
 		"discordURL": func() string { return s.discordURL },
@@ -245,22 +267,22 @@ func joinSlugID(prefix, slug string, id int64) string {
 // titlePath / watchMoviePath / watchEpisodePath build the canonical slugged URLs
 // for a title's detail and watch pages. They are exposed to templates via
 // funcMap so markup and server-side SEO output construct identical URLs.
-func titlePath(id int64, name, original string) string {
-	return joinSlugID("/titles", titleSlug(name, original), id)
+func titlePath(locale Locale, id int64, name, original string) string {
+	return joinSlugID(localeURL(locale, "/titles"), titleSlug(name, original), id)
 }
 
-func watchMoviePath(id int64, name, original string) string {
-	return joinSlugID("/watch/movie", titleSlug(name, original), id)
+func watchMoviePath(locale Locale, id int64, name, original string) string {
+	return joinSlugID(localeURL(locale, "/watch/movie"), titleSlug(name, original), id)
 }
 
-func watchEpisodePath(id int64, epNum int, titleName string) string {
+func watchEpisodePath(locale Locale, id int64, epNum int, titleName string) string {
 	slug := titleSlug(titleName, "")
 	if slug != "" {
 		slug = fmt.Sprintf("%s-tap-%d", slug, epNum)
 	} else {
 		slug = fmt.Sprintf("tap-%d", epNum)
 	}
-	return joinSlugID("/watch/episode", slug, id)
+	return joinSlugID(localeURL(locale, "/watch/episode"), slug, id)
 }
 
 // yearOf extracts the 4-digit year from a "YYYY-MM-DD" date string.
@@ -287,41 +309,40 @@ func truncate(n int, s string) string {
 }
 
 func (s *Server) parseTemplates() error {
-	parse := func(files ...string) (*template.Template, error) {
+	parse := func(locale Locale, files ...string) (*template.Template, error) {
 		paths := make([]string, len(files))
 		for i, f := range files {
 			paths[i] = "templates/" + f
 		}
-		return template.New("").Funcs(s.funcMap()).ParseFiles(paths...)
+		return template.New("").Funcs(s.funcMap(locale)).ParseFiles(paths...)
 	}
 
-	var err error
-	if s.home, err = parse("layout.html", "home.html", "rows.html", "grid.html"); err != nil {
-		return err
-	}
-	if s.detail, err = parse("layout.html", "detail.html"); err != nil {
-		return err
-	}
-	if s.watch, err = parse("layout.html", "watch.html"); err != nil {
-		return err
-	}
-	// grid.html comes along for the "card" partial, so the saved list can be
-	// rendered server-side for signed-in visitors with the exact same markup as
-	// the discovery grid.
-	if s.bookmarks, err = parse("layout.html", "bookmarks.html", "grid.html"); err != nil {
-		return err
-	}
-	if s.notFound, err = parse("layout.html", "404.html"); err != nil {
-		return err
-	}
-	// Parsed unconditionally even when billing is off: the files always exist,
-	// and a parse error should surface at boot on every deploy rather than only
-	// on the ones where a crypto rail happens to be configured.
-	if s.plans, err = parse("layout.html", "plans.html"); err != nil {
-		return err
-	}
-	if s.invoice, err = parse("layout.html", "invoice.html"); err != nil {
-		return err
+	s.home, s.detail, s.watch = localizedTemplate{}, localizedTemplate{}, localizedTemplate{}
+	s.bookmarks, s.notFound = localizedTemplate{}, localizedTemplate{}
+	s.plans, s.invoice = localizedTemplate{}, localizedTemplate{}
+	for _, locale := range supportedLocales {
+		var err error
+		if s.home[locale], err = parse(locale, "layout.html", "home.html", "rows.html", "grid.html"); err != nil {
+			return fmt.Errorf("parse %s home templates: %w", locale, err)
+		}
+		if s.detail[locale], err = parse(locale, "layout.html", "detail.html"); err != nil {
+			return fmt.Errorf("parse %s detail templates: %w", locale, err)
+		}
+		if s.watch[locale], err = parse(locale, "layout.html", "watch.html"); err != nil {
+			return fmt.Errorf("parse %s watch templates: %w", locale, err)
+		}
+		if s.bookmarks[locale], err = parse(locale, "layout.html", "bookmarks.html", "grid.html"); err != nil {
+			return fmt.Errorf("parse %s bookmarks templates: %w", locale, err)
+		}
+		if s.notFound[locale], err = parse(locale, "layout.html", "404.html"); err != nil {
+			return fmt.Errorf("parse %s not-found templates: %w", locale, err)
+		}
+		if s.plans[locale], err = parse(locale, "layout.html", "plans.html"); err != nil {
+			return fmt.Errorf("parse %s plans templates: %w", locale, err)
+		}
+		if s.invoice[locale], err = parse(locale, "layout.html", "invoice.html"); err != nil {
+			return fmt.Errorf("parse %s invoice templates: %w", locale, err)
+		}
 	}
 	return nil
 }
@@ -345,15 +366,35 @@ func (s *Server) setupRouter() {
 	r.Get("/robots.txt", s.handleRobots)
 	r.Get("/sitemap.xml", s.handleSitemap)
 
-	r.Get("/", s.handleHome)
-	r.Get("/titles/{id}", s.handleDetail)
-	r.Get("/bookmarks", s.handleBookmarks)
-	r.Get("/watch/movie/{id}", s.handleWatchMovie)
-	r.Get("/watch/episode/{id}", s.handleWatchEpisode)
+	// Every human-facing page has an explicit locale prefix. The neutral root is
+	// the only language-negotiated URL; all other unprefixed page routes are
+	// permanent Vietnamese compatibility redirects.
+	r.Get("/", s.handleLocaleRoot)
+	r.Get("/{locale}", s.handleLocaleSlash)
+	r.Route("/{locale}", func(r chi.Router) {
+		r.Use(s.requireLocale)
+		r.Get("/", s.handleHome)
+		r.Get("/titles/{id}", s.handleDetail)
+		r.Get("/bookmarks", s.handleBookmarks)
+		r.Get("/watch/movie/{id}", s.handleWatchMovie)
+		r.Get("/watch/episode/{id}", s.handleWatchEpisode)
+		if s.billing.enabled() {
+			r.Get("/plans", s.handlePlansPage)
+			r.Get("/payment/{ref}", s.handleInvoicePage)
+		}
+	})
+	for _, pattern := range []string{"/titles/{id}", "/bookmarks", "/watch/movie/{id}", "/watch/episode/{id}"} {
+		r.Get(pattern, s.redirectLegacyVietnamese)
+	}
+	if s.billing.enabled() {
+		r.Get("/goi", s.redirectLegacyPlans)
+		r.Get("/thanh-toan/{ref}", s.redirectLegacyInvoice)
+	}
 
 	// Viewer-mediated playback API (same-origin, called by the watch page JS).
 	r.Post("/api/sources/{videoID}/prepare", s.handlePrepareSource)
 	r.Get("/api/subtitles/{id}/file", s.handleSubtitleFile)
+	r.Get("/api/catalog/cards", s.handleCatalogCards)
 	// Watch-session liveness: the watch page heartbeats while playing and beacons
 	// a leave on page hide, so the torrent is dropped the instant its last viewer
 	// goes away (see watchtracker.go).
@@ -381,12 +422,9 @@ func (s *Server) setupRouter() {
 	r.Post("/api/watch/heartbeat", s.handleWatchHeartbeat)
 	r.Post("/api/watch/leave", s.handleWatchLeave)
 
-	// Paid 4K tier. Registered only when a crypto rail is configured, exactly
-	// like the Google routes — an unconfigured deploy 404s these, and
-	// resolutionLock never marks a source 'upgrade', so nothing ever links here.
+	// Billing APIs stay unprefixed; the page URL returned when creating an
+	// invoice is localized from the request payload.
 	if s.billing.enabled() {
-		r.Get("/goi", s.handlePlansPage)
-		r.Get("/thanh-toan/{ref}", s.handleInvoicePage)
 		r.Route("/api/billing", func(r chi.Router) {
 			r.Use(s.requireUser)
 			r.Post("/invoices", s.handleCreateInvoice)
@@ -396,8 +434,59 @@ func (s *Server) setupRouter() {
 
 	fs := http.FileServer(http.Dir("static"))
 	r.Handle("/static/*", http.StripPrefix("/static/", fs))
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		locale := localeFromRequestPath(r.URL.Path)
+		ctx := context.WithValue(r.Context(), localeContextKey{}, locale)
+		s.renderNotFound(w, r.WithContext(ctx))
+	})
 
 	s.router = r
+}
+
+func (s *Server) requireLocale(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		locale, ok := parseLocale(chi.URLParam(r, "locale"))
+		if !ok || string(locale) != chi.URLParam(r, "locale") {
+			http.NotFound(w, r)
+			return
+		}
+		setLocaleCookie(w, r, locale)
+		w.Header().Set("Content-Language", string(locale))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), localeContextKey{}, locale)))
+	})
+}
+
+func (s *Server) handleLocaleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery != "" {
+		http.Redirect(w, r, localeHome(LocaleVI)+"?"+r.URL.RawQuery, http.StatusMovedPermanently)
+		return
+	}
+	w.Header().Add("Vary", "Accept-Language")
+	w.Header().Add("Vary", "Cookie")
+	http.Redirect(w, r, localeHome(preferredLocale(r)), http.StatusFound)
+}
+
+func (s *Server) handleLocaleSlash(w http.ResponseWriter, r *http.Request) {
+	locale, ok := parseLocale(chi.URLParam(r, "locale"))
+	if !ok || string(locale) != chi.URLParam(r, "locale") {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, localeHome(locale), http.StatusMovedPermanently)
+}
+
+func (s *Server) redirectLegacyVietnamese(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, localizeLegacyURL(LocaleVI, r), http.StatusMovedPermanently)
+}
+
+func (s *Server) redirectLegacyPlans(w http.ResponseWriter, r *http.Request) {
+	values := r.URL.Query()
+	http.Redirect(w, r, localeQueryURL(LocaleVI, "/plans", values), http.StatusMovedPermanently)
+}
+
+func (s *Server) redirectLegacyInvoice(w http.ResponseWriter, r *http.Request) {
+	target := localeURL(LocaleVI, "/payment/"+url.PathEscape(chi.URLParam(r, "ref")))
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
 
 // gridPageSize is how many title cards one discovery-grid page holds.
@@ -415,8 +504,10 @@ func filterFromQuery(r *http.Request) TitleFilter {
 	if id, err := strconv.Atoi(q.Get("genre")); err == nil && id > 0 {
 		f.GenreID = id
 	}
-	if q.Get("vietsub") == "1" {
-		f.Vietsub = true
+	if sub := q.Get("subtitle"); sub == "vi" || sub == "en" {
+		f.Subtitle = sub
+	} else if q.Get("vietsub") == "1" {
+		f.Subtitle = "vi"
 	}
 	return f
 }
@@ -424,7 +515,7 @@ func filterFromQuery(r *http.Request) TitleFilter {
 // active reports whether any constraint is set (so the home page shows the grid
 // rather than the browse rows).
 func (f TitleFilter) active() bool {
-	return f.Query != "" || f.GenreID > 0 || f.Type != "" || f.Vietsub
+	return f.Query != "" || f.GenreID > 0 || f.Type != "" || f.Subtitle != ""
 }
 
 // pageFromQuery reads the 1-based page number; anything missing or < 1 is page 1.
@@ -439,7 +530,7 @@ func pageFromQuery(r *http.Request) int {
 // constraints and page 1 are omitted, and keys are encoded in a stable order so
 // the same state always yields the same shareable URL. Used both for the page
 // links and to canonicalize the address (see handleHome's redirect).
-func homeURL(f TitleFilter, page int) string {
+func homeURL(locale Locale, f TitleFilter, page int) string {
 	v := url.Values{}
 	if f.Query != "" {
 		v.Set("q", f.Query)
@@ -450,16 +541,16 @@ func homeURL(f TitleFilter, page int) string {
 	if f.Type != "" {
 		v.Set("type", f.Type)
 	}
-	if f.Vietsub {
-		v.Set("vietsub", "1")
+	if f.Subtitle != "" {
+		v.Set("subtitle", f.Subtitle)
 	}
 	if page > 1 {
 		v.Set("page", strconv.Itoa(page))
 	}
 	if len(v) == 0 {
-		return "/"
+		return localeHome(locale)
 	}
-	return "/?" + v.Encode()
+	return localeHome(locale) + "?" + v.Encode()
 }
 
 // gridPage is one page of discovery-grid cards plus its pagination controls.
@@ -472,19 +563,20 @@ type gridPage struct {
 // to the valid range) and builds its pagination controls; each page link is a
 // full "/" navigation so the URL changes as the user pages.
 func (s *Server) loadGridPage(r *http.Request, f TitleFilter, page int) (gridPage, error) {
-	total, err := s.store.CountTitles(r.Context(), f)
+	locale := localeFromContext(r.Context())
+	total, err := s.store.CountTitles(r.Context(), locale, f)
 	if err != nil {
 		return gridPage{}, err
 	}
 	pages := totalPages(total, gridPageSize)
 	page = clampPage(page, pages)
-	titles, err := s.store.ListTitles(r.Context(), f, gridPageSize, (page-1)*gridPageSize)
+	titles, err := s.store.ListTitles(r.Context(), locale, f, gridPageSize, (page-1)*gridPageSize)
 	if err != nil {
 		return gridPage{}, err
 	}
 	return gridPage{
 		Titles: titles,
-		Pager:  buildPager(page, pages, func(n int) template.URL { return template.URL(homeURL(f, n)) }),
+		Pager:  buildPager(page, pages, func(n int) template.URL { return template.URL(homeURL(locale, f, n)) }),
 	}, nil
 }
 
@@ -592,6 +684,7 @@ type homeData struct {
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	locale := localeFromContext(r.Context())
 	f := filterFromQuery(r)
 	reqPage := pageFromQuery(r)
 	filtered := f.active()
@@ -604,12 +697,12 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	if !filtered {
 		wantPage = 1
 	}
-	if want := homeURL(f, wantPage); want != r.URL.RequestURI() {
+	if want := homeURL(locale, f, wantPage); want != r.URL.RequestURI() {
 		http.Redirect(w, r, want, http.StatusFound)
 		return
 	}
 
-	genres, err := s.store.ListGenres(r.Context())
+	genres, err := s.store.ListGenres(r.Context(), locale)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -630,11 +723,11 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		}
 		// A page past the end was clamped; send the address to the real last page.
 		if eff := data.Grid.Pager.Page; eff != reqPage {
-			http.Redirect(w, r, homeURL(f, eff), http.StatusFound)
+			http.Redirect(w, r, homeURL(locale, f, eff), http.StatusFound)
 			return
 		}
 	} else {
-		if data.Rows, err = s.store.ListRows(r.Context()); err != nil {
+		if data.Rows, err = s.store.ListRows(r.Context(), locale); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -658,7 +751,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, id := range heroIDs {
-			if t, err := s.store.GetTitle(r.Context(), id); err == nil && t != nil {
+			if t, err := s.store.GetTitle(r.Context(), locale, id); err == nil && t != nil {
 				data.Featured = append(data.Featured, t)
 			}
 		}
@@ -667,18 +760,26 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
+	locale := localeFromContext(r.Context())
 	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
 		s.renderNotFound(w, r)
 		return
 	}
-	title, err := s.store.GetTitle(r.Context(), id)
+	title, err := s.store.GetTitle(r.Context(), locale, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if title == nil {
 		s.renderNotFound(w, r)
+		return
+	}
+	if canonical := titlePath(locale, title.ID, title.Title, title.OriginalTitle); canonical != r.URL.Path {
+		if r.URL.RawQuery != "" {
+			canonical += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, canonical, http.StatusMovedPermanently)
 		return
 	}
 	s.render(w, r, s.detail, title)
@@ -698,13 +799,67 @@ type bookmarksData struct {
 	Titles   []TitleSummary
 }
 
+type cardPayload struct {
+	ID       int64   `json:"id"`
+	Href     string  `json:"href"`
+	Title    string  `json:"title"`
+	Original string  `json:"original"`
+	Poster   string  `json:"poster"`
+	Year     string  `json:"year"`
+	Type     string  `json:"type"`
+	Score    float64 `json:"score"`
+	Subtitle bool    `json:"subtitle"`
+}
+
+// handleCatalogCards refreshes anonymous localStorage bookmarks in the current
+// language. Only public catalog metadata is returned; account bookmarks remain
+// behind their existing authenticated API.
+func (s *Server) handleCatalogCards(w http.ResponseWriter, r *http.Request) {
+	locale, ok := parseLocale(r.URL.Query().Get("locale"))
+	if !ok {
+		locale = LocaleVI
+	}
+	rawIDs := strings.Split(r.URL.Query().Get("ids"), ",")
+	ids := make([]int64, 0, len(rawIDs))
+	seen := map[int64]bool{}
+	for _, raw := range rawIDs {
+		id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err == nil && id > 0 && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		if len(ids) >= 500 {
+			break
+		}
+	}
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"cards": []cardPayload{}})
+		return
+	}
+	titles, err := s.store.TitleCardsByIDs(r.Context(), locale, ids)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not load titles")
+		return
+	}
+	cards := make([]cardPayload, 0, len(titles))
+	for _, title := range titles {
+		cards = append(cards, cardPayload{
+			ID: title.ID, Href: titlePath(locale, title.ID, title.Title, title.OriginalTitle),
+			Title: title.Title, Original: title.OriginalTitle,
+			Poster: tmdbImageURL("w342", title.PosterPath), Year: yearOf(title.AirDate),
+			Type: title.Type, Score: title.VoteAverage, Subtitle: title.HasSubtitle,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cards": cards})
+}
+
 func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 	if user == nil {
 		s.render(w, r, s.bookmarks, bookmarksData{})
 		return
 	}
-	titles, err := s.store.SavedTitles(r.Context(), user.ID)
+	titles, err := s.store.SavedTitles(r.Context(), localeFromContext(r.Context()), user.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -949,11 +1104,11 @@ func (s *Server) accessForTitle(r *http.Request, titleID int64, needsPaid bool) 
 
 // upgradeURL is the "buy 4K" link for a title, "" when billing is off (in which
 // case no source is ever marked lockUpgrade, so nothing renders it).
-func (s *Server) upgradeURL(titleID int64) string {
+func (s *Server) upgradeURL(locale Locale, titleID int64) string {
 	if !s.billing.enabled() {
 		return ""
 	}
-	return "/goi?title=" + strconv.FormatInt(titleID, 10)
+	return localeURL(locale, "/plans") + "?title=" + strconv.FormatInt(titleID, 10)
 }
 
 // watchVideo is the browser-facing subset of a Video (no magnet — the viewer
@@ -1014,12 +1169,13 @@ func jsonOrEmpty(v any) string {
 }
 
 func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
+	locale := localeFromContext(r.Context())
 	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
 		s.renderNotFound(w, r)
 		return
 	}
-	title, err := s.store.GetTitle(r.Context(), id)
+	title, err := s.store.GetTitle(r.Context(), locale, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1042,25 +1198,26 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 	data := watchData{
 		Heading:       title.Title,
 		Sub:           yearOf(title.AirDate),
-		BackHref:      titlePath(title.ID, title.Title, title.OriginalTitle),
+		BackHref:      titlePath(locale, title.ID, title.Title, title.OriginalTitle),
 		OwnerKind:     "title",
 		OwnerID:       title.ID,
 		VideosJSON:    jsonOrEmpty(s.toWatchVideos(videos, access)),
 		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
 		HasVideo:      len(videos) > 0,
 		LoginURL:      s.loginURL(r),
-		UpgradeURL:    s.upgradeURL(title.ID),
+		UpgradeURL:    s.upgradeURL(locale, title.ID),
 	}
 	s.render(w, r, s.watch, data)
 }
 
 func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
+	locale := localeFromContext(r.Context())
 	id, err := parseIDFromSlug(chi.URLParam(r, "id"))
 	if err != nil {
 		s.renderNotFound(w, r)
 		return
 	}
-	ec, err := s.store.GetEpisodeContext(r.Context(), id)
+	ec, err := s.store.GetEpisodeContext(r.Context(), locale, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1080,26 +1237,26 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	eps, err := s.store.EpisodesInSeasonOf(r.Context(), id)
+	eps, err := s.store.EpisodesInSeasonOf(r.Context(), locale, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	sub := fmt.Sprintf("Phần %d · Tập %d", ec.SeasonNumber, ec.EpisodeNumber)
+	sub := tr(locale, "watch.episode_sub", ec.SeasonNumber, ec.EpisodeNumber)
 	if ec.EpisodeName != "" {
 		sub += ": " + ec.EpisodeName
 	}
 	data := watchData{
 		Heading:       ec.TitleName,
 		Sub:           sub,
-		BackHref:      titlePath(ec.TitleID, ec.TitleName, ""),
+		BackHref:      titlePath(locale, ec.TitleID, ec.TitleName, ""),
 		OwnerKind:     "episode",
 		OwnerID:       id,
 		VideosJSON:    jsonOrEmpty(s.toWatchVideos(videos, access)),
 		SubtitlesJSON: jsonOrEmpty(toWatchSubtitles(subs)),
 		HasVideo:      len(videos) > 0,
 		LoginURL:      s.loginURL(r),
-		UpgradeURL:    s.upgradeURL(ec.TitleID),
+		UpgradeURL:    s.upgradeURL(locale, ec.TitleID),
 		SeasonNumber:  ec.SeasonNumber,
 		Episodes:      eps,
 	}
@@ -1110,6 +1267,10 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 // server-to-server and returns the info hash + file index for the browser to
 // stream. This is the only path that reaches the streamer's add API.
 func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
+	locale, ok := parseLocale(r.Header.Get("X-Phimnet-Locale"))
+	if !ok {
+		locale = LocaleVI
+	}
 	id, err := strconv.ParseInt(chi.URLParam(r, "videoID"), 10, 64)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid video id")
@@ -1137,13 +1298,13 @@ func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 	access := s.accessForTitle(r, titleID, lockedResolutions[video.Resolution])
 	switch s.resolutionLock(video.Resolution, access) {
 	case lockPaid:
-		writeJSONError(w, http.StatusForbidden, "nguồn này hiện không khả dụng")
+		writeJSONError(w, http.StatusForbidden, tr(locale, "watch.source_unavailable"))
 		return
 	case lockUpgrade:
-		writeJSONError(w, http.StatusPaymentRequired, "Nâng cấp để xem chất lượng "+video.Resolution)
+		writeJSONError(w, http.StatusPaymentRequired, tr(locale, "watch.upgrade_quality", video.Resolution))
 		return
 	case lockMember:
-		writeJSONError(w, http.StatusUnauthorized, "Đăng nhập để xem chất lượng "+video.Resolution)
+		writeJSONError(w, http.StatusUnauthorized, tr(locale, "watch.sign_in_quality", video.Resolution))
 		return
 	}
 	infoHash, streamerPublicURL, err := s.manager.addTorrent(r.Context(), video.Magnet, video.TorrentFile)
@@ -1289,11 +1450,11 @@ func (s *Server) baseURL(r *http.Request) string {
 // titleJSONLD builds schema.org Movie/TVSeries + BreadcrumbList structured data
 // for a detail page. json.Marshal escapes <, >, & by default, so the result is
 // safe to embed directly inside a <script> element.
-func (s *Server) titleJSONLD(t *Title) template.JS {
+func (s *Server) titleJSONLD(locale Locale, t *Title) template.JS {
 	if t == nil {
 		return ""
 	}
-	url := s.abs(titlePath(t.ID, t.Title, t.OriginalTitle))
+	url := s.abs(titlePath(locale, t.ID, t.Title, t.OriginalTitle))
 
 	work := map[string]any{
 		"@context": "https://schema.org",
@@ -1337,7 +1498,7 @@ func (s *Server) titleJSONLD(t *Title) template.JS {
 		"@context": "https://schema.org",
 		"@type":    "BreadcrumbList",
 		"itemListElement": []any{
-			map[string]any{"@type": "ListItem", "position": 1, "name": "Trang chủ", "item": s.abs("/")},
+			map[string]any{"@type": "ListItem", "position": 1, "name": tr(locale, "nav.home"), "item": s.abs(localeHome(locale))},
 			map[string]any{"@type": "ListItem", "position": 2, "name": t.Title, "item": url},
 		},
 	}
@@ -1351,15 +1512,15 @@ func (s *Server) titleJSONLD(t *Title) template.JS {
 
 // siteJSONLD builds the site-wide WebSite structured data, including a
 // SearchAction so search engines can offer a sitelinks search box.
-func (s *Server) siteJSONLD() template.JS {
+func (s *Server) siteJSONLD(locale Locale) template.JS {
 	site := map[string]any{
 		"@context": "https://schema.org",
 		"@type":    "WebSite",
 		"name":     "phimnet",
-		"url":      s.abs("/"),
+		"url":      s.abs(localeHome(locale)),
 		"potentialAction": map[string]any{
 			"@type":       "SearchAction",
-			"target":      s.abs("/?q={search_term_string}"),
+			"target":      s.abs(localeHome(locale) + "?q={search_term_string}"),
 			"query-input": "required name=search_term_string",
 		},
 	}
@@ -1378,21 +1539,41 @@ func (s *Server) handleRobots(w http.ResponseWriter, r *http.Request) {
 // handleSitemap emits an XML sitemap of the home page plus every title detail
 // page, with each title's last-modified date so crawlers can prioritise updates.
 func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.store.SitemapTitles(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	base := s.baseURL(r)
+	localized := make(map[Locale][]SitemapEntry, len(supportedLocales))
+	byID := make(map[Locale]map[int64]SitemapEntry, len(supportedLocales))
+	for _, locale := range supportedLocales {
+		entries, err := s.store.SitemapTitles(r.Context(), locale)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		localized[locale] = entries
+		byID[locale] = make(map[int64]SitemapEntry, len(entries))
+		for _, entry := range entries {
+			byID[locale][entry.ID] = entry
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
-	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` + "\n")
-	b.WriteString("  <url><loc>" + base + "/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>\n")
-	for _, e := range entries {
-		b.WriteString(fmt.Sprintf(
-			"  <url><loc>%s%s</loc><lastmod>%s</lastmod><changefreq>weekly</changefreq></url>\n",
-			base, titlePath(e.ID, e.Title, e.OriginalTitle), e.UpdatedAt.Format("2006-01-02")))
+	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">` + "\n")
+	for _, locale := range supportedLocales {
+		b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, localeHome(locale)))
+		for _, alternate := range supportedLocales {
+			b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, localeHome(alternate)))
+		}
+		b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="x-default" href="%s/"/><changefreq>daily</changefreq><priority>1.0</priority></url>`+"\n", base))
+		for _, entry := range localized[locale] {
+			b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, titlePath(locale, entry.ID, entry.Title, entry.OriginalTitle)))
+			for _, alternate := range supportedLocales {
+				other, ok := byID[alternate][entry.ID]
+				if ok {
+					b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, titlePath(alternate, other.ID, other.Title, other.OriginalTitle)))
+				}
+			}
+			b.WriteString(fmt.Sprintf("<lastmod>%s</lastmod><changefreq>weekly</changefreq></url>\n", entry.UpdatedAt.Format("2006-01-02")))
+		}
 	}
 	b.WriteString("</urlset>\n")
 
@@ -1406,7 +1587,12 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 // LoginURL drive the shared header chrome and SavedIDsJSON lets bookmarks.js
 // mark the save buttons without a round trip.
 type pageData struct {
-	Data any
+	Data               any
+	Locale             Locale
+	HomeURL            string
+	AlternateURL       string
+	AlternateLocale    Locale
+	ClientMessagesJSON string
 	// User is nil for an anonymous visitor, which is the common case.
 	User *User
 	// LoginURL is the sign-in link for THIS page, so a visitor comes back to
@@ -1422,11 +1608,35 @@ type pageData struct {
 
 // newPageData wraps a handler's view model with the shared per-request chrome.
 func (s *Server) newPageData(r *http.Request, data any) pageData {
+	locale := localeFromContext(r.Context())
+	clientMessages := map[string]string{
+		"bookmarkSave":         tr(locale, "bookmark.save"),
+		"bookmarkSaved":        tr(locale, "bookmark.saved"),
+		"bookmarkRemove":       tr(locale, "bookmark.remove"),
+		"bookmarkClearConfirm": tr(locale, "bookmarks.clear_confirm"),
+		"typeMovie":            tr(locale, "type.movie"),
+		"typeTV":               tr(locale, "type.tv"),
+		"subtitleBadge":        tr(locale, "card.subtitle"),
+	}
 	pd := pageData{
-		Data:         data,
-		User:         userFrom(r.Context()),
-		SavedIDsJSON: "[]",
-		Path:         r.URL.RequestURI(),
+		Data:               data,
+		Locale:             locale,
+		HomeURL:            localeHome(locale),
+		AlternateURL:       alternateLocaleURL(r),
+		AlternateLocale:    fallbackLocale(locale),
+		ClientMessagesJSON: jsonOrEmpty(clientMessages),
+		User:               userFrom(r.Context()),
+		SavedIDsJSON:       "[]",
+		Path:               r.URL.RequestURI(),
+	}
+	// Detail pages use locale-specific slugs. Resolve the other translation so
+	// hreflang and the language switcher point directly at its canonical URL,
+	// rather than relying on a redirect from the current language's slug.
+	if title, ok := data.(*Title); ok && title != nil && s.store != nil {
+		alternate := fallbackLocale(locale)
+		if translated, err := s.store.GetTitle(r.Context(), alternate, title.ID); err == nil && translated != nil {
+			pd.AlternateURL = titlePath(alternate, translated.ID, translated.Title, translated.OriginalTitle)
+		}
 	}
 	if pd.User != nil {
 		ids := make([]int64, 0, len(pd.User.SavedIDs))
@@ -1454,8 +1664,14 @@ func (s *Server) renderNotFound(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, s.notFound, nil)
 }
 
-func (s *Server) render(w http.ResponseWriter, r *http.Request, t *template.Template, data any) {
+func (s *Server) render(w http.ResponseWriter, r *http.Request, templates localizedTemplate, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	locale := localeFromContext(r.Context())
+	w.Header().Set("Content-Language", string(locale))
+	t := templates[locale]
+	if t == nil {
+		t = templates[LocaleVI]
+	}
 	if err := t.ExecuteTemplate(w, "layout", s.newPageData(r, data)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

@@ -8,8 +8,8 @@ Guidance for the **TMDB metadata admin** service
 ## What this is
 
 The **write side** of the shared catalog. An admin pastes a themoviedb.org id or
-link; the service fetches movie/TV metadata from TMDB (Vietnamese, English
-fallback) and upserts it into MySQL. It serves a tiny **htmx + Alpine** admin UI
+link; the service fetches movie/TV metadata from TMDB in Vietnamese and English,
+retains both translations, and upserts them into MySQL. It serves a tiny **htmx + Alpine** admin UI
 (server-rendered `html/template`, embedded in the binary) behind HTTP Basic auth.
 The public, read-only [`viewer/`](../viewer/CLAUDE.md) renders what this service
 writes.
@@ -49,7 +49,9 @@ Env vars with matching CLI flags, except the two **secrets which are env-only**:
 unset).
 
 - HTTP: `ADMIN_PORT` (8081), `ADMIN_USER` (admin), `ADMIN_PASSWORD`.
-- TMDB: `TMDB_API_KEY`, `TMDB_LANGUAGE` (`vi-VN`), `TMDB_FALLBACK_LANGUAGE` (`en-US`).
+- TMDB: `TMDB_API_KEY`, `TMDB_LANGUAGE` (`vi-VN`), `TMDB_FALLBACK_LANGUAGE`
+  (`en-US`), and `TMDB_TRANSLATION_BACKFILL_INTERVAL_MIN` (1; one existing title
+  refreshed per interval, 0 disables the background backfill).
 - MySQL: `MYSQL_DSN` (overrides the rest when set) or `DB_HOST`/`DB_PORT`/
   `DB_USER`/`DB_PASSWORD`/`DB_NAME`. The DSN is built with
   `parseTime=true&charset=utf8mb4` so dates scan into `time.Time` and Vietnamese
@@ -279,7 +281,9 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
   (`0006`), the two **viewer account** tables (`0007`), the **billing**
   tables for the paid 4K tier (`0008`: `payment_invoices`, `user_title_unlocks`,
   `billing_chain_cursors`), and the admin-granted 4K unlock columns
-  (`0009`: `users.comp_expires_at` / `comp_granted_at`). `featured_titles` is the
+  (`0009`: `users.comp_expires_at` / `comp_granted_at`). `0010` adds localized
+  title, genre, season, and episode translation tables for the viewer's `/vi`
+  and `/en` page trees. `featured_titles` is the
   manual browse-hero curation list — `(title_id PK, position, created_at)` with a
   cascading FK to `titles`, ordered by `position` ascending; the catalog `titles`
   table stays untouched (deliberately a separate table, not a `titles` column).

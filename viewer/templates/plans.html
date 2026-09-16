@@ -1,22 +1,22 @@
-{{define "head_title"}}Nâng cấp 4K – phimnet{{end}}
+{{define "head_title"}}{{t "plans.title"}} – phimnet{{end}}
 {{define "head_extra"}}
-<meta name="description" content="Mở khoá chất lượng 4K trên phimnet.">
+<meta name="description" content="{{t "plans.description"}}">
 {{/* A purchase funnel tied to one account: nothing for a crawler to index. */}}
 <meta name="robots" content="noindex, nofollow">
 {{end}}
 {{define "content"}}
 <section class="billing wrap">
-	<h1>Nâng cấp để xem 4K</h1>
+	<h1>{{t "plans.heading"}}</h1>
 
 	{{if .HasPass}}
-	<p class="billing-note ok">Bạn đang có quyền xem 4K{{if .PassForever}} vĩnh viễn{{else}}, hiệu lực đến {{.PassUntil}}. Mua thêm sẽ cộng dồn thời hạn{{end}}.</p>
+	<p class="billing-note ok">{{if .PassForever}}{{t "plans.active_forever"}}{{else}}{{t "plans.active_until" .PassUntil}}{{end}}</p>
 	{{end}}
 
 	{{if not .SignedIn}}
 	{{/* Entitlements hang off an account, so sign-in is genuinely step one —
 	     not an upsell. Say why, then get out of the way. */}}
-	<p class="billing-note">Cần đăng nhập trước khi thanh toán, vì quyền xem 4K gắn với tài khoản của bạn.</p>
-	{{with .LoginURL}}<a class="login-link" href="{{.}}"><span>Đăng nhập với Google</span></a>{{end}}
+	<p class="billing-note">{{t "plans.sign_in_note"}}</p>
+	{{with .LoginURL}}<a class="login-link" href="{{.}}"><span>{{t "account.sign_in_google"}}</span></a>{{end}}
 	{{else}}
 
 	<div class="plan-grid">
@@ -26,18 +26,18 @@
 			<div class="plan-price">{{.USD}}{{with .VND}} <span class="plan-vnd">≈ {{.}}</span>{{end}}</div>
 			<p class="plan-note">{{.Note}}</p>
 			{{if .Current}}
-			<span class="plan-owned">Đã sở hữu</span>
+			<span class="plan-owned">{{t "plans.owned"}}</span>
 			{{else}}
-			<button type="button" class="plan-buy" data-code="{{.Code}}">Chọn gói này</button>
+			<button type="button" class="plan-buy" data-code="{{.Code}}">{{t "plans.choose"}}</button>
 			{{end}}
 		</div>
 		{{else}}
-		<p class="empty">Hiện chưa có gói nào khả dụng.</p>
+		<p class="empty">{{t "plans.none"}}</p>
 		{{end}}
 	</div>
 
-	<h2 class="billing-sub">Thanh toán bằng tiền mã hoá</h2>
-	<p class="billing-note">Chọn mạng bạn muốn chuyển. Phí mạng do bạn trả, nên các mạng L2 thường rẻ hơn nhiều.</p>
+	<h2 class="billing-sub">{{t "plans.crypto"}}</h2>
+	<p class="billing-note">{{t "plans.chain_note"}}</p>
 	<div class="chain-picker" id="chain-picker">
 		{{range $i, $c := .Chains}}
 		<label class="chain-opt">
@@ -54,6 +54,7 @@
 <script>
 (function () {
 	const TITLE_ID = {{.TitleID}};
+	const LOCALE = document.body.dataset.locale || 'vi';
 	const errBox = document.getElementById('billing-error');
 
 	function showError(msg) {
@@ -70,22 +71,22 @@
 	document.querySelectorAll('.plan-buy').forEach(btn => {
 		btn.addEventListener('click', async () => {
 			const chain = chosenChain();
-			if (!chain) { showError('Hãy chọn một mạng thanh toán.'); return; }
+			if (!chain) { showError({{js (t "plans.choose_chain")}}); return; }
 			btn.disabled = true;
-			btn.textContent = 'Đang tạo hoá đơn…';
+			btn.textContent = {{js (t "plans.creating")}};
 			try {
 				const res = await fetch('/api/billing/invoices', {
 					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ plan_code: btn.dataset.code, title_id: TITLE_ID, chain: chain })
+					headers: { 'Content-Type': 'application/json', 'X-Phimnet-Locale': LOCALE },
+					body: JSON.stringify({ plan_code: btn.dataset.code, title_id: TITLE_ID, chain: chain, locale: LOCALE })
 				});
 				const data = await res.json().catch(() => ({}));
-				if (!res.ok) throw new Error(data.error || 'Không tạo được hoá đơn');
+				if (!res.ok) throw new Error(data.error || {{js (t "plans.create_error")}});
 				window.location.href = data.url;
 			} catch (e) {
 				showError(e.message);
 				btn.disabled = false;
-				btn.textContent = 'Chọn gói này';
+				btn.textContent = {{js (t "plans.choose")}};
 			}
 		});
 	});

@@ -1,6 +1,6 @@
-{{define "head_title"}}{{.Title}}{{with year .AirDate}} ({{.}}){{end}} – Xem online phụ đề tiếng Việt – phimnet{{end}}
+{{define "head_title"}}{{.Title}}{{with year .AirDate}} ({{.}}){{end}} – {{t "detail.title_suffix"}} – phimnet{{end}}
 {{define "head_extra"}}
-<meta name="description" content="{{if .Overview}}{{truncate 160 .Overview}}{{else}}Xem {{.Title}}{{with year .AirDate}} ({{.}}){{end}} {{if eq .Type "tv"}}phim bộ{{else}}phim lẻ{{end}} online, phụ đề tiếng Việt, chất lượng cao tại phimnet.{{end}}">
+<meta name="description" content="{{if .Overview}}{{truncate 160 .Overview}}{{else}}{{t "detail.fallback_description" .Title (typeName .Type)}}{{end}}">
 <meta name="robots" content="index, follow">
 <link rel="canonical" href="{{abs (titlePath .ID .Title .OriginalTitle)}}">
 <meta property="og:type" content="video.{{if eq .Type "tv"}}tv_show{{else}}movie{{end}}">
@@ -23,17 +23,17 @@
 			<h1>{{.Title}}{{with year .AirDate}} <span class="year">({{.}})</span>{{end}}</h1>
 			{{if and .OriginalTitle (ne .OriginalTitle .Title)}}<p class="original-title">{{.OriginalTitle}}</p>{{end}}
 			<div class="meta-row">
-				<span class="badge">{{if eq .Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}}</span>
+				<span class="badge">{{if eq .Type "tv"}}{{t "type.tv"}}{{else}}{{t "type.movie"}}{{end}}</span>
 				{{if gt .VoteAverage 0.0}}<span class="rating">{{rating .VoteAverage}}</span>{{end}}
-				{{with .Runtime}}<span>{{.}} phút</span>{{end}}
+				{{with .Runtime}}<span>{{.}} {{t "unit.minutes"}}</span>{{end}}
 			</div>
 			{{if .Genres}}<div class="genres">{{range .Genres}}<span class="genre-chip">{{.Name}}</span>{{end}}</div>{{end}}
 			{{/* The watch CTA only exists for movies (a series is watched per
 			     episode below), but the save button applies to both, so they share
-			     an always-rendered row. data-bm-vietsub is "false" here: the detail
-			     Title has no HasVietsub field — only the listing TitleSummary does. */}}
+			     an always-rendered row. Subtitle badges are computed on listing
+			     summaries, so a detail-page snapshot conservatively stores false. */}}
 			<div class="detail-actions">
-				{{if ne .Type "tv"}}<a class="watch-btn" href="{{watchMoviePath .ID .Title .OriginalTitle}}">▶ Xem phim</a>{{end}}
+				{{if ne .Type "tv"}}<a class="watch-btn" href="{{watchMoviePath .ID .Title .OriginalTitle}}">▶ {{t "detail.watch"}}</a>{{end}}
 				<button class="save-btn" type="button" data-bm-toggle
 					data-bm-id="{{.ID}}"
 					data-bm-href="{{titlePath .ID .Title .OriginalTitle}}"
@@ -43,7 +43,7 @@
 					data-bm-year="{{year .AirDate}}"
 					data-bm-type="{{.Type}}"
 					data-bm-score="{{.VoteAverage}}"
-					data-bm-vietsub="false"><span class="bm-icon" aria-hidden="true"></span><span class="bm-label">Lưu xem sau</span></button>
+					data-bm-subtitle="false"><span class="bm-icon" aria-hidden="true"></span><span class="bm-label">{{t "bookmark.save"}}</span></button>
 			</div>
 			{{if .Overview}}<p class="overview">{{.Overview}}</p>{{end}}
 		</div>
@@ -51,22 +51,22 @@
 
 	{{if and (eq .Type "tv") .Seasons}}
 	<section class="seasons">
-		<h2>Các phần</h2>
+		<h2>{{t "detail.seasons"}}</h2>
 		{{range .Seasons}}
 		<details class="season">
 			<summary class="season-head">
-				<span>{{if .Name}}{{.Name}}{{else}}Phần {{.SeasonNumber}}{{end}}</span>
-				<span class="ep-count">{{len .Episodes}} tập</span>
+				<span>{{if .Name}}{{.Name}}{{else}}{{t "detail.season" .SeasonNumber}}{{end}}</span>
+				<span class="ep-count">{{t "detail.episode_count" (len .Episodes)}}</span>
 			</summary>
 			<div class="episodes">
 				{{range .Episodes}}
 				<div class="episode">
 					<span class="ep-num">{{.EpisodeNumber}}</span>
 					<div class="ep-body">
-						<div class="ep-title">{{if .Name}}{{.Name}}{{else}}Tập {{.EpisodeNumber}}{{end}}</div>
+						<div class="ep-title">{{if .Name}}{{.Name}}{{else}}{{t "detail.episode" .EpisodeNumber}}{{end}}</div>
 						{{if .Overview}}<div class="ep-overview">{{.Overview}}</div>{{end}}
 					</div>
-					<a class="watch-btn-sm" href="{{watchEpisodePath .ID .EpisodeNumber $.Title}}">▶ Xem</a>
+					<a class="watch-btn-sm" href="{{watchEpisodePath .ID .EpisodeNumber $.Title}}">▶ {{t "detail.watch_short"}}</a>
 				</div>
 				{{end}}
 			</div>

@@ -203,6 +203,12 @@ main { width: 100%; }
 }
 .discord-link:hover { background: #4752c4; transform: translateY(-1px); }
 .discord-icon { display: block; }
+.language-link {
+	display: inline-flex; align-items: center; padding: 8px 12px;
+	border: 1px solid rgba(255,255,255,0.28); border-radius: 999px;
+	color: #e5e5e5; font-size: 0.82rem; font-weight: 700; white-space: nowrap;
+}
+.language-link:hover { border-color: var(--text); color: var(--text); }
 
 /* --- Hero billboard ----------------------------------------------------- */
 .hero {

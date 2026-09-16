@@ -211,7 +211,7 @@ func (u *User) DisplayName() string {
 	if i := strings.IndexByte(u.Email, '@'); i > 0 {
 		return u.Email[:i]
 	}
-	return "Tài khoản"
+	return ""
 }
 
 // Initial is the single-letter avatar shown when the provider gave us no

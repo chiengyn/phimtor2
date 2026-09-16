@@ -3,8 +3,8 @@
 //   local  — anonymous visitors. The list lives entirely in localStorage and each
 //            entry stores the whole card snapshot it was saved from, which is
 //            what lets /bookmarks re-render it with no round trip. This is
-//            exactly how the feature worked before accounts existed, and nothing
-//            about it changed.
+//            how the feature worked before accounts existed; localized catalog
+//            metadata is refreshed when the saved-list page opens.
 //   server — signed-in visitors. The list lives in the database, so it follows
 //            them across devices. Only ids are held here (the set the server
 //            rendered onto <body data-bm-ids>); the cards themselves come from
@@ -23,6 +23,10 @@
 
 	var KEY = 'phimnet.bookmarks';
 	var MAX = 500; // far under quota; oldest entries fall off the end
+	var MSG = {};
+	try { MSG = JSON.parse(document.body.dataset.clientMessages || '{}'); } catch (e) {}
+	function msg(key, fallback) { return MSG[key] || fallback; }
+	var LOCALE = document.body.dataset.locale || 'vi';
 
 	var SERVER = document.body.dataset.bmMode === 'server';
 	// Ids the signed-in visitor has saved, as strings so they compare cleanly
@@ -92,6 +96,7 @@
 		var d = btn.dataset;
 		return {
 			id: d.bmId,
+			locale: LOCALE,
 			href: d.bmHref,
 			title: d.bmTitle || '',
 			original: d.bmOriginal || '',
@@ -99,7 +104,7 @@
 			year: d.bmYear || '',
 			type: d.bmType || 'movie',
 			score: parseFloat(d.bmScore) || 0,
-			vietsub: d.bmVietsub === 'true',
+			subtitle: d.bmSubtitle === 'true',
 			savedAt: Date.now()
 		};
 	}
@@ -122,9 +127,9 @@
 	function markButton(btn, saved) {
 		btn.classList.toggle('is-saved', saved);
 		btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
-		btn.setAttribute('aria-label', saved ? 'Bỏ lưu' : 'Lưu xem sau');
+		btn.setAttribute('aria-label', saved ? msg('bookmarkRemove', 'Remove from saved') : msg('bookmarkSave', 'Save for later'));
 		var label = btn.querySelector('.bm-label');
-		if (label) label.textContent = saved ? 'Đã lưu' : 'Lưu xem sau';
+		if (label) label.textContent = saved ? msg('bookmarkSaved', 'Saved') : msg('bookmarkSave', 'Save for later');
 	}
 
 	function syncButtons() {
@@ -171,8 +176,8 @@
 			score.setAttribute('aria-hidden', 'true');
 			poster.appendChild(score);
 		}
-		if (entry.vietsub) {
-			var vs = el('span', 'card-vietsub', 'Vietsub');
+		if (entry.subtitle || entry.vietsub) {
+			var vs = el('span', 'card-vietsub', msg('subtitleBadge', 'Subtitles'));
 			vs.setAttribute('aria-hidden', 'true');
 			poster.appendChild(vs);
 		}
@@ -188,7 +193,7 @@
 		btn.dataset.bmYear = entry.year;
 		btn.dataset.bmType = entry.type;
 		btn.dataset.bmScore = entry.score;
-		btn.dataset.bmVietsub = entry.vietsub ? 'true' : 'false';
+		btn.dataset.bmSubtitle = (entry.subtitle || entry.vietsub) ? 'true' : 'false';
 		var icon = el('span', 'bm-icon');
 		icon.setAttribute('aria-hidden', 'true');
 		btn.appendChild(icon);
@@ -205,7 +210,7 @@
 		if (entry.original && entry.original !== entry.title) {
 			body.appendChild(el('div', 'card-original', entry.original));
 		}
-		var kind = entry.type === 'tv' ? 'Phim bộ' : 'Phim lẻ';
+		var kind = entry.type === 'tv' ? msg('typeTV', 'TV Show') : msg('typeMovie', 'Movie');
 		body.appendChild(el('div', 'card-meta', entry.year ? entry.year + ' · ' + kind : kind));
 		card.appendChild(body);
 
@@ -235,9 +240,27 @@
 			return;
 		}
 		var list = load();
-		grid.textContent = '';
-		list.forEach(function (entry) { grid.appendChild(buildCard(entry)); });
-		syncEmptyState();
+		function draw(entries) {
+			grid.textContent = '';
+			entries.forEach(function (entry) { grid.appendChild(buildCard(entry)); });
+			syncEmptyState();
+		}
+		if (!list.length) { draw([]); return; }
+		var ids = list.map(function (entry) { return entry.id; }).filter(Boolean);
+		fetch('/api/catalog/cards?locale=' + encodeURIComponent(LOCALE) + '&ids=' + encodeURIComponent(ids.join(',')))
+			.then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+			.then(function (data) {
+				var byID = new Map();
+				(data.cards || []).forEach(function (card) { byID.set(String(card.id), card); });
+				var current = load();
+				var localized = current.map(function (entry) {
+					var card = byID.get(String(entry.id));
+					return card ? Object.assign({}, card, { savedAt: entry.savedAt || Date.now(), locale: LOCALE }) : null;
+				}).filter(Boolean);
+				save(localized);
+				draw(localized);
+			})
+			.catch(function () { draw(list); });
 	}
 
 	// dropCard removes an un-saved title from the saved grid, if we are on it.
@@ -290,7 +313,7 @@
 
 	document.addEventListener('click', function (ev) {
 		if (!ev.target.closest('#bookmark-clear')) return;
-		if (!window.confirm('Xoá toàn bộ danh sách phim đã lưu?')) return;
+		if (!window.confirm(msg('bookmarkClearConfirm', 'Clear your entire saved list?'))) return;
 		if (!SERVER) {
 			save([]);
 			renderBookmarks();

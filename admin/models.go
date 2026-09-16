@@ -14,52 +14,82 @@ import (
 // the MySQL DATE columns and JSON.
 
 type Title struct {
-	ID               int64      `json:"id"`
-	TMDBID           int        `json:"tmdb_id"`
-	Type             string     `json:"type"` // "movie" | "tv"
-	Title            string     `json:"title"`
-	OriginalTitle    string     `json:"original_title"`
-	Overview         string     `json:"overview"`
-	AirDate          string     `json:"air_date"`
-	Runtime          *int       `json:"runtime"`
-	PosterPath       string     `json:"poster_path"`
-	BackdropPath     string     `json:"backdrop_path"`
-	VoteAverage      float64    `json:"vote_average"`
-	OriginalLanguage string     `json:"original_language"`
-	Status           string     `json:"status"`
-	Genres           []Genre    `json:"genres,omitempty"`
-	Seasons          []Season   `json:"seasons,omitempty"`
-	Videos           []Video    `json:"videos,omitempty"`    // movie sources (TV uses Episode.Videos)
-	Subtitles        []Subtitle `json:"subtitles,omitempty"` // movie subtitles (TV uses Episode.Subtitles)
-	CreatedAt        time.Time  `json:"created_at,omitempty"`
-	UpdatedAt        time.Time  `json:"updated_at,omitempty"`
+	ID               int64              `json:"id"`
+	TMDBID           int                `json:"tmdb_id"`
+	Type             string             `json:"type"` // "movie" | "tv"
+	Title            string             `json:"title"`
+	OriginalTitle    string             `json:"original_title"`
+	Overview         string             `json:"overview"`
+	AirDate          string             `json:"air_date"`
+	Runtime          *int               `json:"runtime"`
+	PosterPath       string             `json:"poster_path"`
+	BackdropPath     string             `json:"backdrop_path"`
+	VoteAverage      float64            `json:"vote_average"`
+	OriginalLanguage string             `json:"original_language"`
+	Status           string             `json:"status"`
+	Genres           []Genre            `json:"genres,omitempty"`
+	Seasons          []Season           `json:"seasons,omitempty"`
+	Videos           []Video            `json:"videos,omitempty"`    // movie sources (TV uses Episode.Videos)
+	Subtitles        []Subtitle         `json:"subtitles,omitempty"` // movie subtitles (TV uses Episode.Subtitles)
+	CreatedAt        time.Time          `json:"created_at,omitempty"`
+	UpdatedAt        time.Time          `json:"updated_at,omitempty"`
+	Translations     []TitleTranslation `json:"translations,omitempty"`
+}
+
+type TitleTranslation struct {
+	Locale       string `json:"locale"`
+	Title        string `json:"title"`
+	Overview     string `json:"overview"`
+	PosterPath   string `json:"poster_path"`
+	BackdropPath string `json:"backdrop_path"`
 }
 
 type Genre struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID           int                `json:"id"`
+	Name         string             `json:"name"`
+	Translations []GenreTranslation `json:"translations,omitempty"`
+}
+
+type GenreTranslation struct {
+	Locale string `json:"locale"`
+	Name   string `json:"name"`
 }
 
 type Season struct {
-	ID           int64     `json:"id"`
-	SeasonNumber int       `json:"season_number"`
-	Name         string    `json:"name"`
-	Overview     string    `json:"overview"`
-	AirDate      string    `json:"air_date"`
-	PosterPath   string    `json:"poster_path"`
-	Episodes     []Episode `json:"episodes,omitempty"`
+	ID           int64               `json:"id"`
+	SeasonNumber int                 `json:"season_number"`
+	Name         string              `json:"name"`
+	Overview     string              `json:"overview"`
+	AirDate      string              `json:"air_date"`
+	PosterPath   string              `json:"poster_path"`
+	Episodes     []Episode           `json:"episodes,omitempty"`
+	Translations []SeasonTranslation `json:"translations,omitempty"`
+}
+
+type SeasonTranslation struct {
+	Locale     string `json:"locale"`
+	Name       string `json:"name"`
+	Overview   string `json:"overview"`
+	PosterPath string `json:"poster_path"`
 }
 
 type Episode struct {
-	ID            int64      `json:"id"`
-	EpisodeNumber int        `json:"episode_number"`
-	Name          string     `json:"name"`
-	Overview      string     `json:"overview"`
-	AirDate       string     `json:"air_date"`
-	Runtime       *int       `json:"runtime"`
-	StillPath     string     `json:"still_path"`
-	Videos        []Video    `json:"videos,omitempty"`
-	Subtitles     []Subtitle `json:"subtitles,omitempty"`
+	ID            int64                `json:"id"`
+	EpisodeNumber int                  `json:"episode_number"`
+	Name          string               `json:"name"`
+	Overview      string               `json:"overview"`
+	AirDate       string               `json:"air_date"`
+	Runtime       *int                 `json:"runtime"`
+	StillPath     string               `json:"still_path"`
+	Videos        []Video              `json:"videos,omitempty"`
+	Subtitles     []Subtitle           `json:"subtitles,omitempty"`
+	Translations  []EpisodeTranslation `json:"translations,omitempty"`
+}
+
+type EpisodeTranslation struct {
+	Locale   string `json:"locale"`
+	Name     string `json:"name"`
+	Overview string `json:"overview"`
 }
 
 // Video is one playable file for a movie or a single TV episode, at a given

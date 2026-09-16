@@ -19,9 +19,10 @@ type Config struct {
 	DBName     string
 
 	// TMDB integration. APIKey is env-only (a secret) and required.
-	TMDBAPIKey       string
-	TMDBLanguage     string
-	TMDBFallbackLang string
+	TMDBAPIKey                         string
+	TMDBLanguage                       string
+	TMDBFallbackLang                   string
+	TMDBTranslationBackfillIntervalMin int
 
 	// YTSBaseURL is the base of YTS's movie API, used by the manually
 	// triggered crawl jobs (crawl.go) to discover movies/torrents. yts.mx
@@ -84,9 +85,10 @@ func loadConfig() Config {
 		DBPassword: envStr("DB_PASSWORD", ""),
 		DBName:     envStr("DB_NAME", "phimtor"),
 
-		TMDBAPIKey:       envStr("TMDB_API_KEY", ""),
-		TMDBLanguage:     envStr("TMDB_LANGUAGE", "vi-VN"),
-		TMDBFallbackLang: envStr("TMDB_FALLBACK_LANGUAGE", "en-US"),
+		TMDBAPIKey:                         envStr("TMDB_API_KEY", ""),
+		TMDBLanguage:                       envStr("TMDB_LANGUAGE", "vi-VN"),
+		TMDBFallbackLang:                   envStr("TMDB_FALLBACK_LANGUAGE", "en-US"),
+		TMDBTranslationBackfillIntervalMin: envInt("TMDB_TRANSLATION_BACKFILL_INTERVAL_MIN", 1),
 
 		YTSBaseURL: envStr("YTS_BASE_URL", "https://movies-api.accel.li/api/v2"),
 
@@ -124,6 +126,7 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.DBName, "db-name", cfg.DBName, "MySQL database name")
 	flag.StringVar(&cfg.TMDBLanguage, "tmdb-language", cfg.TMDBLanguage, "Primary TMDB language")
 	flag.StringVar(&cfg.TMDBFallbackLang, "tmdb-fallback", cfg.TMDBFallbackLang, "Fallback TMDB language")
+	flag.IntVar(&cfg.TMDBTranslationBackfillIntervalMin, "tmdb-translation-backfill-interval-min", cfg.TMDBTranslationBackfillIntervalMin, "Minutes between localized metadata backfill items; 0 disables")
 	flag.StringVar(&cfg.YTSBaseURL, "yts-base-url", cfg.YTSBaseURL, "Base URL of YTS's movie API (used by the crawl jobs)")
 	flag.StringVar(&cfg.AdminUser, "admin-user", cfg.AdminUser, "HTTP Basic auth user")
 	flag.StringVar(&cfg.ManagerInternalURL, "manager-url", cfg.ManagerInternalURL, "Base URL of the streamer manager (control plane)")

@@ -1,19 +1,19 @@
-{{define "head_title"}}phimnet – Xem phim lẻ, phim bộ online phụ đề tiếng Việt{{end}}
+{{define "head_title"}}{{t "home.title"}}{{end}}
 {{define "head_extra"}}
-<meta name="description" content="phimnet – Xem phim lẻ và phim bộ online miễn phí, phụ đề tiếng Việt, cập nhật phim mới mỗi ngày.">
+<meta name="description" content="{{t "home.description"}}">
 <meta name="robots" content="index, follow">
-<link rel="canonical" href="{{abs "/"}}">
+<link rel="canonical" href="{{abs (homePath)}}">
 <meta property="og:type" content="website">
-<meta property="og:title" content="phimnet – Xem phim online phụ đề tiếng Việt">
-<meta property="og:description" content="Xem phim lẻ và phim bộ online miễn phí, phụ đề tiếng Việt, cập nhật mỗi ngày.">
-<meta property="og:url" content="{{abs "/"}}">
+<meta property="og:title" content="{{t "home.og_title"}}">
+<meta property="og:description" content="{{t "home.og_description"}}">
+<meta property="og:url" content="{{abs (homePath)}}">
 <script type="application/ld+json">{{siteJSONLD}}</script>
 {{end}}
 {{define "content"}}
-<h1 class="sr-only">phimnet – Xem phim lẻ và phim bộ online phụ đề tiếng Việt</h1>
+<h1 class="sr-only">{{t "home.title"}}</h1>
 
 {{if and (not .Filtered) .Featured}}
-<section class="hero" aria-label="Phim nổi bật" aria-roledescription="carousel" data-hero>
+<section class="hero" aria-label="{{t "home.featured_aria"}}" aria-roledescription="carousel" data-hero>
 	<div class="hero-slides">
 		{{range $i, $f := .Featured}}
 		<div class="hero-slide{{if eq $i 0}} is-active{{end}}" role="group" aria-roledescription="slide" aria-label="{{inc $i}} / {{len $.Featured}}"{{if ne $i 0}} aria-hidden="true"{{end}}>
@@ -22,21 +22,21 @@
 			<div class="hero-scrim"></div>
 			<div class="hero-inner wrap">
 				<div class="hero-body">
-					<span class="hero-eyebrow">{{if eq $f.Type "tv"}}Phim bộ{{else}}Phim lẻ{{end}} nổi bật</span>
+					<span class="hero-eyebrow">{{if eq $f.Type "tv"}}{{t "type.tv"}}{{else}}{{t "type.movie"}}{{end}} {{t "home.featured"}}</span>
 					<h2 class="hero-title">{{$f.Title}}</h2>
 					<div class="hero-meta">
 						{{with year $f.AirDate}}<span>{{.}}</span>{{end}}
 						{{if gt $f.VoteAverage 0.0}}<span class="hero-score">{{rating $f.VoteAverage}}</span>{{end}}
-						{{with $f.Runtime}}<span>{{.}} phút</span>{{end}}
+						{{with $f.Runtime}}<span>{{.}} {{t "unit.minutes"}}</span>{{end}}
 					</div>
 					{{if $f.Overview}}<p class="hero-overview">{{truncate 220 $f.Overview}}</p>{{end}}
 					<div class="hero-actions">
 						{{if eq $f.Type "tv"}}
-						<a class="btn-play" href="{{titlePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">▶</span> Xem ngay</a>
+						<a class="btn-play" href="{{titlePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">▶</span> {{t "home.watch_now"}}</a>
 						{{else}}
-						<a class="btn-play" href="{{watchMoviePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">▶</span> Phát</a>
+						<a class="btn-play" href="{{watchMoviePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">▶</span> {{t "home.play"}}</a>
 						{{end}}
-						<a class="btn-info" href="{{titlePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">ⓘ</span> Thông tin</a>
+					<a class="btn-info" href="{{titlePath $f.ID $f.Title $f.OriginalTitle}}"><span class="ico">ⓘ</span> {{t "home.info"}}</a>
 					</div>
 				</div>
 			</div>
@@ -44,7 +44,7 @@
 		{{end}}
 	</div>
 	{{if gt (len .Featured) 1}}
-	<div class="hero-dots" role="tablist" aria-label="Chọn phim nổi bật">
+	<div class="hero-dots" role="tablist" aria-label="{{t "home.choose_featured"}}">
 		{{range $i, $f := .Featured}}
 		<button class="hero-dot{{if eq $i 0}} is-active{{end}}" type="button" role="tab" aria-label="{{$f.Title}}"{{if eq $i 0}} aria-selected="true"{{end}} data-hero-to="{{$i}}"></button>
 		{{end}}
@@ -88,20 +88,20 @@
 {{end}}
 
 <div class="wrap browse">
-	<form class="filters" method="get" action="/" role="search">
-		<input class="search" type="search" name="q" placeholder="Tìm phim, chương trình..." value="{{.Query}}" aria-label="Tìm phim">
-		<select name="genre" aria-label="Thể loại" onchange="this.form.submit()">
-			<option value="">Tất cả thể loại</option>
+	<form class="filters" method="get" action="{{homePath}}" role="search">
+		<input class="search" type="search" name="q" placeholder="{{t "search.placeholder"}}" value="{{.Query}}" aria-label="{{t "search.aria"}}">
+		<select name="genre" aria-label="{{t "search.genres"}}" onchange="this.form.submit()">
+			<option value="">{{t "search.all_genres"}}</option>
 			{{range .Genres}}
 			<option value="{{.ID}}" {{if eq .ID $.GenreID}}selected{{end}}>{{.Name}}</option>
 			{{end}}
 		</select>
-		<select name="type" aria-label="Loại phim" onchange="this.form.submit()">
-			<option value="">Tất cả</option>
-			<option value="movie" {{if eq .Type "movie"}}selected{{end}}>Phim lẻ</option>
-			<option value="tv" {{if eq .Type "tv"}}selected{{end}}>Phim bộ</option>
+		<select name="type" aria-label="{{t "search.type"}}" onchange="this.form.submit()">
+			<option value="">{{t "search.all"}}</option>
+			<option value="movie" {{if eq .Type "movie"}}selected{{end}}>{{t "type.movie"}}</option>
+			<option value="tv" {{if eq .Type "tv"}}selected{{end}}>{{t "type.tv"}}</option>
 		</select>
-		<button class="filter-btn" type="submit">Tìm</button>
+		<button class="filter-btn" type="submit">{{t "search.submit"}}</button>
 	</form>
 	<div id="results">{{if .Filtered}}{{template "grid" .Grid}}{{else}}{{template "rows" .Rows}}{{end}}</div>
 </div>

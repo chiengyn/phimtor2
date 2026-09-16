@@ -9,7 +9,8 @@ Guidance for the **public viewer** service
 
 The **read side** of the shared catalog: a public, server-rendered browse /
 discovery / watch UI over the movie/TV metadata that [`admin/`](../admin/CLAUDE.md)
-imports. It renders Go `html/template` pages in Vietnamese. The browse/discovery
+imports. It renders localized Go `html/template` pages under explicit `/vi/...`
+and `/en/...` routes. The browse/discovery
 flow is **fully server-rendered with no JS framework**: filtering is a GET
 `<form>` and pagination is plain `<a>` links, so every state has a real,
 shareable URL (search/genre/type/page all live in the query string). The only
@@ -96,8 +97,10 @@ Flat single `main` package.
   (one decimal). `tmdbImageBase` builds poster/backdrop URLs client-unaware of
   TMDB. `detail.html` uses native `<details>` for season collapse (no JS).
 
-- **Routes** (`server.go` `setupRouter`):
-  - `GET /` — home, fully server-rendered. With an active filter
+- **Routes** (`server.go` `setupRouter`): every human page exists under both
+  `/vi/...` and `/en/...`; `/` negotiates from the locale cookie / browser
+  language, while old unprefixed page routes permanently redirect to Vietnamese.
+  - `GET /{locale}/` — home, fully server-rendered. With an active filter
     (`q`/`genre`/`type`) it renders a paginated **grid** (`?page=N`, 1-based,
     clamped server-side); otherwise Netflix-style **rows**. `handleHome` first
     **redirects to the canonical URL** (`homeURL`): it drops empty/odd query
@@ -109,16 +112,18 @@ Flat single `main` package.
     via `GetTitle` for its backdrop/overview; when nothing is featured it **falls
     back** to the first row's top (score-ranked) titles so the hero is never empty.
     The curation itself lives in the admin (`GET /featured`), which owns the table.
-  - `GET /titles/{id}` — full detail page (genres, and for TV its seasons/episodes).
-  - `GET /bookmarks` — the "xem sau" list, in **two modes** (see *Bookmarks*
+  - `GET /{locale}/titles/{id}` — full detail page (genres, and for TV its seasons/episodes).
+  - `GET /{locale}/bookmarks` — the saved list, in **two modes** (see *Bookmarks*
     below). Anonymous: a static shell filled client-side from localStorage.
     Signed in: server-rendered from `user_bookmarks` with the same `card`
     partial the grid uses. `noindex` in both, and deliberately absent from
     `sitemap.xml`.
-  - `GET /watch/movie/{id}` and `GET /watch/episode/{id}` — the watch page.
+  - `GET /{locale}/watch/movie/{id}` and `GET /{locale}/watch/episode/{id}` — the watch page.
   - `POST /api/sources/{videoID}/prepare` — viewer-mediated playback (see below).
   - `GET /api/subtitles/{id}/file` — serves a saved subtitle file read-only from
     the shared blob store, by the row's `storage_backend` + `storage_key`.
+  - `GET /api/catalog/cards` — localized public card metadata used to refresh
+    anonymous localStorage bookmarks after a language switch.
   - `GET /auth/google/start` and `GET /auth/google/callback` — sign-in
     (registered only when accounts are configured); `POST /auth/logout` —
     always registered, and POST-only so no prefetch can sign anyone out.
@@ -169,7 +174,7 @@ Flat single `main` package.
   and the enforcement.
   - **With billing unconfigured, 4K collapses back to "sắp ra mắt" for everyone
     who holds no entitlement** (`lockPaid`) — the pre-billing behaviour, and the
-    billing rollback. An upgrade chip pointing at a `/goi` route that is not
+    billing rollback. An upgrade chip pointing at a localized `/plans` route that is not
     registered would be worse than no offer at all.
   - **Order matters in `resolutionLock`: entitlement is checked BEFORE
     `s.billing.enabled()`.** It was the other way round until admin comps
@@ -366,9 +371,10 @@ Flat single `main` package.
     lives entirely in `localStorage` under `phimnet.bookmarks` (same convention as
     the watch page's `phimnet.subStyle`): a newest-first JSON array, capped at
     500, of **full card snapshots** (`id`, `href`, `title`, `original`, `poster`
-    URL, `year`, `type`, `score`, `vietsub`, `savedAt`). Storing the snapshot —
-    not just the id — is what lets `/bookmarks` re-render the grid with **no
-    server round trip and no new store query**.
+    URL, `year`, `type`, `score`, subtitle state, `savedAt`). Anonymous bookmark
+    pages refresh those snapshots through the localized public card endpoint, so
+    switching languages cannot leave stale copy. Keeping full snapshots still
+    provides an immediate offline/failure fallback while that refresh runs.
   - **`server`** (signed in) — the list lives in `user_bookmarks`, so it follows
     the visitor across devices. Only ids are held client-side (the set the server
     renders onto `<body data-bm-ids>`, so every save button is correct on first

@@ -93,14 +93,14 @@ function bufferedAhead(ranges, t) {
  * @returns {Promise<{destroy: () => void}>}
  */
 export async function attachRemuxedSource(video, rawURL, opts = {}) {
-	const { onStatus = () => {}, onLog = () => {}, onError = () => {}, signal } = opts;
+	const { onStatus = () => {}, onLog = () => {}, onError = () => {}, signal, messages = {} } = opts;
 	signal?.throwIfAborted();
 
 	if (typeof window.MediaSource === 'undefined') {
 		throw new UnsupportedMediaError('MediaSource is not available in this browser');
 	}
 
-	onStatus('Đang phân tích định dạng video…');
+	onStatus(messages.analyzing || 'Đang phân tích định dạng video…');
 	const MB = await loadMediabunny();
 
 	const input = new MB.Input({
@@ -468,7 +468,7 @@ function startPlayback({ MB, video, input, videoTrack, audioTrack, mimeType, dur
 		latestSeek = target;
 		if (seekPending) return;
 		seekPending = true;
-		onStatus('Đang tua…');
+		onStatus(messages.seeking || 'Đang tua…');
 		(async () => {
 			while (!destroyed && latestSeek !== null) {
 				const next = latestSeek;

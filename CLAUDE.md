@@ -34,8 +34,8 @@ is **API-only** (no UI) and **must** register with a manager — there is no
 standalone mode.
 
 When working inside a module, read **that module's `CLAUDE.md`** — file paths in
-each are relative to the module directory. There are currently **no tests** in
-any module.
+each are relative to the module directory. The viewer has focused localization
+and routing tests; the other modules currently have no tests.
 
 ## The shared MySQL catalog (admin ⇄ viewer)
 
@@ -72,9 +72,10 @@ shared package). Both connect with `parseTime=true&charset=utf8mb4` so dates sca
 into `time.Time` and Vietnamese text round-trips; both retry the initial ping so
 they survive MySQL not being ready yet under compose.
 
-The catalog is **Vietnamese-first with English fallback**: TMDB fields are
-fetched in `vi-VN` and any empty field is backfilled from `en-US`. UI strings in
-both services are Vietnamese ("Phim lẻ" = movies, "Phim bộ" = TV series).
+The catalog retains both Vietnamese and English metadata. TMDB fields are fetched
+in `vi-VN` and `en-US`; localized copy lives in the `*_translations` tables while
+the original columns remain the Vietnamese-first compatibility fallback. The
+viewer serves explicit `/vi/...` and `/en/...` page trees.
 
 ## Repo-wide commands & layout
 
