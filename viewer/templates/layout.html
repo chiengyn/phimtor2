@@ -15,10 +15,9 @@
 	<meta name="theme-color" content="#141414">
 	<link rel="icon" href="/static/favicon.ico" sizes="any">
 	<meta property="og:site_name" content="phimnet">
-	<meta property="og:locale" content="{{if eq .Locale "en"}}en_US{{else}}vi_VN{{end}}">
-	<meta property="og:locale:alternate" content="{{if eq .Locale "en"}}vi_VN{{else}}en_US{{end}}">
-	<link rel="alternate" hreflang="{{.Locale}}" href="{{abs .Path}}">
-	<link rel="alternate" hreflang="{{.AlternateLocale}}" href="{{abs .AlternateURL}}">
+	<meta property="og:locale" content="{{ogLocale .Locale}}">
+	{{range .Languages}}{{if not .Current}}<meta property="og:locale:alternate" content="{{ogLocale .Locale}}">{{end}}{{end}}
+	{{range .Languages}}<link rel="alternate" hreflang="{{.Locale}}" href="{{abs .URL}}">{{end}}
 	<link rel="alternate" hreflang="x-default" href="{{abs "/"}}">
 	<meta name="twitter:card" content="summary_large_image">
 	{{block "head_extra" .Data}}
@@ -95,7 +94,18 @@
 			<span>Discord</span>
 		</a>
 		{{end}}
-		<a class="language-link" href="{{.AlternateURL}}" hreflang="{{.AlternateLocale}}" aria-label="{{t "language.switch_aria"}}">{{t "language.name"}}</a>
+		<details class="language-menu">
+			<summary class="language-trigger" aria-label="{{t "language.menu"}}">
+				<svg class="language-globe" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.4 2.5 3.7 5.5 3.7 9S14.4 18.5 12 21c-2.4-2.5-3.7-5.5-3.7-9S9.6 5.5 12 3Z"/></svg>
+				<span class="language-current">{{range .Languages}}{{if .Current}}{{.Name}}{{end}}{{end}}</span>
+				<svg class="language-chevron" viewBox="0 0 12 8" width="10" height="7" aria-hidden="true"><path d="m1 1 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			</summary>
+			<nav class="language-menu-panel" aria-label="{{t "language.menu"}}">
+				{{range .Languages}}{{if .Current}}
+				<span class="language-option is-active" aria-current="page"><span>{{.Name}}</span><span class="language-check" aria-hidden="true">✓</span></span>
+				{{else}}<a class="language-option" href="{{.URL}}" hreflang="{{.Locale}}"><span>{{.Name}}</span></a>{{end}}{{end}}
+			</nav>
+		</details>
 		</div>
 	</header>
 	<main>{{block "content" .Data}}{{end}}</main>

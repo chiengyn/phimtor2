@@ -78,6 +78,13 @@ func TestLocalizedTemplatesParse(t *testing.T) {
 				if !strings.Contains(output.String(), `lang="`+string(locale)+`"`) {
 					t.Fatalf("rendered page does not declare locale %q", locale)
 				}
+				if !strings.Contains(output.String(), `class="language-menu"`) ||
+					!strings.Contains(output.String(), `class="language-option is-active"`) {
+					t.Fatal("language dropdown was not rendered")
+				}
+				if got := strings.Count(output.String(), `class="language-option`); got != len(supportedLocales) {
+					t.Fatalf("rendered %d language options, want %d", got, len(supportedLocales))
+				}
 				if locale == LocaleEN && page.name == "watch" && !strings.Contains(output.String(), `signInQuality: "Sign in to watch in %s"`) {
 					t.Fatal("watch translations were not emitted as JavaScript string literals")
 				}
@@ -109,5 +116,20 @@ func TestLocalizedPaths(t *testing.T) {
 	}
 	if got, want := homeURL(LocaleVI, TitleFilter{Type: "movie"}, 2), "/vi/?page=2&type=movie"; got != want {
 		t.Fatalf("homeURL = %q, want %q", got, want)
+	}
+}
+
+func TestLanguageOptionsPreservePageAndQuery(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/en/?genre=28&type=movie", nil)
+	r = r.WithContext(context.WithValue(r.Context(), localeContextKey{}, LocaleEN))
+	options := requestLanguageOptions(r)
+	if len(options) != len(supportedLocales) {
+		t.Fatalf("got %d language options, want %d", len(options), len(supportedLocales))
+	}
+	if !options[1].Current || options[1].Name != "English" || options[1].URL != "/en/?genre=28&type=movie" {
+		t.Fatalf("English option = %#v", options[1])
+	}
+	if options[0].Current || options[0].Name != "Tiếng Việt" || options[0].URL != "/vi/?genre=28&type=movie" {
+		t.Fatalf("Vietnamese option = %#v", options[0])
 	}
 }

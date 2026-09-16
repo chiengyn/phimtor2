@@ -150,7 +150,8 @@ var baseFuncMap = template.FuncMap{
 // plus SEO closures (abs / jsonLD / siteJSONLD) that need the public origin.
 func (s *Server) funcMap(locale Locale) template.FuncMap {
 	fm := template.FuncMap{
-		"abs": s.abs,
+		"abs":      s.abs,
+		"ogLocale": openGraphLocale,
 		"js": func(value string) template.JS {
 			encoded, _ := json.Marshal(value)
 			return template.JS(encoded)
@@ -1590,8 +1591,7 @@ type pageData struct {
 	Data               any
 	Locale             Locale
 	HomeURL            string
-	AlternateURL       string
-	AlternateLocale    Locale
+	Languages          []languageOption
 	ClientMessagesJSON string
 	// User is nil for an anonymous visitor, which is the common case.
 	User *User
@@ -1622,20 +1622,25 @@ func (s *Server) newPageData(r *http.Request, data any) pageData {
 		Data:               data,
 		Locale:             locale,
 		HomeURL:            localeHome(locale),
-		AlternateURL:       alternateLocaleURL(r),
-		AlternateLocale:    fallbackLocale(locale),
+		Languages:          requestLanguageOptions(r),
 		ClientMessagesJSON: jsonOrEmpty(clientMessages),
 		User:               userFrom(r.Context()),
 		SavedIDsJSON:       "[]",
 		Path:               r.URL.RequestURI(),
 	}
-	// Detail pages use locale-specific slugs. Resolve the other translation so
-	// hreflang and the language switcher point directly at its canonical URL,
-	// rather than relying on a redirect from the current language's slug.
+	// Detail pages use locale-specific slugs. Resolve every translation so the
+	// hreflang links and language menu point directly at canonical URLs rather
+	// than relying on redirects from the current language's slug.
 	if title, ok := data.(*Title); ok && title != nil && s.store != nil {
-		alternate := fallbackLocale(locale)
-		if translated, err := s.store.GetTitle(r.Context(), alternate, title.ID); err == nil && translated != nil {
-			pd.AlternateURL = titlePath(alternate, translated.ID, translated.Title, translated.OriginalTitle)
+		for i := range pd.Languages {
+			option := &pd.Languages[i]
+			if option.Current {
+				option.URL = titlePath(locale, title.ID, title.Title, title.OriginalTitle)
+				continue
+			}
+			if translated, err := s.store.GetTitle(r.Context(), option.Locale, title.ID); err == nil && translated != nil {
+				option.URL = titlePath(option.Locale, translated.ID, translated.Title, translated.OriginalTitle)
+			}
 		}
 	}
 	if pd.User != nil {

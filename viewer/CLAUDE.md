@@ -10,10 +10,13 @@ Guidance for the **public viewer** service
 The **read side** of the shared catalog: a public, server-rendered browse /
 discovery / watch UI over the movie/TV metadata that [`admin/`](../admin/CLAUDE.md)
 imports. It renders localized Go `html/template` pages under explicit `/vi/...`
-and `/en/...` routes. The browse/discovery
-flow is **fully server-rendered with no JS framework**: filtering is a GET
-`<form>` and pagination is plain `<a>` links, so every state has a real,
-shareable URL (search/genre/type/page all live in the query string). The only
+and `/en/...` routes. `i18n.go` embeds `locales/*.json`; its
+`localeDefinitions` registry drives supported routes, catalog loading, template
+parsing, SEO locale metadata, and the header language dropdown. The dropdown
+uses native `<details>` links and preserves the current page/query.
+The browse/discovery flow is **fully server-rendered with no JS framework**:
+filtering is a GET `<form>` and pagination is plain `<a>` links, so every state
+has a real, shareable URL (search/genre/type/page all live in the query string). The only
 JS is plain vanilla, no build step: the Plyr-based watch page's inline script,
 small inline carousel helpers, `static/bookmarks.js` (loaded site-wide from
 `layout.html`, see *Bookmarks* below), and `static/mkvplayer.js` (an ES module the

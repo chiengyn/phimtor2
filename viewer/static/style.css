@@ -203,12 +203,60 @@ main { width: 100%; }
 }
 .discord-link:hover { background: #4752c4; transform: translateY(-1px); }
 .discord-icon { display: block; }
-.language-link {
-	display: inline-flex; align-items: center; padding: 8px 12px;
-	border: 1px solid rgba(255,255,255,0.28); border-radius: 999px;
-	color: #e5e5e5; font-size: 0.82rem; font-weight: 700; white-space: nowrap;
+/* Locale menu. Like the account menu this uses native <details>, keeping the
+   control keyboard-accessible and useful even if site JavaScript is blocked. */
+.language-menu { position: relative; }
+.language-menu > summary { list-style: none; cursor: pointer; }
+.language-menu > summary::-webkit-details-marker { display: none; }
+.language-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	padding: 8px 12px;
+	border: 1px solid rgba(255,255,255,0.28);
+	border-radius: 999px;
+	color: #e5e5e5;
+	font-size: 0.82rem;
+	font-weight: 700;
+	white-space: nowrap;
+	transition: border-color 0.2s var(--ease), color 0.2s var(--ease), background 0.2s var(--ease);
 }
-.language-link:hover { border-color: var(--text); color: var(--text); }
+.language-trigger:hover, .language-menu[open] .language-trigger {
+	border-color: rgba(255,255,255,0.7);
+	background: rgba(255,255,255,0.08);
+	color: var(--text);
+}
+.language-trigger:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+.language-globe { flex: none; opacity: 0.82; }
+.language-chevron { flex: none; opacity: 0.72; transition: transform 0.2s var(--ease); }
+.language-menu[open] .language-chevron { transform: rotate(180deg); }
+.language-menu-panel {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 10px);
+	min-width: 176px;
+	padding: 7px;
+	border: 1px solid rgba(255,255,255,0.14);
+	border-radius: 12px;
+	background: #16161a;
+	box-shadow: 0 18px 40px rgba(0,0,0,0.55);
+	z-index: 60;
+}
+.language-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 18px;
+	min-height: 38px;
+	padding: 9px 10px;
+	border-radius: 8px;
+	color: #e5e5e5;
+	font-size: 0.88rem;
+	font-weight: 600;
+}
+a.language-option:hover, a.language-option:focus-visible { background: rgba(255,255,255,0.08); color: var(--text); }
+.language-option.is-active { background: rgba(229,9,20,0.14); color: #fff; }
+.language-check { color: #ff5962; font-size: 0.9rem; }
 
 /* --- Hero billboard ----------------------------------------------------- */
 .hero {
@@ -794,6 +842,8 @@ main { width: 100%; }
 	.login-link { padding: 8px 12px; }
 	.user-name { display: none; }
 	.user-chip { padding: 4px; gap: 0; }
+	.language-current { display: none; }
+	.language-trigger { padding: 8px 10px; gap: 5px; }
 
 	.hero { min-height: 70vh; }
 	.hero-overview { -webkit-line-clamp: 4; font-size: 0.96rem; }
