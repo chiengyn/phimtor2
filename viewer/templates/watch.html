@@ -48,19 +48,28 @@
 	.ctrl-group { margin-top: 20px; }
 	.ctrl-label { display: block; color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
 
+	/* These three are used ONLY by the subtitle section, and they used to invent
+	   their own, smaller scale than anything else on the site. They now follow
+	   static/style.css: .watch-btn-sm sets the site's smallest button
+	   (8px 16px / 0.85rem / 600) and .save-btn its secondary treatment
+	   (translucent white fill + visible border, full-strength text). .btn-clear
+	   previously used --muted on transparent, which read as disabled next to the
+	   rest of the site. Transitions use var(--ease) like every other control. */
 	.btn {
-		cursor: pointer; border: none; border-radius: var(--radius);
-		padding: 7px 14px; font-size: 0.85rem; font-weight: 600;
-		background: var(--surface-2); color: var(--text);
+		display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+		cursor: pointer; border: 1px solid transparent; border-radius: var(--radius);
+		padding: 10px 20px; font-size: 0.9rem; font-weight: 600; line-height: 1.2;
+		font-family: inherit; background: var(--surface-3); color: var(--text);
+		transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
 	}
 	.btn:hover { background: #3a3a3a; }
-	.btn-sm { padding: 5px 11px; font-size: 0.8rem; }
-	.btn-clear { background: transparent; color: var(--muted); border: 1px solid #3a3a3a; }
-	.btn-clear:hover { color: var(--accent); border-color: var(--accent); }
+	.btn-sm { padding: 8px 16px; font-size: 0.85rem; }
+	.btn-clear { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.4); color: var(--text); }
+	.btn-clear:hover { background: rgba(255,255,255,0.16); border-color: var(--text); }
 	/* The subtitle section's single status line: which subtitle is playing, or
 	   the latest error. Sits at the TOP of the section, so it is visible without
 	   scrolling past a long result list. */
-	.subtitle-status { display: block; color: var(--muted); font-size: 0.82rem; margin: 0 0 12px; line-height: 1.5; }
+	.subtitle-status { display: block; color: var(--muted); font-size: 0.82rem; margin: 0 0 14px; line-height: 1.5; }
 	.subtitle-status[hidden] { display: none; }
 	.subtitle-status.err {
 		padding: 10px 14px; border-radius: var(--radius); color: var(--text);
@@ -131,14 +140,20 @@
 	}
 
 	/* Subtitle list. */
-	.sub-section { margin-top: 22px; }
-	.sub-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-	.sub-head .ctrl-label { margin: 0; }
-	.sub-list { display: flex; flex-direction: column; gap: 6px; max-width: 720px; }
+	/* One vertical rhythm for the whole section: each block owns its BOTTOM
+	   margin, so the panels (which are display:none until opened) cannot leave a
+	   double gap when closed or, as before, none at all when open — .sub-list
+	   used to butt straight against an open panel. */
+	.sub-section { margin-top: 28px; }
+	.sub-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+	/* Own line, like every other .ctrl-group label on this page — inline with the
+	   buttons it read as a stray caption rather than a section heading. */
+	.sub-head .ctrl-label { flex: 1 0 100%; margin: 0 0 -2px; }
+	.sub-list { display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
 	.sub-row {
 		display: flex; align-items: center; gap: 12px;
 		background: var(--surface); border: 1px solid #2f2f2f; border-radius: var(--radius);
-		padding: 9px 14px; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease;
+		padding: 11px 14px; cursor: pointer; transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 	}
 	.sub-row:hover { border-color: var(--muted); }
 	.sub-row.active { border-color: var(--accent); background: rgba(229,9,20,0.12); }
@@ -176,7 +191,10 @@
 	}
 
 	/* Subtitle appearance panel. */
-	.sub-style { margin-top: 18px; max-width: 720px; }
+	/* An open panel ends with a rule: its result rows are visually identical to
+	   the saved-subtitle rows that follow, so without one the two lists read as
+	   a single list. Closed panels are display:none, so this costs nothing. */
+	.sub-style { margin: 0 0 20px; padding-bottom: 20px; border-bottom: 1px solid #2a2a2a; max-width: 720px; }
 	.sub-style[hidden] { display: none; }
 	.sub-style-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 22px; }
 	.sub-field { display: flex; flex-direction: column; gap: 6px; }
@@ -191,28 +209,28 @@
 		background: var(--surface); color: var(--text); border: 1px solid #3a3a3a;
 		border-radius: var(--radius); padding: 7px 10px; font-size: 0.85rem;
 	}
-	.sub-style-actions { margin-top: 14px; }
+	.sub-style-actions { margin-top: 16px; }
 
 	/* Subtitle search panel. Same shell as .sub-style — the page has no modal
 	   pattern, and a second one would be the only overlay on the site. */
-	.sub-search { margin-top: 18px; max-width: 720px; }
+	.sub-search { margin: 0 0 20px; padding-bottom: 20px; border-bottom: 1px solid #2a2a2a; max-width: 720px; }
 	.sub-search[hidden] { display: none; }
-	.sub-search-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+	.sub-search-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 	.sub-search-form input[type=text],
 	.sub-search-form input[type=number],
 	.sub-search-form select {
-		background: var(--surface); color: var(--text); border: 1px solid #3a3a3a;
-		border-radius: var(--radius); padding: 7px 10px; font-size: 0.85rem;
+		background: var(--surface); color: var(--text); border: 1px solid rgba(255,255,255,0.25);
+		border-radius: var(--radius); padding: 9px 12px; font-size: 0.85rem; font-family: inherit;
 	}
 	.sub-search-form input[type=text] { flex: 1 1 220px; min-width: 0; }
 	.sub-search-form input[type=number] { width: 72px; }
-	.sub-search-hint { color: var(--muted); font-size: 0.78rem; margin: 10px 0; }
+	.sub-search-hint { color: var(--muted); font-size: 0.78rem; margin: 14px 0 0; }
 	.sub-search-gate {
 		display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-		margin: 10px 0 0; font-size: 0.82rem; color: var(--muted);
+		margin: 14px 0 0; font-size: 0.82rem; color: var(--muted);
 	}
 	.sub-search-gate a { color: var(--accent); font-weight: 600; }
-	#sub-search-results { margin-top: 12px; }
+	#sub-search-results { margin-top: 14px; }
 	.sub-row .sub-save { flex: 0 0 auto; }
 	.sub-row .sub-save[disabled] { opacity: 0.55; cursor: default; }
 	/* Anonymous: the panel is shown but inert. Enforcement is server-side
@@ -229,7 +247,7 @@
 		.sub-list, .sub-style, .sub-search { max-width: 100%; }
 		.sub-style-grid { grid-template-columns: 1fr; gap: 12px; }
 		.sub-search-form input[type=text] { flex: 1 1 100%; }
-		.sub-head { gap: 8px; }
+		.sub-head { gap: 10px; }
 		.sub-head .btn { flex: 1 1 auto; text-align: center; }
 		.sub-row .sub-meta { display: none; }
 	}
