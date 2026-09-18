@@ -1112,16 +1112,17 @@ func (s *Store) refreshTitleVietsub(ctx context.Context, titleID int64) error {
 
 // subtitleColumns is the shared SELECT list / scan order for subtitle rows.
 const subtitleColumns = `id, title_id, episode_id, provider, provider_file_id, language,
-	name, download_count, format, storage_backend, storage_key, metadata, created_at`
+	name, download_count, format, storage_backend, storage_key, metadata, created_at,
+	added_by_user_id`
 
 // scanSubtitle reads one subtitle row in subtitleColumns order.
 func scanSubtitle(sc interface{ Scan(...any) error }) (Subtitle, error) {
 	var sub Subtitle
-	var titleID, episodeID sql.NullInt64
+	var titleID, episodeID, addedBy sql.NullInt64
 	var meta []byte
 	if err := sc.Scan(&sub.ID, &titleID, &episodeID, &sub.Provider, &sub.ProviderFileID,
 		&sub.Language, &sub.Name, &sub.DownloadCount, &sub.Format, &sub.StorageBackend,
-		&sub.StorageKey, &meta, &sub.CreatedAt); err != nil {
+		&sub.StorageKey, &meta, &sub.CreatedAt, &addedBy); err != nil {
 		return Subtitle{}, err
 	}
 	if titleID.Valid {
@@ -1129,6 +1130,9 @@ func scanSubtitle(sc interface{ Scan(...any) error }) (Subtitle, error) {
 	}
 	if episodeID.Valid {
 		sub.EpisodeID = &episodeID.Int64
+	}
+	if addedBy.Valid {
+		sub.AddedByUserID = &addedBy.Int64
 	}
 	if len(meta) > 0 {
 		sub.Metadata = append(json.RawMessage{}, meta...)

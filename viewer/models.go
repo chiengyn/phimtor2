@@ -84,7 +84,8 @@ type Video struct {
 // Subtitle is one persisted subtitle file attached to a movie or single episode
 // (exactly one of TitleID / EpisodeID set). The file lives in a BlobStore:
 // StorageBackend names which one ("local" | "s3") and StorageKey is its key.
-// Mirrors admin's Subtitle; the viewer reads it read-only.
+// Mirrors admin's Subtitle. The viewer reads every field and writes rows only
+// through the signed-in "save for everyone" path on the watch page.
 type Subtitle struct {
 	ID             int64           `json:"id"`
 	TitleID        *int64          `json:"title_id,omitempty"`
@@ -99,6 +100,11 @@ type Subtitle struct {
 	StorageKey     string          `json:"storage_key"`
 	Metadata       json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt      time.Time       `json:"created_at,omitempty"`
+	// AddedByUserID is the account that contributed this subtitle, or nil for
+	// the admin-curated rows. This service is the ONLY writer of the column
+	// (see admin/migrations/0011) — the admin declares it and reads it back for
+	// moderation, exactly as it declares users/user_bookmarks without writing.
+	AddedByUserID *int64 `json:"added_by_user_id,omitempty"`
 }
 
 // Invoice is one crypto payment request. It is also the ledger: nothing else

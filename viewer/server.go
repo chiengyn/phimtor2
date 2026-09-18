@@ -37,10 +37,13 @@ type Server struct {
 	// manager is the server-side client the viewer uses to add torrents via the
 	// streamer manager (the browser never adds directly). The manager returns the
 	// owning streamer's public URL per prepare, which the browser then uses to
-	// reach that streamer's stats + stream endpoints directly. blobs serves saved
-	// subtitle files read-only, keyed by storage backend name.
-	manager *managerClient
-	blobs   map[string]BlobStore
+	// reach that streamer's stats + stream endpoints directly. blobs holds saved
+	// subtitle files, keyed by storage backend name; blobPrimary names the one a
+	// newly contributed subtitle is written to (reads route by each row's own
+	// recorded backend, so the default can change without breaking old rows).
+	manager     *managerClient
+	blobs       map[string]BlobStore
+	blobPrimary string
 
 	// watcher reference-counts active watch sessions so a torrent is dropped via the
 	// manager the moment its last viewer leaves the watch page, instead of lingering
@@ -69,6 +72,11 @@ type Server struct {
 	// falls back to the "sắp ra mắt" tier the site shipped with.
 	billing *billingService
 
+	// subtitles is the provider proxy behind the watch page's "find subtitles"
+	// panel. Nil-safe like the two above: enabled() == false when no provider key
+	// is set, and then the routes are never registered and no panel is rendered.
+	subtitles *subtitleService
+
 	plans   localizedTemplate
 	invoice localizedTemplate
 }
@@ -79,7 +87,7 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 	if err := validateMessages(); err != nil {
 		return nil, err
 	}
-	blobs, err := newReadOnlyBlobStores(cfg)
+	blobs, blobPrimary, err := newBlobStores(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -92,12 +100,13 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		store:      store,
-		manager:    newManagerClient(cfg.ManagerInternalURL, cfg.ManagerInternalToken),
-		blobs:      blobs,
-		publicURL:  strings.TrimRight(cfg.PublicURL, "/"),
-		discordURL: cfg.DiscordURL,
-		sess:       sess,
+		store:       store,
+		manager:     newManagerClient(cfg.ManagerInternalURL, cfg.ManagerInternalToken),
+		blobs:       blobs,
+		blobPrimary: blobPrimary,
+		publicURL:   strings.TrimRight(cfg.PublicURL, "/"),
+		discordURL:  cfg.DiscordURL,
+		sess:        sess,
 	}
 	if cfg.accountsEnabled() {
 		s.google = newGoogleClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.oauthRedirectURL())
@@ -112,6 +121,14 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		log.Printf("Crypto billing enabled (chains: %s)", strings.Join(s.billing.chains(), ", "))
 	} else {
 		log.Printf("Crypto billing disabled — 4K stays locked for everyone (needs accounts plus BILLING_EVM_ADDRESS + BILLING_EVM_CHAINS, or BILLING_TRON_ADDRESS)")
+	}
+	// Left nil when unconfigured (subtitleService is nil-safe), which keeps the
+	// watch page exactly as it was before user-contributed subtitles existed.
+	if cfg.subtitleSearchEnabled() {
+		s.subtitles = newSubtitleService(cfg)
+		log.Printf("Subtitle search enabled (providers: %s)", strings.Join(s.subtitles.enabledNames(), ", "))
+	} else {
+		log.Printf("Subtitle search disabled (needs accounts plus OPENSUBTITLES_API_KEY or SUBSOURCE_API_KEY)")
 	}
 	s.watcher = newWatchTracker(time.Duration(cfg.WatchHeartbeatTTL)*time.Second, s.manager.deleteTorrent)
 	if err := s.parseTemplates(); err != nil {
@@ -411,6 +428,23 @@ func (s *Server) setupRouter() {
 
 	// Saved titles ("xem sau") for signed-in visitors. Anonymous visitors keep
 	// their list in localStorage and never call these.
+	// Subtitle contribution, for signed-in visitors. A chi.Group (not a Route on
+	// /api/subtitles) because the {id}/file route above must stay PUBLIC — reading
+	// a saved subtitle needs no account, only contributing one does. chi resolves
+	// the static "search"/"download" segments ahead of "{id}", so they coexist.
+	//
+	// Not registered at all when no provider key is configured, matching the
+	// billing/accounts convention: the rollback is a config change, not a code
+	// change. The watch page then renders no panel either.
+	if s.subtitles.enabled() {
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireUser)
+			r.Get("/api/subtitles/search", s.handleSearchSubtitles)
+			r.Get("/api/subtitles/download", s.handleDownloadSubtitle)
+			r.Post("/api/subtitles", s.handleSaveSubtitle)
+		})
+	}
+
 	r.Route("/api/bookmarks", func(r chi.Router) {
 		r.Use(s.requireUser)
 		r.Get("/", s.handleListSaved)
@@ -982,6 +1016,53 @@ type watchData struct {
 	// Same-season episode navigation (episode watch page only; empty for movies).
 	SeasonNumber int
 	Episodes     []Episode
+
+	// --- Subtitle search panel ---
+	//
+	// The split matters: SubtitleSearchEnabled decides whether the panel EXISTS,
+	// SignedIn only whether it is usable. An anonymous visitor still sees it,
+	// disabled, with a sign-in prompt — the same choice the quality chips make,
+	// where a locked source is still listed because seeing that it exists is the
+	// point. Both live here rather than on the pageData envelope for the reason
+	// given on LoginURL above: inside watch.html, .User is not in scope.
+	SubtitleSearchEnabled bool
+	SignedIn              bool
+	// SubtitleProvidersJSON is the enabled provider names; the page shows a
+	// provider selector only when there is more than one.
+	SubtitleProvidersJSON string
+	// Seeds for the provider query. SearchQuery is the ORIGINAL title, not the
+	// localized one — providers index releases by original/English name, so a
+	// Vietnamese title returns nothing.
+	SearchQuery   string
+	SearchSeason  int
+	SearchEpisode int
+}
+
+// firstNonEmpty returns the first non-blank argument, for picking an original
+// title with a localized fallback.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// fillSubtitleSearch populates the watch page's subtitle-panel fields on d.
+// Shared by the movie and episode handlers so the two can never drift; a no-op
+// when no provider is configured, leaving every field zero so the template
+// renders nothing.
+func (s *Server) fillSubtitleSearch(d *watchData, r *http.Request, query string, season, episode int) {
+	if !s.subtitles.enabled() {
+		return
+	}
+	d.SubtitleSearchEnabled = true
+	d.SignedIn = userFrom(r.Context()) != nil
+	d.SubtitleProvidersJSON = jsonOrEmpty(s.subtitles.enabledNames())
+	d.SearchQuery = query
+	d.SearchSeason = season
+	d.SearchEpisode = episode
 }
 
 // lockedResolutions are video qualities reserved for the PAID tier: the viewer
@@ -1126,13 +1207,16 @@ type watchVideo struct {
 	Lock       string `json:"lock"`
 }
 
-// watchSubtitle is the browser-facing subset of a Subtitle.
+// watchSubtitle is the browser-facing subset of a Subtitle. ProviderFileID rides
+// along so the search panel can pre-disable the save button for a result that is
+// already saved, instead of learning it from a rejected POST.
 type watchSubtitle struct {
-	ID            int64  `json:"id"`
-	Language      string `json:"language"`
-	Name          string `json:"name"`
-	Provider      string `json:"provider"`
-	DownloadCount int    `json:"download_count"`
+	ID             int64  `json:"id"`
+	Language       string `json:"language"`
+	Name           string `json:"name"`
+	Provider       string `json:"provider"`
+	ProviderFileID string `json:"provider_file_id"`
+	DownloadCount  int    `json:"download_count"`
 }
 
 func (s *Server) toWatchVideos(vs []Video, a titleAccess) []watchVideo {
@@ -1147,16 +1231,21 @@ func (s *Server) toWatchVideos(vs []Video, a titleAccess) []watchVideo {
 	return out
 }
 
+func toWatchSubtitle(sub Subtitle) watchSubtitle {
+	return watchSubtitle{
+		ID:             sub.ID,
+		Language:       sub.Language,
+		Name:           sub.Name,
+		Provider:       sub.Provider,
+		ProviderFileID: sub.ProviderFileID,
+		DownloadCount:  sub.DownloadCount,
+	}
+}
+
 func toWatchSubtitles(subs []Subtitle) []watchSubtitle {
 	out := make([]watchSubtitle, 0, len(subs))
 	for _, sub := range subs {
-		out = append(out, watchSubtitle{
-			ID:            sub.ID,
-			Language:      sub.Language,
-			Name:          sub.Name,
-			Provider:      sub.Provider,
-			DownloadCount: sub.DownloadCount,
-		})
+		out = append(out, toWatchSubtitle(sub))
 	}
 	return out
 }
@@ -1208,6 +1297,7 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		LoginURL:      s.loginURL(r),
 		UpgradeURL:    s.upgradeURL(locale, title.ID),
 	}
+	s.fillSubtitleSearch(&data, r, firstNonEmpty(title.OriginalTitle, title.Title), 0, 0)
 	s.render(w, r, s.watch, data)
 }
 
@@ -1261,6 +1351,8 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		SeasonNumber:  ec.SeasonNumber,
 		Episodes:      eps,
 	}
+	s.fillSubtitleSearch(&data, r,
+		firstNonEmpty(ec.TitleOriginalName, ec.TitleName), ec.SeasonNumber, ec.EpisodeNumber)
 	s.render(w, r, s.watch, data)
 }
 

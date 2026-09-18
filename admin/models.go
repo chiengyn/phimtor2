@@ -139,6 +139,11 @@ type Subtitle struct {
 	StorageKey     string          `json:"storage_key"`
 	Metadata       json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt      time.Time       `json:"created_at,omitempty"`
+	// AddedByUserID is the viewer account that contributed this subtitle, or nil
+	// for the admin-curated rows this service writes. THIS SERVICE NEVER SETS IT
+	// (see migrations/0011): it reads it only so contributed rows can be told
+	// apart for moderation. The two writers are kept disjoint by row, not column.
+	AddedByUserID *int64 `json:"added_by_user_id,omitempty"`
 }
 
 // User is a registered viewer account. Sign-in is delegated to an OIDC provider

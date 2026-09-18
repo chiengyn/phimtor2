@@ -50,9 +50,21 @@ env:
     # public URL per prepare for the browser to stream from directly — so there is
     # no static public streamer URL here anymore.
     MANAGER_INTERNAL_URL: http://phimtor2-manager:8083
-    # Read the same subtitle blob store admin writes (shared host volume).
+    # The same subtitle blob store admin writes (shared host volume). Mostly
+    # read, but the viewer WRITES here too now: a signed-in visitor can save a
+    # subtitle for everyone from the watch page. Both containers run as the same
+    # distroless uid, so admin-created directories accept these writes.
     SUBTITLE_STORAGE_BACKEND: local
     SUBTITLE_STORAGE_DIR: /data/subtitles
+    # User-contributed subtitles. The API keys below are the SAME ones the admin
+    # uses, so they share one upstream account and one daily download quota —
+    # which is exactly why these caps exist. Here the quota is reachable by any
+    # signed-in visitor rather than a single operator.
+    OPENSUBTITLES_USER_AGENT: phimtor2 v1.0
+    SUBSOURCE_USER_AGENT: phimtor2 v1.0
+    SUBTITLE_SEARCH_PER_HOUR: 30
+    SUBTITLE_DOWNLOADS_PER_DAY: 10
+    SUBTITLE_DOWNLOADS_GLOBAL_PER_DAY: 150
     # Paid 4K tier. Leave BILLING_EVM_ADDRESS / BILLING_EVM_CHAINS unset to keep
     # billing OFF: /goi and /thanh-toan are then not registered and 4K shows
     # "sắp ra mắt" for everyone, exactly as before billing existed. That is the
@@ -93,7 +105,13 @@ env:
     # only revocation lever, since there is no sessions table. Not a routine
     # credential rotation.
     - SESSION_SECRET
+    # Subtitle providers for the watch page's search panel. Drop BOTH to turn the
+    # feature off: the routes are not registered and no panel is rendered, which
+    # is the clean rollback. Same values as the admin's entries in deploy.yml.
+    - OPENSUBTITLES_API_KEY
+    - SUBSOURCE_API_KEY
 
-# Mount the SAME named volume admin writes subtitles to (viewer only reads it).
+# Mount the SAME named volume admin writes subtitles to. The viewer reads it and
+# also writes user-contributed subtitles into it.
 volumes:
   - "phimtor2_subtitles:/data"

@@ -25,18 +25,31 @@ see *Playing `.mkv`* below).
 
 It **owns no schema and never runs migrations** —
 [`admin/`](../admin/CLAUDE.md) is the sole owner, and the viewer assumes the
-tables already exist. It is **read-only for the whole catalog** (`titles`,
-`videos`, `subtitles`, `featured_titles`, …).
+tables already exist. It is **read-only for the catalog** (`titles`, `videos`,
+`featured_titles`, …) with exactly one exception, noted below.
 
-The one exception, added with accounts: the viewer is the **only writer of two
-tables it does not own** — `users` (created/refreshed on login) and
-`user_bookmarks` (the saved list). Both are created by
-`admin/migrations/0007_users.sql`. Nothing else here writes, ever.
+The viewer writes **three** things, and nothing else, ever:
+
+1. `users` (created/refreshed on login) and 2. `user_bookmarks` (the saved
+list) — both declared by `admin/migrations/0007_users.sql`, both tables the
+admin owns but never writes (bar the `comp_*` columns `0009` adds).
+3. **`subtitles`, insert-only** — a signed-in visitor can search a provider
+from the watch page and save the result for everyone (*Contributed subtitles*
+below). Contributed rows carry `added_by_user_id`; admin-curated rows leave it
+`NULL`. So this table has two writers separated by **rows**, where `users` has
+two writers separated by **columns**.
+
+> That third one is a deliberate hole in an otherwise airtight invariant, so do
+> not "restore" it by accident. The reasoning is in
+> `admin/migrations/0011_subtitle_contributor.sql`; the narrow blast radius is
+> that the viewer only ever INSERTs there — it never updates or deletes a
+> subtitle row, which stays an admin action.
 
 > Deploy ordering matters because of this: the admin must apply `0007` **before**
-> a viewer that writes those tables boots. The failure is contained by design —
-> `currentUser` and the auth handlers treat a store error as "anonymous" and log
-> it, so an un-migrated database breaks sign-in only, not the site.
+> a viewer that writes those tables boots, and `0011` before one that contributes
+> subtitles. The `0007` failure is contained by design — `currentUser` and the
+> auth handlers treat a store error as "anonymous" and log it, so an un-migrated
+> database breaks sign-in only, not the site.
 
 ## Commands
 
@@ -80,12 +93,25 @@ service).
   warning, so sign-in works with zero setup. Rotating it **logs every user out**,
   and since there is no sessions table that is the *only* revocation lever — not
   a routine credential rotation.
-- Subtitle storage (`blobstore.go`, **read-only**): the viewer reads the *same*
-  storage the admin writes to. `SUBTITLE_STORAGE_BACKEND` (`local`|`s3`),
+- Subtitle storage (`blobstore.go`): the viewer shares the *same* storage the
+  admin writes to. `SUBTITLE_STORAGE_BACKEND` (`local`|`s3`),
   `SUBTITLE_STORAGE_DIR` (`./data/subtitles` — for `local` this **must** be the
-  same directory admin writes to, a shared volume under compose), and the same
-  `S3_*` vars as admin (used with the same bucket). Only `Get` is implemented;
-  the viewer never writes or deletes subtitle files.
+  same directory admin writes to, a shared volume under compose, **and be
+  writable**), and the same `S3_*` vars as admin (used with the same bucket).
+  Mostly reads, but `Put` runs on the contributed-subtitle path; `Delete` exists
+  for exactly one caller — rolling back a blob whose row insert failed.
+  `SUBTITLE_STORAGE_BACKEND` finally does something here (it picks `blobPrimary`,
+  where new writes land); reads still route by each row's own recorded backend.
+- Subtitle providers (`OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USER_AGENT`,
+  optional `OPENSUBTITLES_USERNAME`/`PASSWORD`, `SUBSOURCE_API_KEY`,
+  `SUBSOURCE_USER_AGENT`; env-only secrets). These are the **same keys the admin
+  uses** — one upstream account, one daily download quota — but here the quota is
+  reachable by any signed-in visitor rather than one operator, hence
+  `SUBTITLE_SEARCH_PER_HOUR` (30), `SUBTITLE_DOWNLOADS_PER_DAY` (10) and
+  `SUBTITLE_DOWNLOADS_GLOBAL_PER_DAY` (150). **Both keys empty ⇒ the feature is
+  off**: routes unregistered, no panel. `subtitleSearchEnabled()` also requires
+  accounts, because the endpoints sit behind `requireUser` and the panel's
+  anonymous state is a sign-in prompt that would otherwise link nowhere.
 
 ## Architecture
 
@@ -123,8 +149,14 @@ Flat single `main` package.
     `sitemap.xml`.
   - `GET /{locale}/watch/movie/{id}` and `GET /{locale}/watch/episode/{id}` — the watch page.
   - `POST /api/sources/{videoID}/prepare` — viewer-mediated playback (see below).
-  - `GET /api/subtitles/{id}/file` — serves a saved subtitle file read-only from
-    the shared blob store, by the row's `storage_backend` + `storage_key`.
+  - `GET /api/subtitles/{id}/file` — serves a saved subtitle file from the
+    shared blob store, by the row's `storage_backend` + `storage_key`. **Stays
+    anonymous**: reading a saved subtitle needs no account, only contributing one
+    does. That is why the contribution routes are a `chi.Group` rather than a
+    `chi.Route` on `/api/subtitles` — a subrouter would have swallowed this one.
+  - `GET /api/subtitles/search`, `GET /api/subtitles/download`,
+    `POST /api/subtitles` — the contributed-subtitle API, behind `requireUser`
+    and registered only when a provider key is configured.
   - `GET /api/catalog/cards` — localized public card metadata used to refresh
     anonymous localStorage bookmarks after a language switch.
   - `GET /auth/google/start` and `GET /auth/google/callback` — sign-in
@@ -152,8 +184,55 @@ Flat single `main` package.
   user-facing **progress bar** plus a collapsed **debug panel** (speeds/peers —
   not meant for end users). A **source selector** appears when more than one
   video exists. Saved subtitles are listed as chips (first auto-loaded); the user
-  can also load a local `.srt`/`.vtt`. There is no OpenSubtitles search here (the
-  viewer is read-only and holds no provider key).
+  can also load a local `.srt`/`.vtt`, or search a provider — see *Contributed
+  subtitles* below.
+
+- **Contributed subtitles** (`subtitleprovider.go`, `opensubtitles.go`,
+  `subsource.go`, `ratelimit.go`, `subtitles_http.go`). A signed-in visitor can
+  search OpenSubtitles/SubSource from the watch page. Two distinct actions per
+  result, and the split is the whole design:
+  - **clicking a result** → `GET /api/subtitles/download` returns the WebVTT and
+    the page feeds it to the existing `setSubtitle()`. **Nothing is persisted**,
+    so trying a subtitle is free and reversible; it is gone on reload.
+  - **"save for everyone"** → `POST /api/subtitles` downloads it, writes the file
+    to the shared blob store and inserts a `subtitles` row stamped with
+    `added_by_user_id`. From then on **every** visitor sees it. This is the
+    viewer's one catalog write.
+
+  The panel renders for **everyone** when the feature is configured; anonymous
+  visitors get it disabled (`data-locked`) with a sign-in prompt, the same call
+  the quality chips make — a locked option is still listed because seeing that it
+  exists is the point. Like those chips it is **client-rendered and bypassable**;
+  `requireUser` on the API group is the real enforcement.
+
+  Details worth keeping:
+  - **The three provider files are duplicated from `admin/`, not shared**, same
+    convention as `models.go`/`store.go`/`mkvplayer.js`. The port drops
+    `stripASSOverrides` (already in `server.go`) and `parseSubtitleQuery` (the
+    viewer seeds from the catalog row, never a file name). Fix one, mirror it.
+  - **The search query is seeded with the ORIGINAL title**, which is why
+    `GetEpisodeContext` selects `t.original_title`. Providers index releases by
+    original/English name, so seeding a `/vi` page's localized title finds
+    nothing.
+  - `handleSaveSubtitle` does every cheap rejection — owner validation, dedupe,
+    rate limit — **before** `provider.Download`, so a forged owner id or a
+    duplicate can never spend a unit of the shared quota. The owner id comes from
+    the browser, so it is checked against the catalog (`TitleExists`/
+    `EpisodeExists`) rather than trusted; the FK would catch it too, but only
+    after the download and as a 500.
+  - A failed row insert **deletes the blob it just wrote**, or a shared volume
+    accumulates files nothing references.
+  - Errors never pass upstream `err.Error()` to the client (admin does, but it
+    sits behind basic auth) — provider errors can echo the shared account's
+    quota state.
+  - Dedupe is in Go, not a UNIQUE index, and that is deliberate: MySQL treats
+    NULLs as DISTINCT in unique indexes and every row has `title_id` or
+    `episode_id` NULL, so a unique key over the owner tuple would never collide
+    for **either** owner kind. See `FindSubtitleByProviderFile`.
+  - **Known gap, shared with admin: no charset detection anywhere.** A
+    Windows-1258/CP1252 Vietnamese `.srt` is stored and served as mojibake.
+    OpenSubtitles is asked for WebVTT (UTF-8) so it is largely unaffected;
+    SubSource ZIPs are the real exposure. Fix belongs in both services at once.
 
 - **Quality tiers** (`server.go`, `resolutionLock`). Sources are always *listed*
   — seeing that a better quality exists is the whole point — but not always
@@ -431,17 +510,27 @@ Flat single `main` package.
   from the right instance. Keeping these on the server means only the streamers'
   stats + stream endpoints are browser-reachable; everything else is internal.
 
-- **Subtitle blob store** (`blobstore.go`): a **read-only** port of admin's store
-  (`Get` only, `local` + `s3`); `handleSubtitleFile` routes a subtitle row to
-  `s.blobs[storage_backend]` and serves the bytes (`errBlobNotFound` → 404).
+- **Subtitle blob store** (`blobstore.go`): a full port of admin's store
+  (`Put`/`Get`/`Delete`, `local` + `s3`); `handleSubtitleFile` routes a subtitle
+  row to `s.blobs[storage_backend]` and serves the bytes (`errBlobNotFound` →
+  404), while a contributed subtitle is written to `s.blobPrimary`.
+  `subtitleStorageKey` is ported verbatim so both services produce identical key
+  layouts in the shared store, and its nanosecond suffix is what stops a viewer
+  save ever clobbering an admin one.
 
 - **Domain types** (`models.go`): `Title` → `Genre`/`Season` → `Episode`, plus
   `Video` and `Subtitle` (mirroring admin; `Video.Magnet` is `json:"-"` so it is
   never serialized to the browser). Dates are `"YYYY-MM-DD"` strings. Deliberately
   a separate copy from admin's (no shared package).
 
-- **Store** (`store.go`): `database/sql` queries — read-only for the catalog,
-  read/write for `users` + `user_bookmarks` only (see the invariant at the top).
+- **Store** (`store.go`): `database/sql` queries — read-only for the catalog
+  except `AddSubtitle`, plus read/write for `users` + `user_bookmarks` (see the
+  invariant at the top). `AddSubtitle` also calls `refreshTitleVietsub`, which
+  UPDATEs `titles.has_vietsub`. That second catalog write is deliberate: the flag
+  is not content but a cache derived from the subtitle rows just written, and
+  **nothing recomputes it on a schedule**, so skipping it would mean a
+  contributed Vietnamese subtitle never lights the "Vietsub" badge or reaches the
+  subtitled browse row — the exact signal the feature exists to improve.
   `titleSummaryColumns` + `scanTitleSummary` are the shared SELECT list and
   scanner behind every card query (grid, browse rows, saved list) so they cannot
   drift; the columns are **qualified with the alias `t`**, so callers must select

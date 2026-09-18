@@ -600,20 +600,24 @@ func (s *Store) loadSeasons(ctx context.Context, locale Locale, titleID int64) (
 
 // EpisodeContext identifies an episode and its parent title, for the watch page.
 type EpisodeContext struct {
-	TitleID       int64
-	TitleName     string
-	SeasonNumber  int
-	EpisodeNumber int
-	EpisodeName   string
+	TitleID   int64
+	TitleName string
+	// TitleOriginalName is the untranslated title. It exists for the subtitle
+	// search seed: providers index releases by original/English name, so seeding
+	// a query with the localized TitleName finds nothing on a /vi page.
+	TitleOriginalName string
+	SeasonNumber      int
+	EpisodeNumber     int
+	EpisodeName       string
 }
 
 // GetEpisodeContext resolves a single episode id to its parent title and
 // season/episode numbers. Returns (nil, nil) when no such episode exists.
 func (s *Store) GetEpisodeContext(ctx context.Context, locale Locale, episodeID int64) (*EpisodeContext, error) {
 	var ec EpisodeContext
-	var name sql.NullString
+	var name, originalTitle sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT t.id, COALESCE(NULLIF(tl.title, ''), NULLIF(tf.title, ''), t.title),
+		SELECT t.id, COALESCE(NULLIF(tl.title, ''), NULLIF(tf.title, ''), t.title), t.original_title,
 		       s.season_number, e.episode_number, COALESCE(NULLIF(el.name, ''), NULLIF(ef.name, ''), e.name)
 		FROM episodes e
 		JOIN seasons s ON s.id = e.season_id
@@ -623,7 +627,7 @@ func (s *Store) GetEpisodeContext(ctx context.Context, locale Locale, episodeID 
 		LEFT JOIN episode_translations el ON el.episode_id = e.id AND el.locale = ?
 		LEFT JOIN episode_translations ef ON ef.episode_id = e.id AND ef.locale = ?
 		WHERE e.id = ?`, string(locale), string(fallbackLocale(locale)), string(locale), string(fallbackLocale(locale)), episodeID).Scan(
-		&ec.TitleID, &ec.TitleName, &ec.SeasonNumber, &ec.EpisodeNumber, &name)
+		&ec.TitleID, &ec.TitleName, &originalTitle, &ec.SeasonNumber, &ec.EpisodeNumber, &name)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -631,6 +635,7 @@ func (s *Store) GetEpisodeContext(ctx context.Context, locale Locale, episodeID 
 		return nil, err
 	}
 	ec.EpisodeName = name.String
+	ec.TitleOriginalName = originalTitle.String
 	return &ec, nil
 }
 
@@ -785,19 +790,20 @@ func (s *Store) TitleIDForVideo(ctx context.Context, videoID int64) (int64, erro
 	return titleID.Int64, nil
 }
 
-// --- Subtitles (read-only) -------------------------------------------------
+// --- Subtitles -------------------------------------------------
 
 // subtitleColumns is the shared SELECT list / scan order for subtitle rows.
 const subtitleColumns = `id, title_id, episode_id, provider, provider_file_id, language,
-	name, download_count, format, storage_backend, storage_key, metadata, created_at`
+	name, download_count, format, storage_backend, storage_key, metadata, created_at,
+	added_by_user_id`
 
 func scanSubtitle(sc interface{ Scan(...any) error }) (Subtitle, error) {
 	var sub Subtitle
-	var titleID, episodeID sql.NullInt64
+	var titleID, episodeID, addedBy sql.NullInt64
 	var meta []byte
 	if err := sc.Scan(&sub.ID, &titleID, &episodeID, &sub.Provider, &sub.ProviderFileID,
 		&sub.Language, &sub.Name, &sub.DownloadCount, &sub.Format, &sub.StorageBackend,
-		&sub.StorageKey, &meta, &sub.CreatedAt); err != nil {
+		&sub.StorageKey, &meta, &sub.CreatedAt, &addedBy); err != nil {
 		return Subtitle{}, err
 	}
 	if titleID.Valid {
@@ -805,6 +811,9 @@ func scanSubtitle(sc interface{ Scan(...any) error }) (Subtitle, error) {
 	}
 	if episodeID.Valid {
 		sub.EpisodeID = &episodeID.Int64
+	}
+	if addedBy.Valid {
+		sub.AddedByUserID = &addedBy.Int64
 	}
 	if len(meta) > 0 {
 		sub.Metadata = append(json.RawMessage{}, meta...)
@@ -853,11 +862,132 @@ func (s *Store) SubtitlesForEpisode(ctx context.Context, episodeID int64) ([]Sub
 	return s.querySubtitles(ctx, "episode_id = ?", episodeID)
 }
 
+// nullInt64 maps an optional owner id onto SQL NULL. The subtitles CHECK
+// constraint requires exactly one of title_id / episode_id, so the other must be
+// a real NULL rather than a zero.
+func nullInt64(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+// AddSubtitle records a subtitle contributed by a signed-in visitor. The file
+// itself is already in a BlobStore; this stores only its locator plus the
+// provider metadata. Exactly one of sub.TitleID / sub.EpisodeID must be set
+// (mirrors chk_subtitle_owner). On return sub.ID holds the new id.
+//
+// This is the viewer's ONE catalog write, and AddedByUserID is what keeps it
+// distinguishable: admin-curated rows leave the column NULL, ours never do.
+// Ported from admin's AddSubtitle — the query layers are duplicated, not shared.
+func (s *Store) AddSubtitle(ctx context.Context, sub *Subtitle) error {
+	if (sub.TitleID == nil) == (sub.EpisodeID == nil) {
+		return fmt.Errorf("subtitle must reference exactly one of title or episode")
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO subtitles
+			(title_id, episode_id, provider, provider_file_id, language, name,
+			 download_count, format, storage_backend, storage_key, added_by_user_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		nullInt64(sub.TitleID), nullInt64(sub.EpisodeID), sub.Provider, sub.ProviderFileID,
+		sub.Language, sub.Name, sub.DownloadCount, sub.Format, sub.StorageBackend,
+		sub.StorageKey, nullInt64(sub.AddedByUserID))
+	if err != nil {
+		return fmt.Errorf("insert subtitle: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	sub.ID = id
+	if sub.TitleID != nil {
+		return s.refreshTitleVietsub(ctx, *sub.TitleID)
+	}
+	return nil
+}
+
+// refreshTitleVietsub recomputes the denormalized titles.has_vietsub flag from
+// the subtitle rows. Recompute-from-truth, so it is idempotent; updated_at is
+// preserved so a flag flip cannot reorder the newest-first browse lists.
+//
+// This writes `titles`, which the viewer otherwise never touches — deliberately.
+// The flag is not catalog CONTENT, it is a cache derived entirely from the
+// subtitles rows we just legitimately wrote, and NOTHING recomputes it on a
+// schedule (admin only does so on its own save/delete). Skipping it would mean a
+// user-contributed Vietnamese subtitle never lights the "Vietsub" badge or lands
+// in the subtitled browse row — exactly the signal this feature exists to
+// improve. Byte-identical to admin's copy.
+func (s *Store) refreshTitleVietsub(ctx context.Context, titleID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE titles
+		SET has_vietsub = EXISTS (SELECT 1 FROM subtitles WHERE title_id = ? AND language = 'vi'),
+		    updated_at = updated_at
+		WHERE id = ?`, titleID, titleID)
+	if err != nil {
+		return fmt.Errorf("refresh has_vietsub for title %d: %w", titleID, err)
+	}
+	return nil
+}
+
+// FindSubtitleByProviderFile returns an existing row for the same owner and the
+// same provider file, or (nil, nil).
+//
+// There is deliberately no UNIQUE index to lean on. MySQL treats NULLs as
+// DISTINCT in unique indexes, and every subtitles row has title_id OR episode_id
+// NULL, so a unique key over the owner tuple would never collide for EITHER
+// owner kind — it would be pure decoration. Enforcing it properly would need a
+// generated owner_key column on a table the admin owns, which is not worth a
+// migration for a check that costs one indexed lookup here.
+//
+// `<=>` is MySQL's NULL-safe equality, so one statement covers both owner kinds.
+func (s *Store) FindSubtitleByProviderFile(ctx context.Context, titleID, episodeID *int64, provider, fileID string) (*Subtitle, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+subtitleColumns+`
+		FROM subtitles
+		WHERE title_id <=> ? AND episode_id <=> ? AND provider = ? AND provider_file_id = ?
+		LIMIT 1`, nullInt64(titleID), nullInt64(episodeID), provider, fileID)
+	sub, err := scanSubtitle(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sub, nil
+}
+
+// TitleExists and EpisodeExists validate a browser-supplied subtitle owner
+// before anything expensive happens. Deliberately not GetTitle, which would load
+// genres and seasons to answer a yes/no. The foreign keys would also reject a
+// bogus id, but only after a provider download had already spent quota, and as a
+// 500 rather than a clean 404.
+func (s *Store) TitleExists(ctx context.Context, id int64) (bool, error) {
+	return s.existsByID(ctx, "titles", id)
+}
+
+func (s *Store) EpisodeExists(ctx context.Context, id int64) (bool, error) {
+	return s.existsByID(ctx, "episodes", id)
+}
+
+// existsByID takes the table name from its two callers above, never from a
+// request — it is interpolated, so it must never become caller-controlled.
+func (s *Store) existsByID(ctx context.Context, table string, id int64) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM `+table+` WHERE id = ? LIMIT 1`, id).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // --- Accounts and saved titles -----------------------------------------------
 //
-// These two tables are the ONLY things the viewer writes. The catalog itself
-// (titles, videos, subtitles, …) stays strictly read-only, and the schema is
-// still owned entirely by the admin service — the viewer never migrates.
+// These two tables, plus contributed rows in `subtitles` (see AddSubtitle), are
+// the ONLY things the viewer writes. The rest of the catalog (titles, videos,
+// …) stays strictly read-only, and the schema is still owned entirely by the
+// admin service — the viewer never migrates.
 
 // maxBookmarks caps a single merge request so a hostile or broken client cannot
 // push an unbounded insert.

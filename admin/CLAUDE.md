@@ -292,7 +292,13 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
   `billing_chain_cursors`), and the admin-granted 4K unlock columns
   (`0009`: `users.comp_expires_at` / `comp_granted_at`). `0010` adds localized
   title, genre, season, and episode translation tables for the viewer's `/vi`
-  and `/en` page trees. `featured_titles` is the
+  and `/en` page trees. `0011` adds `subtitles.added_by_user_id`, the one column
+  in this table **this service never writes** — the viewer sets it when a
+  signed-in visitor contributes a subtitle from the public watch page, and admin
+  rows leave it `NULL`. So `subtitles` now has two writers separated by *rows*
+  (unlike `users`, separated by *columns*). Reading it is how a contributed row
+  is told from a curated one; `DELETE /api/subtitles/{id}` here is the
+  moderation path, and it already works on contributed rows unchanged. `featured_titles` is the
   manual browse-hero curation list — `(title_id PK, position, created_at)` with a
   cascading FK to `titles`, ordered by `position` ascending; the catalog `titles`
   table stays untouched (deliberately a separate table, not a `titles` column).

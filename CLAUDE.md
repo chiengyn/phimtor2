@@ -11,7 +11,7 @@ viewer) share a single MySQL database; the streamer(s) and manager stand alone.
 | Module | Purpose | Default port | Storage | Detail |
 |--------|---------|--------------|---------|--------|
 | **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard + featured-titles curation + payment monitor | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
-| **`viewer/`** | Public browse/discovery + watch UI + Google sign-in | `8082` | MySQL (read-only catalog; writes `users`/`user_bookmarks`) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
+| **`viewer/`** | Public browse/discovery + watch UI + Google sign-in | `8082` | MySQL (read-only catalog, except contributed `subtitles`; writes `users`/`user_bookmarks`) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
 | **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage); **N interchangeable instances** | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
 | **`manager/`** | Control plane that load-balances torrents across streamers (token-gated; public host + internal alias) | `8083` | enrollment JSON file | [`manager/CLAUDE.md`](manager/CLAUDE.md) |
 
@@ -29,7 +29,11 @@ skips the slow DHT metadata fetch; magnet-only sources are backfilled by the adm
 torrent is live. Streamers **self-enroll** with the manager: an
 unknown streamer is **pending** until an operator approves it in the admin
 Streamers dashboard (the manager pins its identity fingerprint), then it
-heartbeats. Subtitle search (OpenSubtitles) is proxied by the admin. The streamer
+heartbeats. Subtitle search (OpenSubtitles + SubSource) is proxied **server-side
+by whichever app serves the page** — the admin for its own surfaces, the viewer
+for signed-in visitors on the public watch page. The two duplicate the provider
+clients rather than share them, as they already do for their query layers; the
+API keys are the same upstream account, so the viewer rate-limits per user. The streamer
 is **API-only** (no UI) and **must** register with a manager — there is no
 standalone mode.
 
@@ -50,13 +54,15 @@ and routing tests; the other modules currently have no tests.
   viewer writes, with no write path of its own (a "mark as paid" button there
   would be a second writer of the settle path).
 - **`viewer/` never migrates** and assumes the tables already exist
-  (`viewer/main.go`). It only *reads* the catalog — with one exception: it is the
-  sole **writer** of the tables the admin declares but never touches. Those are
-  the two account tables, `users` and `user_bookmarks` (created by
-  `admin/migrations/0007_users.sql`), which back Google sign-in and the
-  per-account watch-later list, plus the **billing** tables from
+  (`viewer/main.go`). It is the sole **writer** of the tables the admin declares
+  but never touches: the two account tables, `users` and `user_bookmarks`
+  (created by `admin/migrations/0007_users.sql`), which back Google sign-in and
+  the per-account watch-later list, plus the **billing** tables from
   `0008_billing.sql` (`payment_invoices`, `user_title_unlocks`,
-  `billing_chain_cursors`) behind the paid 4K tier. It writes nothing else, ever.
+  `billing_chain_cursors`) behind the paid 4K tier. Of the **catalog** it is a
+  reader, with exactly one exception — contributed `subtitles` rows, insert-only,
+  and the `titles.has_vietsub` recompute that follows one (see below). It writes
+  nothing else, ever.
   **Deploy admin before viewer** so the migrations land first.
 
   The one shared row is `users`, and the two services write **disjoint columns**
@@ -64,6 +70,14 @@ and routing tests; the other modules currently have no tests.
   owns `comp_*` (the granted one). That is what makes "revoke comp" in the admin
   UI provably unable to cancel a subscription somebody paid for — the `UPDATE`
   never names those columns. Keep it that way.
+
+`subtitles` is the one catalog table with two writers. A signed-in viewer can
+search a subtitle provider from the watch page and save the result for everyone;
+those rows carry `added_by_user_id` (`0011`), admin-curated ones leave it `NULL`.
+So this table is split by **rows**, where `users` is split by **columns** — in
+both cases the two services never write the same data. The viewer only ever
+INSERTs there (plus the derived `titles.has_vietsub` recompute); updating or
+deleting a subtitle stays an admin action, which is also the moderation path.
 
 So schema changes live in `admin/` (a new numbered `admin/migrations/NNNN_*.sql`),
 and any new column the viewer should surface must be added to **both** modules'

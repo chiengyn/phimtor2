@@ -87,8 +87,30 @@ type Config struct {
 	// case instantly; this TTL is the backstop for crashed tabs / dead networks.
 	WatchHeartbeatTTL int
 
-	// Subtitle storage. The viewer reads the SAME storage the admin writes to,
-	// read-only — local must point at the same directory, s3 at the same bucket.
+	// Subtitle providers, for the watch page's "find subtitles" panel. A
+	// signed-in visitor searches these and may save a result to the shared
+	// catalog. Secrets, so env-only (no flags). These are the SAME keys the admin
+	// uses — one upstream account, one daily quota — which is why the caps below
+	// exist. Both keys empty ⇒ the feature is off: no routes, no panel. That is
+	// the clean rollback.
+	OpenSubtitlesAPIKey    string
+	OpenSubtitlesUserAgent string
+	OpenSubtitlesUsername  string
+	OpenSubtitlesPassword  string
+	SubSourceAPIKey        string
+	SubSourceUserAgent     string
+
+	// Per-user (and overall) caps on the provider proxy. Searching is cheap;
+	// downloading spends the shared account's daily quota, so it is capped
+	// tighter and again globally. 0 disables a given cap.
+	SubtitleSearchPerHour         int
+	SubtitleDownloadsPerDay       int
+	SubtitleDownloadsGlobalPerDay int
+
+	// Subtitle storage, shared with the admin — local must point at the same
+	// directory, s3 at the same bucket. Mostly read (the admin writes the
+	// catalog's subtitles), but the viewer WRITES here too when a signed-in user
+	// saves a subtitle for everyone, so the location must be writable.
 	SubtitleStorageBackend string
 	SubtitleStorageDir     string
 	S3Endpoint             string
@@ -131,6 +153,17 @@ func loadConfig() Config {
 		BillingTitleCents:      envInt("BILLING_TITLE_USD_CENTS", 100),
 		BillingVNDPerUSD:       envInt("BILLING_VND_PER_USD", 26000),
 
+		OpenSubtitlesAPIKey:    envStr("OPENSUBTITLES_API_KEY", ""),
+		OpenSubtitlesUserAgent: envStr("OPENSUBTITLES_USER_AGENT", "phimtor2 v1.0"),
+		OpenSubtitlesUsername:  envStr("OPENSUBTITLES_USERNAME", ""),
+		OpenSubtitlesPassword:  envStr("OPENSUBTITLES_PASSWORD", ""),
+		SubSourceAPIKey:        envStr("SUBSOURCE_API_KEY", ""),
+		SubSourceUserAgent:     envStr("SUBSOURCE_USER_AGENT", "phimtor2 v1.0"),
+
+		SubtitleSearchPerHour:         envInt("SUBTITLE_SEARCH_PER_HOUR", 30),
+		SubtitleDownloadsPerDay:       envInt("SUBTITLE_DOWNLOADS_PER_DAY", 10),
+		SubtitleDownloadsGlobalPerDay: envInt("SUBTITLE_DOWNLOADS_GLOBAL_PER_DAY", 150),
+
 		SubtitleStorageBackend: envStr("SUBTITLE_STORAGE_BACKEND", "local"),
 		SubtitleStorageDir:     envStr("SUBTITLE_STORAGE_DIR", "./data/subtitles"),
 		S3Endpoint:             envStr("S3_ENDPOINT", ""),
@@ -151,7 +184,7 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.DBName, "db-name", cfg.DBName, "MySQL database name")
 	flag.StringVar(&cfg.ManagerInternalURL, "manager-url", cfg.ManagerInternalURL, "Server-to-server base URL of the streamer manager (add torrent)")
 	flag.StringVar(&cfg.SubtitleStorageBackend, "subtitle-storage", cfg.SubtitleStorageBackend, "Subtitle storage backend: local | s3")
-	flag.StringVar(&cfg.SubtitleStorageDir, "subtitle-dir", cfg.SubtitleStorageDir, "Local subtitle storage directory (read-only, shared with admin)")
+	flag.StringVar(&cfg.SubtitleStorageDir, "subtitle-dir", cfg.SubtitleStorageDir, "Local subtitle storage directory (shared with admin, must be writable)")
 	flag.Parse()
 
 	return cfg
@@ -178,6 +211,20 @@ func (c Config) billingEnabled() bool {
 	}
 	evm := c.BillingEVMAddress != "" && c.BillingEVMChains != ""
 	return evm || c.BillingTronAddress != ""
+}
+
+// subtitleSearchEnabled reports whether signed-in visitors can search subtitle
+// providers from the watch page. When false the routes are not registered and
+// the panel is not rendered at all — the clean rollback for the whole feature.
+func (c Config) subtitleSearchEnabled() bool {
+	// Like billing, this REQUIRES accounts. The endpoints sit behind requireUser,
+	// so with sign-in off nobody could ever reach them, and the panel's anonymous
+	// state is a "sign in to search" prompt whose link would go nowhere —
+	// /auth/google/* is not even routed. Better to show nothing than a dead end.
+	if !c.accountsEnabled() {
+		return false
+	}
+	return c.OpenSubtitlesAPIKey != "" || c.SubSourceAPIKey != ""
 }
 
 // evmRPCOverride returns the operator's RPC endpoint for one chain, or "" to use

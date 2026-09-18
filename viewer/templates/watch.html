@@ -184,6 +184,32 @@
 	}
 	.sub-style-actions { margin-top: 14px; }
 
+	/* Subtitle search panel. Same shell as .sub-style — the page has no modal
+	   pattern, and a second one would be the only overlay on the site. */
+	.sub-search { margin-top: 18px; max-width: 720px; }
+	.sub-search[hidden] { display: none; }
+	.sub-search-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+	.sub-search-form input[type=text],
+	.sub-search-form input[type=number],
+	.sub-search-form select {
+		background: var(--surface); color: var(--text); border: 1px solid #3a3a3a;
+		border-radius: var(--radius); padding: 7px 10px; font-size: 0.85rem;
+	}
+	.sub-search-form input[type=text] { flex: 1 1 220px; min-width: 0; }
+	.sub-search-form input[type=number] { width: 72px; }
+	.sub-search-hint { color: var(--muted); font-size: 0.78rem; margin: 10px 0; }
+	.sub-search-gate {
+		display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+		margin: 10px 0 0; font-size: 0.82rem; color: var(--muted);
+	}
+	.sub-search-gate a { color: var(--accent); font-weight: 600; }
+	#sub-search-results { margin-top: 12px; }
+	.sub-row .sub-save { flex: 0 0 auto; }
+	.sub-row .sub-save[disabled] { opacity: 0.55; cursor: default; }
+	/* Anonymous: the panel is shown but inert. Enforcement is server-side
+	   (requireUser) — this is only the affordance, exactly like the quality chips. */
+	.sub-search[data-locked] .sub-search-form { opacity: 0.55; pointer-events: none; }
+
 	/* --- Responsive (phones) --- */
 	@media (max-width: 600px) {
 		.watch .plyr video { max-height: 56vh; }
@@ -191,8 +217,9 @@
 		.player { margin: 12px 0 18px; }
 		.ctrl-group { margin-top: 16px; }
 		/* Let the source/subtitle rows use the full width on small screens. */
-		.sub-list, .sub-style { max-width: 100%; }
+		.sub-list, .sub-style, .sub-search { max-width: 100%; }
 		.sub-style-grid { grid-template-columns: 1fr; gap: 12px; }
+		.sub-search-form input[type=text] { flex: 1 1 100%; }
 		.sub-head { gap: 8px; }
 		.sub-head .btn { flex: 1 1 auto; text-align: center; }
 		.sub-row .sub-meta { display: none; }
@@ -204,7 +231,13 @@
 	data-videos="{{.VideosJSON}}"
 	data-subs="{{.SubtitlesJSON}}"
 	data-login-url="{{.LoginURL}}"
-	data-upgrade-url="{{.UpgradeURL}}">
+	data-upgrade-url="{{.UpgradeURL}}"
+	data-sub-search="{{if .SubtitleSearchEnabled}}1{{end}}"
+	data-signed-in="{{if .SignedIn}}1{{end}}"
+	data-sub-providers="{{.SubtitleProvidersJSON}}"
+	data-sub-query="{{.SearchQuery}}"
+	data-sub-season="{{.SearchSeason}}"
+	data-sub-episode="{{.SearchEpisode}}">
 	<a href="{{.BackHref}}" class="back-link">← {{t "watch.back"}}</a>
 	<div class="watch-meta-top">
 		<h1>{{.Heading}}</h1>
@@ -242,6 +275,7 @@
 			<span class="ctrl-label">{{t "watch.subtitles"}}</span>
 			<label class="btn btn-sm" for="subtitle-input">＋ {{t "watch.upload_subtitle"}}</label>
 			<input type="file" id="subtitle-input" accept=".srt,.vtt" hidden onchange="loadSubtitleFile(this.files[0]); this.value=''">
+			{{if .SubtitleSearchEnabled}}<button class="btn btn-sm btn-clear" id="sub-search-btn" onclick="toggleSubSearch()">🔍 {{t "watch.search_subtitle"}}</button>{{end}}
 			<button class="btn btn-sm btn-clear" id="sub-style-btn" onclick="toggleSubStyle()">🅰 {{t "watch.customize_subtitle"}}</button>
 			<button class="btn btn-sm btn-clear" id="sub-off-btn" onclick="clearSubtitle()" hidden>{{t "watch.subtitle_off"}}</button>
 		</div>
@@ -277,6 +311,38 @@
 				<button class="btn btn-sm btn-clear" onclick="resetSubStyle()">{{t "watch.reset"}}</button>
 			</div>
 		</div>
+
+		{{if .SubtitleSearchEnabled}}
+		{{/* Rendered for EVERYONE, inert for anonymous visitors (data-locked +
+		     disabled controls + a sign-in prompt). Same call the quality chips
+		     make: a locked option is still listed, because seeing that it exists
+		     is the point. requireUser on the API is the actual enforcement. */}}
+		<div class="sub-search" id="sub-search" hidden {{if not .SignedIn}}data-locked{{end}}>
+			<div class="sub-search-form">
+				<input type="text" id="sbs-query" value="{{.SearchQuery}}"
+					placeholder="{{t "watch.search_placeholder"}}" {{if not .SignedIn}}disabled{{end}}>
+				<select id="sbs-lang" {{if not .SignedIn}}disabled{{end}}>
+					<option value="vi">{{t "watch.lang_vi"}}</option>
+					<option value="en">{{t "watch.lang_en"}}</option>
+				</select>
+				<select id="sbs-provider" hidden {{if not .SignedIn}}disabled{{end}}></select>
+				{{if .SearchEpisode}}
+				<input type="number" id="sbs-season" min="0" value="{{.SearchSeason}}"
+					title="{{t "watch.search_season"}}" {{if not .SignedIn}}disabled{{end}}>
+				<input type="number" id="sbs-episode" min="0" value="{{.SearchEpisode}}"
+					title="{{t "watch.search_episode"}}" {{if not .SignedIn}}disabled{{end}}>
+				{{end}}
+				<button class="btn btn-sm" onclick="searchSubtitles()" {{if not .SignedIn}}disabled{{end}}>{{t "watch.search_action"}}</button>
+			</div>
+			{{if .SignedIn}}
+			<p class="sub-search-hint">{{t "watch.search_apply_hint"}}</p>
+			{{else}}
+			<p class="sub-search-gate">🔒 <a href="{{.LoginURL}}">{{t "watch.search_sign_in"}}</a></p>
+			{{end}}
+			<div class="sub-list" id="sub-search-results"></div>
+			<span id="sub-search-status" class="subtitle-status"></span>
+		</div>
+		{{end}}
 
 		<div class="sub-list" id="sub-list"></div>
 		<span id="subtitle-status" class="subtitle-status"></span>
@@ -331,6 +397,11 @@ const I18N = {
 	unsupportedSubtitle: {{js (t "watch.unsupported_subtitle")}}, subtitleError: {{js (t "watch.subtitle_error")}},
 	subtitleEnabled: {{js (t "watch.subtitle_enabled")}}, noSavedSubtitle: {{js (t "watch.no_saved_subtitle")}},
 	subtitleName: {{js (t "watch.subtitle_name")}}, subtitleLoadError: {{js (t "watch.subtitle_load_error")}},
+	searching: {{js (t "watch.searching")}}, searchNoResults: {{js (t "watch.search_no_results")}},
+	searchError: {{js (t "watch.search_error")}}, searchSignIn: {{js (t "watch.search_sign_in")}},
+	subtitleSave: {{js (t "watch.subtitle_save")}}, subtitleSaving: {{js (t "watch.subtitle_saving")}},
+	subtitleSaved: {{js (t "watch.subtitle_saved")}}, subtitleSaveError: {{js (t "watch.subtitle_save_error")}},
+	subtitleDownloading: {{js (t "watch.subtitle_downloading")}},
 	unavailable4K: {{js (t "watch.unavailable_4k")}}, analyzing: {{js (t "watch.analyzing")}}, seeking: {{js (t "watch.seeking")}},
 	statDownload: {{js (t "watch.stat_download")}}, statUpload: {{js (t "watch.stat_upload")}},
 	statSeeders: {{js (t "watch.stat_seeders")}}, statPeers: {{js (t "watch.stat_peers")}},
@@ -1182,6 +1253,189 @@ async function applySavedSubtitle(id) {
 	}
 }
 
+// --- Subtitle search (signed-in) ------------------------------------------
+//
+// Two distinct actions per result, and the difference is the whole point:
+//   clicking a row  -> downloads and applies it to THIS playback only
+//   "save"          -> persists it to the shared catalog, for every visitor
+// Anonymous visitors see the panel but it is inert; the server enforces that.
+
+let SUB_PROVIDERS = [];
+try { SUB_PROVIDERS = JSON.parse(D.subProviders || '[]'); } catch(e) { SUB_PROVIDERS = []; }
+if (!Array.isArray(SUB_PROVIDERS)) SUB_PROVIDERS = [];
+
+let SEARCH_RESULTS = [];
+// Which provider files are already saved, so the save button starts disabled
+// instead of learning it from a rejected POST.
+const savedFileIDs = new Set(SAVED_SUBS.map(s => s.provider + ':' + (s.provider_file_id || '')));
+
+function toggleSubSearch() {
+	const panel = document.getElementById('sub-search');
+	if (!panel) return;
+	panel.hidden = !panel.hidden;
+	// Never stack the two panels.
+	if (!panel.hidden) document.getElementById('sub-style').hidden = true;
+}
+
+function initSubSearch() {
+	// Anonymous: the markup is rendered (and visibly locked) but nothing is
+	// wired up, so Enter cannot fire a request either.
+	if (D.signedIn !== '1') return;
+	const sel = document.getElementById('sbs-provider');
+	if (sel && SUB_PROVIDERS.length > 1) {
+		sel.innerHTML = SUB_PROVIDERS.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join('');
+		sel.hidden = false;
+	}
+	const q = document.getElementById('sbs-query');
+	if (q) q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); searchSubtitles(); } });
+}
+
+function subSearchStatus(msg) {
+	const el = document.getElementById('sub-search-status');
+	if (el) el.textContent = msg || '';
+}
+
+// subSearchSignIn handles a 401 — the session expired while the panel was open.
+// D.loginUrl is deliberately empty for a signed-in visitor, so the return link
+// is rebuilt from the current location instead.
+function subSearchSignIn() {
+	const el = document.getElementById('sub-search-status');
+	if (!el) return;
+	const next = encodeURIComponent(location.pathname + location.search);
+	el.innerHTML = `<a href="/auth/google/start?next=${next}">${escHtml(I18N.searchSignIn)}</a>`;
+}
+
+async function subSearchFetch(url, opts) {
+	const res = await fetch(url, Object.assign({
+		headers: { 'X-Phimnet-Locale': LOCALE },
+	}, opts || {}));
+	if (res.status === 401) { subSearchSignIn(); return null; }
+	if (!res.ok) {
+		const e = await res.json().catch(() => ({}));
+		throw new Error(e.error || res.statusText);
+	}
+	return res;
+}
+
+async function searchSubtitles() {
+	const queryEl = document.getElementById('sbs-query');
+	if (!queryEl) return;
+	const params = new URLSearchParams({
+		query: queryEl.value.trim(),
+		languages: document.getElementById('sbs-lang').value || 'vi',
+	});
+	const provider = document.getElementById('sbs-provider');
+	if (provider && !provider.hidden && provider.value) params.set('provider', provider.value);
+	const season = document.getElementById('sbs-season');
+	const episode = document.getElementById('sbs-episode');
+	if (season && season.value) params.set('season', season.value);
+	if (episode && episode.value) params.set('episode', episode.value);
+
+	subSearchStatus(I18N.searching);
+	try {
+		const res = await subSearchFetch('/api/subtitles/search?' + params.toString());
+		if (!res) return;
+		const body = await res.json();
+		SEARCH_RESULTS = Array.isArray(body.results) ? body.results : [];
+		renderSearchResults();
+		subSearchStatus('');
+	} catch(e) {
+		SEARCH_RESULTS = [];
+		renderSearchResults();
+		subSearchStatus(i18nFormat(I18N.searchError, e.message));
+	}
+}
+
+// renderSearchResults reuses the .sub-row markup renderSubList emits, so a hit
+// and a saved subtitle look identical. Keyed by index: provider results have no
+// database id until they are saved.
+function renderSearchResults() {
+	const box = document.getElementById('sub-search-results');
+	if (!box) return;
+	if (!SEARCH_RESULTS.length) {
+		box.innerHTML = '<span class="sub-empty">' + escHtml(I18N.searchNoResults) + '</span>';
+		return;
+	}
+	box.innerHTML = SEARCH_RESULTS.map((r, i) => {
+		const saved = savedFileIDs.has(r.provider + ':' + r.fileId);
+		const meta = [];
+		if (typeof r.downloadCount === 'number') meta.push('\u2b07 ' + r.downloadCount.toLocaleString(LOCALE));
+		if (r.provider) meta.push(r.provider);
+		return `<div class="sub-row" onclick="previewSearchResult(${i})">
+			<span class="lang">${escHtml(r.language || '?')}</span>
+			<span class="sub-name" title="${escHtml(r.release || '')}">${escHtml(r.release || I18N.subtitleName)}</span>
+			${meta.length ? `<span class="sub-meta">${escHtml(meta.join(' \u00b7 '))}</span>` : ''}
+			<button class="btn btn-sm sub-save" ${saved ? 'disabled' : ''}
+				onclick="event.stopPropagation(); saveSearchResult(${i}, this)">${escHtml(saved ? I18N.subtitleSaved : I18N.subtitleSave)}</button>
+		</div>`;
+	}).join('');
+}
+
+// previewSearchResult is the EPHEMERAL path: fetch the VTT and hand it to the
+// existing setSubtitle, which means it survives a source switch and inherits the
+// appearance settings for free. Nothing is written anywhere.
+async function previewSearchResult(i) {
+	const r = SEARCH_RESULTS[i];
+	if (!r || !player) return;
+	subSearchStatus(I18N.subtitleDownloading);
+	try {
+		const params = new URLSearchParams({ provider: r.provider, file_id: r.fileId });
+		const res = await subSearchFetch('/api/subtitles/download?' + params.toString());
+		if (!res) return;
+		const vtt = await res.text();
+		activeSavedId = null;
+		setSubtitle(vtt, r.release || r.language || I18N.subtitleName);
+		renderSubList();
+		subSearchStatus('');
+	} catch(e) {
+		subSearchStatus(i18nFormat(I18N.subtitleError, e.message));
+	}
+}
+
+// saveSearchResult is the PERSIST path: the result becomes a catalog row every
+// visitor sees. A 409 means somebody already saved it, which is not an error —
+// the server hands back the existing row so we can just apply that.
+async function saveSearchResult(i, btn) {
+	const r = SEARCH_RESULTS[i];
+	if (!r) return;
+	const original = btn.textContent;
+	btn.disabled = true;
+	btn.textContent = I18N.subtitleSaving;
+	try {
+		const payload = {
+			provider: r.provider,
+			file_id: r.fileId,
+			language: r.language || '',
+			name: r.release || '',
+			download_count: typeof r.downloadCount === 'number' ? r.downloadCount : 0,
+		};
+		payload[D.ownerKind === 'episode' ? 'episode_id' : 'title_id'] = Number(D.ownerId);
+
+		const res = await fetch('/api/subtitles', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', 'X-Phimnet-Locale': LOCALE },
+			body: JSON.stringify(payload),
+		});
+		if (res.status === 401) { subSearchSignIn(); btn.disabled = false; btn.textContent = original; return; }
+		const body = await res.json().catch(() => ({}));
+		if (!res.ok && res.status !== 409) throw new Error(body.error || res.statusText);
+
+		const saved = body.subtitle;
+		if (saved && saved.id) {
+			if (!SAVED_SUBS.some(x => x.id === saved.id)) SAVED_SUBS.push(saved);
+			savedFileIDs.add(saved.provider + ':' + (saved.provider_file_id || ''));
+			renderSubList();
+			renderSearchResults();
+			await applySavedSubtitle(saved.id);
+		}
+		subSearchStatus(res.status === 409 ? (body.error || I18N.subtitleSaved) : I18N.subtitleSaved);
+	} catch(e) {
+		btn.disabled = false;
+		btn.textContent = original;
+		subSearchStatus(i18nFormat(I18N.subtitleSaveError, e.message));
+	}
+}
+
 function escHtml(s) {
 	return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -1280,6 +1534,7 @@ function resetSubStyle() {
 	applySubStyle();
 	renderSourceChips();
 	renderSubList();
+	if (D.subSearch === '1') initSubSearch();
 	console.info('phimnet: call streamDebug() to show download progress and diagnostics.');
 	// Default = latest added source this visitor may actually play. The store
 	// orders newest first, so an anonymous visitor lands on the newest 720p and a
