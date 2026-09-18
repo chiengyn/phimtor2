@@ -600,24 +600,20 @@ func (s *Store) loadSeasons(ctx context.Context, locale Locale, titleID int64) (
 
 // EpisodeContext identifies an episode and its parent title, for the watch page.
 type EpisodeContext struct {
-	TitleID   int64
-	TitleName string
-	// TitleOriginalName is the untranslated title. It exists for the subtitle
-	// search seed: providers index releases by original/English name, so seeding
-	// a query with the localized TitleName finds nothing on a /vi page.
-	TitleOriginalName string
-	SeasonNumber      int
-	EpisodeNumber     int
-	EpisodeName       string
+	TitleID       int64
+	TitleName     string
+	SeasonNumber  int
+	EpisodeNumber int
+	EpisodeName   string
 }
 
 // GetEpisodeContext resolves a single episode id to its parent title and
 // season/episode numbers. Returns (nil, nil) when no such episode exists.
 func (s *Store) GetEpisodeContext(ctx context.Context, locale Locale, episodeID int64) (*EpisodeContext, error) {
 	var ec EpisodeContext
-	var name, originalTitle sql.NullString
+	var name sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT t.id, COALESCE(NULLIF(tl.title, ''), NULLIF(tf.title, ''), t.title), t.original_title,
+		SELECT t.id, COALESCE(NULLIF(tl.title, ''), NULLIF(tf.title, ''), t.title),
 		       s.season_number, e.episode_number, COALESCE(NULLIF(el.name, ''), NULLIF(ef.name, ''), e.name)
 		FROM episodes e
 		JOIN seasons s ON s.id = e.season_id
@@ -627,7 +623,7 @@ func (s *Store) GetEpisodeContext(ctx context.Context, locale Locale, episodeID 
 		LEFT JOIN episode_translations el ON el.episode_id = e.id AND el.locale = ?
 		LEFT JOIN episode_translations ef ON ef.episode_id = e.id AND ef.locale = ?
 		WHERE e.id = ?`, string(locale), string(fallbackLocale(locale)), string(locale), string(fallbackLocale(locale)), episodeID).Scan(
-		&ec.TitleID, &ec.TitleName, &originalTitle, &ec.SeasonNumber, &ec.EpisodeNumber, &name)
+		&ec.TitleID, &ec.TitleName, &ec.SeasonNumber, &ec.EpisodeNumber, &name)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -635,7 +631,6 @@ func (s *Store) GetEpisodeContext(ctx context.Context, locale Locale, episodeID 
 		return nil, err
 	}
 	ec.EpisodeName = name.String
-	ec.TitleOriginalName = originalTitle.String
 	return &ec, nil
 }
 
@@ -953,6 +948,34 @@ func (s *Store) FindSubtitleByProviderFile(ctx context.Context, titleID, episode
 		return nil, err
 	}
 	return &sub, nil
+}
+
+// SubtitleSearchName returns the best seed for a subtitle-provider query.
+//
+// English FIRST, then the original title, then whatever the row has. Providers
+// index releases by their English/romanized name, so neither the localized title
+// nor the original is reliably useful: a /vi page would seed "Cau Chuyen" and a
+// Devanagari or Hangul original would seed "कहानी" / "기생충", none of which match a
+// release name. The English translation is "Kahaani" / "Parasite", which does.
+//
+// It is a separate query rather than a column on the existing ones because
+// GetTitle/GetEpisodeContext join the page locale plus fallbackLocale, and that
+// fallback is Vietnamese on an /en page — so neither reliably carries English.
+// Only called when subtitle search is enabled, so free traffic never pays for it.
+func (s *Store) SubtitleSearchName(ctx context.Context, titleID int64) (string, error) {
+	var name sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(NULLIF(te.title, ''), NULLIF(t.original_title, ''), t.title)
+		FROM titles t
+		LEFT JOIN title_translations te ON te.title_id = t.id AND te.locale = ?
+		WHERE t.id = ?`, string(LocaleEN), titleID).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return name.String, nil
 }
 
 // TitleExists and EpisodeExists validate a browser-supplied subtitle owner

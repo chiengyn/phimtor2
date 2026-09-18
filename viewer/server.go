@@ -1053,16 +1053,27 @@ func firstNonEmpty(vals ...string) string {
 // Shared by the movie and episode handlers so the two can never drift; a no-op
 // when no provider is configured, leaving every field zero so the template
 // renders nothing.
-func (s *Server) fillSubtitleSearch(d *watchData, r *http.Request, query string, season, episode int) {
+func (s *Server) fillSubtitleSearch(d *watchData, r *http.Request, titleID int64, fallbackName string, season, episode int) {
 	if !s.subtitles.enabled() {
 		return
 	}
 	d.SubtitleSearchEnabled = true
 	d.SignedIn = userFrom(r.Context()) != nil
 	d.SubtitleProvidersJSON = jsonOrEmpty(s.subtitles.enabledNames())
-	d.SearchQuery = query
 	d.SearchSeason = season
 	d.SearchEpisode = episode
+
+	// The seed is only a default in an editable box, so a lookup failure must
+	// never cost the visitor the page — fall back to the displayed title.
+	d.SearchQuery = fallbackName
+	name, err := s.store.SubtitleSearchName(r.Context(), titleID)
+	if err != nil {
+		log.Printf("subtitles: search name for title %d: %v", titleID, err)
+		return
+	}
+	if name != "" {
+		d.SearchQuery = name
+	}
 }
 
 // lockedResolutions are video qualities reserved for the PAID tier: the viewer
@@ -1297,7 +1308,7 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		LoginURL:      s.loginURL(r),
 		UpgradeURL:    s.upgradeURL(locale, title.ID),
 	}
-	s.fillSubtitleSearch(&data, r, firstNonEmpty(title.OriginalTitle, title.Title), 0, 0)
+	s.fillSubtitleSearch(&data, r, title.ID, firstNonEmpty(title.OriginalTitle, title.Title), 0, 0)
 	s.render(w, r, s.watch, data)
 }
 
@@ -1351,8 +1362,7 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		SeasonNumber:  ec.SeasonNumber,
 		Episodes:      eps,
 	}
-	s.fillSubtitleSearch(&data, r,
-		firstNonEmpty(ec.TitleOriginalName, ec.TitleName), ec.SeasonNumber, ec.EpisodeNumber)
+	s.fillSubtitleSearch(&data, r, ec.TitleID, ec.TitleName, ec.SeasonNumber, ec.EpisodeNumber)
 	s.render(w, r, s.watch, data)
 }
 

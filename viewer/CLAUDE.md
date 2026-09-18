@@ -210,10 +210,17 @@ Flat single `main` package.
     convention as `models.go`/`store.go`/`mkvplayer.js`. The port drops
     `stripASSOverrides` (already in `server.go`) and `parseSubtitleQuery` (the
     viewer seeds from the catalog row, never a file name). Fix one, mirror it.
-  - **The search query is seeded with the ORIGINAL title**, which is why
-    `GetEpisodeContext` selects `t.original_title`. Providers index releases by
-    original/English name, so seeding a `/vi` page's localized title finds
-    nothing.
+  - **The search query is seeded with the ENGLISH title** (`SubtitleSearchName`,
+    falling back to `original_title` then the row's own title). Providers index
+    releases by their English/romanized name, so neither the localized title nor
+    the original is reliably useful — a `/vi` page would seed "Câu Chuyện" and a
+    Devanagari/Hangul original would seed `कहानी` / `기생충`, none of which match
+    a release name. It is its own query because `GetTitle`/`GetEpisodeContext`
+    join the page locale plus `fallbackLocale`, and that fallback is *Vietnamese*
+    on an `/en` page, so neither reliably carries English. Only runs when the
+    feature is enabled, so free traffic never pays for it. The seed is just a
+    default in an editable box, so a lookup error falls back rather than failing
+    the page.
   - `handleSaveSubtitle` does every cheap rejection — owner validation, dedupe,
     rate limit — **before** `provider.Download`, so a forged owner id or a
     duplicate can never spend a unit of the shared quota. The owner id comes from
