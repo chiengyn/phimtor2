@@ -57,7 +57,16 @@
 	.btn-sm { padding: 5px 11px; font-size: 0.8rem; }
 	.btn-clear { background: transparent; color: var(--muted); border: 1px solid #3a3a3a; }
 	.btn-clear:hover { color: var(--accent); border-color: var(--accent); }
-	.subtitle-status { display: inline-block; color: var(--muted); font-size: 0.82rem; margin-top: 8px; }
+	/* The subtitle section's single status line: which subtitle is playing, or
+	   the latest error. Sits at the TOP of the section, so it is visible without
+	   scrolling past a long result list. */
+	.subtitle-status { display: block; color: var(--muted); font-size: 0.82rem; margin: 0 0 12px; line-height: 1.5; }
+	.subtitle-status[hidden] { display: none; }
+	.subtitle-status.err {
+		padding: 10px 14px; border-radius: var(--radius); color: var(--text);
+		background: rgba(229,9,20,0.10); border: 1px solid rgba(229,9,20,0.35);
+	}
+	.subtitle-status a { color: var(--accent); font-weight: 600; }
 
 	/* Source chips (always shown, even for a single source). */
 	.source-chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -280,6 +289,13 @@
 			<button class="btn btn-sm btn-clear" id="sub-off-btn" onclick="clearSubtitle()" hidden>{{t "watch.subtitle_off"}}</button>
 		</div>
 
+		{{/* One status line for the whole section, directly under the button row:
+		     the subtitle currently playing, or the latest error. It lives here
+		     rather than at the bottom because a search can render fifty rows
+		     beneath it, and rather than inside .sub-head because that row wraps
+		     on mobile. */}}
+		<span id="subtitle-status" class="subtitle-status" hidden></span>
+
 		<div class="sub-style" id="sub-style" hidden>
 			<div class="sub-style-grid">
 				<div class="sub-field">
@@ -340,12 +356,10 @@
 			<p class="sub-search-gate">🔒 <a href="{{.LoginURL}}">{{t "watch.search_sign_in"}}</a></p>
 			{{end}}
 			<div class="sub-list" id="sub-search-results"></div>
-			<span id="sub-search-status" class="subtitle-status"></span>
 		</div>
 		{{end}}
 
 		<div class="sub-list" id="sub-list"></div>
-		<span id="subtitle-status" class="subtitle-status"></span>
 	</div>
 
 	<div id="debug-zone" hidden>
@@ -440,6 +454,13 @@ let subtitleURL = null;
 let activeVtt = null;       // currently applied subtitle text (re-applied on source switch)
 let activeVttLabel = '';
 let activeSavedId = null;
+// activeSourceKey is "<provider>:<fileId>" for whatever subtitle is playing, or
+// null. It is the SAME key shape savedFileIDs uses, which is what lets one
+// subtitle stay marked in both the saved list and the search results after
+// "save for everyone" promotes it from one to the other. Keyed rather than
+// indexed on purpose: SEARCH_RESULTS is replaced wholesale on every search, so a
+// stored index would mark an unrelated row after the next query.
+let activeSourceKey = null;
 let remuxAbort = null;
 let remuxController = null; // client-side MKV remuxer, when one is driving the player
 let fellBackToTranscode = false;
@@ -1159,11 +1180,11 @@ async function loadSubtitleFile(file) {
 		if (ext === 'vtt') vtt = text.replace(/^﻿/, '');
 		else if (ext === 'srt') vtt = srtToVtt(text);
 		else throw new Error(I18N.unsupportedSubtitle);
-		activeSavedId = null;
+		// A local file is in neither list, so nothing is marked.
+		markActiveSubtitle(null, null);
 		setSubtitle(vtt, file.name);
-		renderSubList();
 	} catch(e) {
-		alert(i18nFormat(I18N.subtitleError, e.message));
+		subtitleStatus(i18nFormat(I18N.subtitleError, e.message), true);
 	}
 }
 
@@ -1175,6 +1196,42 @@ function stripAssOverrides(text) {
 	return text.replace(/\{\\[^}]*\}/g, '');
 }
 
+// subtitleStatus renders the section's one status line. isError switches to the
+// .err treatment; pass html when the message carries markup (the 401 sign-in
+// link). An empty message hides the element so it leaves no gap.
+function subtitleStatus(msg, isError, html) {
+	const el = document.getElementById('subtitle-status');
+	if (!el) return;
+	if (!msg) { el.textContent = ''; el.hidden = true; el.classList.remove('err'); return; }
+	if (html) el.innerHTML = msg; else el.textContent = msg;
+	el.classList.toggle('err', !!isError);
+	el.hidden = false;
+}
+
+// refreshSubtitleStatus puts the line back to naming whatever is playing.
+// Success paths call this instead of blanking the line, so finishing a search or
+// a download does not wipe out which subtitle is actually enabled.
+function refreshSubtitleStatus() {
+	if (activeVtt) subtitleStatus(i18nFormat(I18N.subtitleEnabled, activeVttLabel), false);
+	else subtitleStatus('');
+}
+
+// markActiveSubtitle is the single place the active marker moves. It re-renders
+// BOTH lists, because the same subtitle can appear in either and a stale
+// highlight left behind in the other one is exactly the bug this replaces.
+function markActiveSubtitle(savedId, sourceKey) {
+	activeSavedId = savedId;
+	activeSourceKey = sourceKey || null;
+	renderSubList();
+	renderSearchResults();
+}
+
+// sourceKeyOf builds the marker key, returning null when either half is missing
+// so a blank fileId cannot produce a "provider:" key that matches other blanks.
+function sourceKeyOf(provider, fileId) {
+	return provider && fileId ? provider + ':' + fileId : null;
+}
+
 // setSubtitle records the active subtitle (so it survives a source switch) and
 // applies it to the current player.
 function setSubtitle(vttText, label) {
@@ -1182,7 +1239,7 @@ function setSubtitle(vttText, label) {
 	activeVtt = vttText;
 	activeVttLabel = label;
 	applyVtt(vttText, label);
-	document.getElementById('subtitle-status').textContent = i18nFormat(I18N.subtitleEnabled, label);
+	refreshSubtitleStatus();
 	document.getElementById('sub-off-btn').hidden = false;
 }
 
@@ -1207,15 +1264,15 @@ function applyVtt(vttText, label) {
 
 function clearSubtitle() {
 	if (subtitleURL) { URL.revokeObjectURL(subtitleURL); subtitleURL = null; }
-	activeVtt = null; activeVttLabel = ''; activeSavedId = null;
+	activeVtt = null; activeVttLabel = '';
 	if (player) {
 		const video = document.getElementById('player');
 		if (video) video.querySelectorAll('track').forEach(t => t.remove());
 		try { player.toggleCaptions(false); } catch(e) {}
 	}
-	document.getElementById('subtitle-status').textContent = '';
+	subtitleStatus('');
 	document.getElementById('sub-off-btn').hidden = true;
-	renderSubList();
+	markActiveSubtitle(null, null);
 }
 
 // --- Saved subtitles (list) -----------------------------------------------
@@ -1230,7 +1287,13 @@ function renderSubList() {
 		const meta = [];
 		if (typeof s.download_count === 'number') meta.push('⬇ ' + s.download_count.toLocaleString(LOCALE));
 		if (s.provider) meta.push(s.provider);
-		return `<div class="sub-row${s.id === activeSavedId ? ' active' : ''}" onclick="applySavedSubtitle(${s.id})">
+		// Match on the source key as well as the row id: applying a SEARCH result
+		// that happens to be saved already is the same subtitle, so this row is
+		// active too. Without it the saved list looks untouched while its own
+		// entry is playing.
+		const key = sourceKeyOf(s.provider, s.provider_file_id);
+		const active = s.id === activeSavedId || (key && key === activeSourceKey) ? ' active' : '';
+		return `<div class="sub-row${active}" onclick="applySavedSubtitle(${s.id})">
 			<span class="lang">${escHtml(s.language || '?')}</span>
 			<span class="sub-name" title="${escHtml(s.name || '')}">${escHtml(s.name || I18N.subtitleName)}</span>
 			${meta.length ? `<span class="sub-meta">${escHtml(meta.join(' · '))}</span>` : ''}
@@ -1245,11 +1308,12 @@ async function applySavedSubtitle(id) {
 		const res = await fetch(`/api/subtitles/${id}/file`);
 		if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
 		const vtt = await res.text();
-		activeSavedId = id;
+		// Mark it in the saved list AND, via the key, in the search results if the
+		// same subtitle is listed there.
+		markActiveSubtitle(id, sourceKeyOf(s.provider, s.provider_file_id));
 		setSubtitle(vtt, s.name || s.language || I18N.subtitleName);
-		renderSubList();
 	} catch(e) {
-		alert(i18nFormat(I18N.subtitleLoadError, e.message));
+		subtitleStatus(i18nFormat(I18N.subtitleLoadError, e.message), true);
 	}
 }
 
@@ -1290,19 +1354,12 @@ function initSubSearch() {
 	if (q) q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); searchSubtitles(); } });
 }
 
-function subSearchStatus(msg) {
-	const el = document.getElementById('sub-search-status');
-	if (el) el.textContent = msg || '';
-}
-
 // subSearchSignIn handles a 401 — the session expired while the panel was open.
 // D.loginUrl is deliberately empty for a signed-in visitor, so the return link
 // is rebuilt from the current location instead.
 function subSearchSignIn() {
-	const el = document.getElementById('sub-search-status');
-	if (!el) return;
 	const next = encodeURIComponent(location.pathname + location.search);
-	el.innerHTML = `<a href="/auth/google/start?next=${next}">${escHtml(I18N.searchSignIn)}</a>`;
+	subtitleStatus(`<a href="/auth/google/start?next=${next}">${escHtml(I18N.searchSignIn)}</a>`, true, true);
 }
 
 async function subSearchFetch(url, opts) {
@@ -1331,18 +1388,19 @@ async function searchSubtitles() {
 	if (season && season.value) params.set('season', season.value);
 	if (episode && episode.value) params.set('episode', episode.value);
 
-	subSearchStatus(I18N.searching);
+	subtitleStatus(I18N.searching, false);
 	try {
 		const res = await subSearchFetch('/api/subtitles/search?' + params.toString());
 		if (!res) return;
 		const body = await res.json();
 		SEARCH_RESULTS = Array.isArray(body.results) ? body.results : [];
 		renderSearchResults();
-		subSearchStatus('');
+		// Back to naming whatever is playing, rather than blanking the line.
+		refreshSubtitleStatus();
 	} catch(e) {
 		SEARCH_RESULTS = [];
 		renderSearchResults();
-		subSearchStatus(i18nFormat(I18N.searchError, e.message));
+		subtitleStatus(i18nFormat(I18N.searchError, e.message), true);
 	}
 }
 
@@ -1357,11 +1415,13 @@ function renderSearchResults() {
 		return;
 	}
 	box.innerHTML = SEARCH_RESULTS.map((r, i) => {
-		const saved = savedFileIDs.has(r.provider + ':' + r.fileId);
+		const key = r.provider + ':' + r.fileId;
+		const saved = savedFileIDs.has(key);
+		const active = activeSourceKey && key === activeSourceKey ? ' active' : '';
 		const meta = [];
 		if (typeof r.downloadCount === 'number') meta.push('\u2b07 ' + r.downloadCount.toLocaleString(LOCALE));
 		if (r.provider) meta.push(r.provider);
-		return `<div class="sub-row" onclick="previewSearchResult(${i})">
+		return `<div class="sub-row${active}" onclick="previewSearchResult(${i})">
 			<span class="lang">${escHtml(r.language || '?')}</span>
 			<span class="sub-name" title="${escHtml(r.release || '')}">${escHtml(r.release || I18N.subtitleName)}</span>
 			${meta.length ? `<span class="sub-meta">${escHtml(meta.join(' \u00b7 '))}</span>` : ''}
@@ -1377,18 +1437,17 @@ function renderSearchResults() {
 async function previewSearchResult(i) {
 	const r = SEARCH_RESULTS[i];
 	if (!r || !player) return;
-	subSearchStatus(I18N.subtitleDownloading);
+	subtitleStatus(I18N.subtitleDownloading, false);
 	try {
 		const params = new URLSearchParams({ provider: r.provider, file_id: r.fileId });
 		const res = await subSearchFetch('/api/subtitles/download?' + params.toString());
 		if (!res) return;
 		const vtt = await res.text();
-		activeSavedId = null;
+		// Not from the saved list, so no saved id — but the key marks this row.
+		markActiveSubtitle(null, sourceKeyOf(r.provider, r.fileId));
 		setSubtitle(vtt, r.release || r.language || I18N.subtitleName);
-		renderSubList();
-		subSearchStatus('');
 	} catch(e) {
-		subSearchStatus(i18nFormat(I18N.subtitleError, e.message));
+		subtitleStatus(i18nFormat(I18N.subtitleError, e.message), true);
 	}
 }
 
@@ -1428,11 +1487,15 @@ async function saveSearchResult(i, btn) {
 			renderSearchResults();
 			await applySavedSubtitle(saved.id);
 		}
-		subSearchStatus(res.status === 409 ? (body.error || I18N.subtitleSaved) : I18N.subtitleSaved);
+		// On a fresh save the button itself has flipped to "saved" and disabled, so the
+		// status line goes back to naming what is playing. A 409 is benign but worth
+		// saying out loud, since the button would otherwise look the same either way.
+		if (res.status === 409) subtitleStatus(body.error || I18N.subtitleSaved, false);
+		else refreshSubtitleStatus();
 	} catch(e) {
 		btn.disabled = false;
 		btn.textContent = original;
-		subSearchStatus(i18nFormat(I18N.subtitleSaveError, e.message));
+		subtitleStatus(i18nFormat(I18N.subtitleSaveError, e.message), true);
 	}
 }
 
