@@ -1216,7 +1216,8 @@ func (s *Store) SubtitlesForEpisode(ctx context.Context, episodeID int64) ([]Sub
 func (s *Store) loadSubtitlesForEpisodes(ctx context.Context, titleID int64) (map[int64][]Subtitle, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT sub.id, sub.title_id, sub.episode_id, sub.provider, sub.provider_file_id, sub.language,
-		       sub.name, sub.download_count, sub.format, sub.storage_backend, sub.storage_key, sub.metadata, sub.created_at
+		       sub.name, sub.download_count, sub.format, sub.storage_backend, sub.storage_key, sub.metadata, sub.created_at,
+		       sub.added_by_user_id
 		FROM subtitles sub
 		JOIN episodes e ON e.id = sub.episode_id
 		JOIN seasons se ON se.id = e.season_id
