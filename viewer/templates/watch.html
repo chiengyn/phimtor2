@@ -589,6 +589,58 @@ function videoLabel(v) {
 	return parts.join(' · ');
 }
 
+// Quality preference ---------------------------------------------------------
+//
+// Which playable source auto-starts. The server has already said what this
+// visitor MAY play (watchVideo.lock, from resolutionLock); everything below only
+// picks among those, so none of it is a gate — a tampered preference can still
+// only select a source the server marked playable, and the prepare endpoint
+// re-checks the lock server-side regardless.
+const QUALITY_KEY = 'phimnet.quality'; // same convention as phimnet.subStyle
+
+function savedQuality() {
+	try { return localStorage.getItem(QUALITY_KEY) || ''; } catch(e) { return ''; }
+}
+
+function saveQuality(res) {
+	try { localStorage.setItem(QUALITY_KEY, res || ''); } catch(e) {}
+}
+
+// Qualities we will auto-start, best first. 2160p is deliberately absent: 4K is
+// opt-in even for an entitled visitor — it is the heaviest source on the page and
+// the slowest to buffer — so it is reached only by an explicit chip click
+// (remembered below) or when it is the only thing this visitor can play at all.
+const AUTO_RESOLUTIONS = ['1080p', '720p'];
+
+// pickDefaultVideo chooses the source to auto-play, or null when this visitor may
+// play none of them (init then offers the sign-in / upgrade gate instead).
+function pickDefaultVideo() {
+	const playable = VIDEOS.filter(v => !v.lock);
+	if (!playable.length) return null;
+	// VIDEOS is newest-first (the store's ORDER BY), so every find below still means
+	// "newest of that quality" — recency just applies within a quality now.
+	const want = savedQuality();
+	if (want) {
+		const remembered = playable.find(v => v.resolution === want);
+		if (remembered) return remembered;
+	}
+	for (const res of AUTO_RESOLUTIONS) {
+		const v = playable.find(x => x.resolution === res);
+		if (v) return v;
+	}
+	return playable[0]; // a 4K-only title for an entitled visitor, or an unknown quality
+}
+
+// chooseSource is what a chip click runs: remember the quality, then play it.
+// ONLY an explicit pick writes the preference. If playSource saved instead,
+// auto-play would overwrite it, so opening a single title that has no 4K source
+// would silently demote a visitor who had chosen 4K.
+function chooseSource(videoID) {
+	const v = VIDEOS.find(x => x.id === videoID);
+	if (v) saveQuality(v.resolution);
+	playSource(videoID);
+}
+
 // renderSourceChips shows every source as a chip (even a single one) and
 // highlights the active one. A gated source is still listed — the point is that
 // the user sees the quality exists — but says why it is locked.
@@ -623,7 +675,7 @@ function renderSourceChips() {
 				<span class="chip-lock">🔒 ${escHtml(I18N.comingSoon)}</span>
 			</span>`;
 		}
-		return `<span class="chip${v.id === activeVideoID ? ' active' : ''}" onclick="playSource(${v.id})">
+		return `<span class="chip${v.id === activeVideoID ? ' active' : ''}" onclick="chooseSource(${v.id})">
 			${badge}
 		</span>`;
 	}).join('');
@@ -1617,10 +1669,11 @@ function resetSubStyle() {
 	renderSubList();
 	if (D.subSearch === '1') initSubSearch();
 	console.info('phimnet: call streamDebug() to show download progress and diagnostics.');
-	// Default = latest added source this visitor may actually play. The store
-	// orders newest first, so an anonymous visitor lands on the newest 720p and a
-	// signed-in one on the newest non-4K source.
-	const defaultVideo = VIDEOS.find(v => !v.lock);
+	// Default = the quality this visitor last picked, else 1080p, else 720p — so an
+	// anonymous visitor lands on 720p (the only thing they may play) and everyone
+	// signed in lands on 1080p. 4K never auto-starts: an entitled visitor reaches it
+	// by clicking its chip, or automatically only when it is the page's sole source.
+	const defaultVideo = pickDefaultVideo();
 	const memberVideo = VIDEOS.find(v => v.lock === 'member');
 	const upgradeVideo = VIDEOS.find(v => v.lock === 'upgrade');
 	if (defaultVideo) {

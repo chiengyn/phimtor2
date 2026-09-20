@@ -250,6 +250,7 @@ Flat single `main` package.
   | 720p | plays | plays | plays |
   | 1080p (`memberResolutions`) | 🔒 sign-in chip | plays | plays |
   | 2160p (`lockedResolutions`) | 🔒 sign-in chip | 🔒 "Nâng cấp" | plays |
+  | **auto-plays** | 720p | 1080p | 1080p |
 
   "Entitled" is any of three: a paid **time pass** (`users.plan_expires_at`), an
   **admin-granted comp** (`users.comp_expires_at`, set from the admin's `/users`
@@ -259,8 +260,10 @@ Flat single `main` package.
   sign-in chip rather than an upgrade chip to an anonymous visitor because
   entitlements hang off an account — signing in is step one of paying.
   `resolutionLock` returns `lockNone`/`lockMember`/`lockUpgrade`/`lockPaid` and
-  is the **single source of truth** for the chip copy, the default-source pick,
-  and the enforcement.
+  is the **single source of truth** for the chip copy, for which sources are
+  eligible to auto-play, and for the enforcement. Which *eligible* source
+  actually auto-starts is a separate, purely presentational choice made in the
+  page — see the auto-play bullet below.
   - **With billing unconfigured, 4K collapses back to "sắp ra mắt" for everyone
     who holds no entitlement** (`lockPaid`) — the pre-billing behaviour, and the
     billing rollback. An upgrade chip pointing at a localized `/plans` route that is not
@@ -290,6 +293,25 @@ Flat single `main` package.
     are per **title** but this endpoint is handed only a video id, and
     `videos.title_id` is NULL for an episode — hence `TitleIDForVideo`, which
     follows episode → season → title.
+  - **4K never auto-plays; it is opt-in even when entitled.** The page's
+    `pickDefaultVideo` (`templates/watch.html`) filters to the sources this
+    visitor may play and walks `AUTO_RESOLUTIONS = ['1080p', '720p']`, so
+    everyone signed in lands on 1080p and an anonymous visitor on 720p. 2160p is
+    deliberately off that ladder — it is the heaviest source on the page and the
+    slowest to buffer, and auto-starting it gave paying users the worst first
+    second of playback. It is reached only by clicking its chip, or automatically
+    when it is the *only* thing this visitor can play (a 4K-only title). This
+    replaced "newest playable source", which is why an entitled visitor used to
+    land on 4K: the store returns videos newest-first and nothing was locked for
+    them. Recency still breaks ties *within* a quality.
+  - **A manual pick sticks** in `localStorage` under `phimnet.quality` (same
+    convention as `phimnet.subStyle`), so choosing 4K carries to the next
+    episode. Only `chooseSource` — the chip click — writes it; `playSource` must
+    not, or auto-play would overwrite the preference and one title with no 4K
+    source would silently demote the visitor. The value is a **convenience, never
+    an entitlement**: it can only ever select a source `resolutionLock` already
+    marked playable, and a preference that no longer applies (a lapsed pass, a
+    sign-out) simply misses the filter and falls back down the ladder.
   - **What the paywall actually protects is discovery, not bytes.** The gate
     withholds `{infoHash, streamerPublicURL}`, but the streamer's stream endpoint
     is unauthenticated with `Access-Control-Allow-Origin: *`, so a URL obtained
