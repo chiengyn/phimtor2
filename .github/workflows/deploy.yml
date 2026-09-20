@@ -8,7 +8,9 @@ name: Deploy (manual)
 # Required repo SECRETS (Settings → Secrets and variables → Actions → Secrets):
 #   KAMAL_SSH_PRIVATE_KEY   private key whose public key is authorized on the
 #                           server for the Kamal SSH user (root by default)
-#   KAMAL_REGISTRY_PASSWORD GitHub PAT with read:packages (host pulls from ghcr)
+#   (KAMAL_REGISTRY_PASSWORD is NOT needed here — this workflow logs the host
+#    into ghcr with the run-scoped GITHUB_TOKEN. The secret remains only for
+#    local `kamal deploy` from a workstation.)
 #   ADMIN_PASSWORD, TMDB_API_KEY, OPENSUBTITLES_API_KEY, SUBSOURCE_API_KEY,
 #   DB_PASSWORD, MYSQL_ROOT_PASSWORD,
 #   MANAGER_REGISTER_TOKEN, MANAGER_INTERNAL_TOKEN
@@ -43,6 +45,7 @@ jobs:
     environment: production
     permissions:
       contents: read
+      packages: read          # GITHUB_TOKEN pulls the CI-built image from ghcr
     steps:
       - name: Checkout (the dispatched branch/tag = the commit to deploy)
         uses: actions/checkout@v4
@@ -84,7 +87,16 @@ jobs:
           BILLING_EVM_ADDRESS: ${{ vars.BILLING_EVM_ADDRESS }}
           BILLING_EVM_CHAINS: ${{ vars.BILLING_EVM_CHAINS }}
           # Secrets.
-          KAMAL_REGISTRY_PASSWORD: ${{ secrets.KAMAL_REGISTRY_PASSWORD }}
+          # The host's `docker login ghcr.io` credential. This is the built-in
+          # GITHUB_TOKEN, minted fresh for this run and expiring with it, NOT a
+          # PAT: a classic PAT here expires silently every 60-90 days and the
+          # only symptom is `Get "https://ghcr.io/v2/": denied: denied` at the
+          # first step of a deploy, with production left on the old version.
+          # Needs the packages:read permission granted on this job (above).
+          # The KAMAL_REGISTRY_PASSWORD secret is still required for a LOCAL
+          # `kamal deploy` from a workstation, which has no GITHUB_TOKEN — see
+          # .kamal/secrets and DEPLOY.md.
+          KAMAL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
