@@ -1,0 +1,193 @@
+{{/* Raw SQL console + database dump (sqlconsole.go).
+
+     Statements run in a READ ONLY transaction unless "Cho phép ghi" is ticked,
+     so MySQL itself refuses writes by default. With it ticked this page can
+     write columns the admin otherwise never touches (users.plan,
+     payment_invoices …, see ../CLAUDE.md) — hence the confirm() below.
+
+     No htmx, like users.html: the console is a plain form POST that re-renders
+     the page, and the dump is a plain GET download. */}}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phimtor2 — SQL</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0e1116; color: #e6edf3; line-height: 1.5;
+    }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 1280px; margin: 0 auto; padding: 1.5rem; display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 1.5rem; }
+    @media (max-width: 800px) { main { grid-template-columns: minmax(0, 1fr); } }
+    h2 { font-size: 1rem; margin: 0 0 .6rem; }
+    a { color: #79c0ff; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+    code, textarea, .grid td, .grid th { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    input, button, textarea {
+      font: inherit; padding: .55rem .7rem; border-radius: 8px;
+      border: 1px solid #303b48; background: #161b22; color: #e6edf3;
+    }
+    textarea { width: 100%; min-height: 9rem; font-size: .9rem; resize: vertical; }
+    button { background: #2563eb; border-color: #2563eb; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    button.danger { background: #b91c1c; border-color: #b91c1c; }
+    button.danger:hover { background: #991b1b; }
+    .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .6rem; }
+    label.check { display: inline-flex; gap: .35rem; align-items: center; font-size: .9rem; cursor: pointer; }
+    label.write-toggle { color: #ff8b94; }
+    section.card { border: 1px solid #222b36; border-radius: 10px; background: #11161d; padding: 1rem; margin-bottom: 1.25rem; }
+
+    .tables { list-style: none; margin: 0; padding: 0; font-size: .85rem; }
+    .tables li { display: flex; justify-content: space-between; gap: .5rem; padding: .2rem 0; }
+    .tables button {
+      background: none; border: 0; padding: 0; color: #79c0ff; cursor: pointer;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .tables button:hover { text-decoration: underline; background: none; }
+    .tables .num { color: #8b98a5; white-space: nowrap; }
+
+    .msg { padding: .6rem .8rem; border-radius: 8px; margin: .75rem 0; font-size: .9rem; white-space: pre-wrap; }
+    .msg.err { background: #2a141a; color: #ff8b94; border: 1px solid #5a2330; }
+    .msg.ok { background: #0f2e1a; color: #86efac; border: 1px solid #14532d; }
+
+    .grid-wrap { overflow: auto; max-height: 70vh; border: 1px solid #222b36; border-radius: 8px; margin-top: .6rem; }
+    .grid { border-collapse: collapse; font-size: .8rem; width: max-content; min-width: 100%; }
+    .grid th, .grid td { padding: .3rem .6rem; border-bottom: 1px solid #1c232c; text-align: left; vertical-align: top; max-width: 32rem; white-space: pre-wrap; word-break: break-word; }
+    .grid th { position: sticky; top: 0; background: #161b22; color: #c9d1d9; font-weight: 600; white-space: nowrap; }
+    .grid tr:hover td { background: #151b23; }
+    .grid .null { color: #6e7681; font-style: italic; }
+    .grid .blob { color: #d0b3ff; }
+    .grid .clipped { color: #f6d186; }
+
+    .dump-tables { columns: 3 200px; font-size: .85rem; margin: .5rem 0; }
+    .dump-tables label { display: flex; gap: .35rem; align-items: center; break-inside: avoid; }
+    .dump-tables code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🗄️ phimtor2 — SQL</h1>
+    <span><a href="/payments">Thanh toán</a> · <a href="/">Danh sách phim</a></span>
+  </header>
+  <main>
+    <aside>
+      <h2>Bảng{{ with .Database }} · <code>{{ . }}</code>{{ end }}</h2>
+      <p class="muted">Bấm tên bảng để xem 100 dòng đầu. Số dòng là ước tính.</p>
+      <ul class="tables">
+        {{- range .Tables }}
+        <li>
+          <button type="button" data-table="{{ .Name }}" title="{{ .Name }}">{{ .Name }}</button>
+          <span class="num" title="{{ filesize .Bytes }}">~{{ .Rows }}</span>
+        </li>
+        {{- end }}
+      </ul>
+    </aside>
+
+    <div>
+      {{ with .Error }}<div class="msg err">{{ . }}</div>{{ end }}
+
+      <section class="card">
+        <h2>Truy vấn</h2>
+        <form method="post" action="/sql" id="sql-form">
+          <textarea name="sql" id="sql" spellcheck="false" placeholder="SELECT * FROM titles ORDER BY id DESC LIMIT 20" autofocus>{{ .SQL }}</textarea>
+          <div class="row">
+            <button type="submit" id="run">Chạy (Ctrl+Enter)</button>
+            <label class="check write-toggle">
+              <input type="checkbox" name="write" value="1" id="write" {{ if .Write }}checked{{ end }}>
+              Cho phép ghi (UPDATE / DELETE / DDL)
+            </label>
+          </div>
+          <p class="muted">Mỗi lần chạy một câu lệnh. Mặc định chạy trong giao dịch <b>chỉ đọc</b> nên MySQL sẽ từ chối mọi thao tác ghi.
+            Hiển thị tối đa {{ .MaxRows }} dòng; hết giờ sau 60 giây. Mọi câu lệnh đều được ghi vào log máy chủ.</p>
+        </form>
+
+        {{ with .Result }}
+          {{ if .Err }}
+            <div class="msg err">{{ .Err }}</div>
+          {{ else if .IsExec }}
+            <div class="msg ok">OK · {{ .Affected }} dòng bị ảnh hưởng{{ if .LastID }} · last insert id {{ .LastID }}{{ end }}{{ if .Committed }} · đã commit{{ else }} · đã rollback (chỉ đọc){{ end }} · {{ .Elapsed }}</div>
+          {{ else }}
+            <p class="muted">{{ len .Rows }} dòng{{ if .Truncated }} (đã cắt — thêm LIMIT để xem phần còn lại){{ end }} · {{ .Elapsed }}{{ if .Committed }} · đã commit{{ end }}</p>
+            <div class="grid-wrap">
+              <table class="grid">
+                <thead><tr>{{ range .Columns }}<th>{{ . }}</th>{{ end }}</tr></thead>
+                <tbody>
+                  {{- range .Rows }}
+                  <tr>{{ range . }}<td{{ if .Null }} class="null"{{ else if .Blob }} class="blob"{{ else if .Clipped }} class="clipped" title="Đã cắt khi hiển thị"{{ end }}>{{ .Text }}</td>{{ end }}</tr>
+                  {{- end }}
+                </tbody>
+              </table>
+            </div>
+          {{ end }}
+        {{ end }}
+      </section>
+
+      <section class="card">
+        <h2>Sao lưu (dump .sql)</h2>
+        <p class="muted">Tải về file dạng mysqldump (DROP/CREATE TABLE + INSERT), lấy từ một snapshot nhất quán.
+          Khôi phục: <code>gunzip -c file.sql.gz | mysql -u … tên_db</code>. File khôi phục sẽ <b>xoá và tạo lại</b> các bảng có trong đó.</p>
+        <form method="get" action="/sql/dump" id="dump-form">
+          <div class="row">
+            <label class="check"><input type="checkbox" id="dump-all" checked> Tất cả bảng</label>
+            <label class="check"><input type="hidden" name="blobs" value="0"><input type="checkbox" name="blobs" value="1" checked> Kèm dữ liệu BLOB (file .torrent)</label>
+            <label class="check"><input type="hidden" name="gzip" value="0"><input type="checkbox" name="gzip" value="1" checked> Nén gzip</label>
+          </div>
+          <div class="dump-tables">
+            {{- range .Tables }}
+            <label><input type="checkbox" name="table" value="{{ .Name }}" checked> <code>{{ .Name }}</code> <span class="muted">{{ filesize .Bytes }}</span></label>
+            {{- end }}
+          </div>
+          <button type="submit">Tải bản sao lưu</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    (() => {
+      const form = document.getElementById('sql-form');
+      const sql = document.getElementById('sql');
+      const write = document.getElementById('write');
+      const run = document.getElementById('run');
+
+      const syncWrite = () => {
+        run.classList.toggle('danger', write.checked);
+        run.textContent = write.checked ? 'Chạy & ghi (Ctrl+Enter)' : 'Chạy (Ctrl+Enter)';
+      };
+      write.addEventListener('change', syncWrite);
+      syncWrite();
+
+      form.addEventListener('submit', (e) => {
+        if (write.checked && !confirm('Chạy câu lệnh này với quyền GHI vào cơ sở dữ liệu?')) e.preventDefault();
+      });
+      sql.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); form.requestSubmit(); }
+      });
+
+      document.querySelectorAll('.tables button[data-table]').forEach((b) => {
+        b.addEventListener('click', () => {
+          sql.value = 'SELECT * FROM `' + b.dataset.table.replaceAll('`', '``') + '` LIMIT 100';
+          write.checked = false; syncWrite();
+          form.requestSubmit();
+        });
+      });
+
+      // "All tables" toggles every per-table box; the per-table boxes keep it honest.
+      const all = document.getElementById('dump-all');
+      const boxes = [...document.querySelectorAll('.dump-tables input[name=table]')];
+      all.addEventListener('change', () => boxes.forEach((b) => { b.checked = all.checked; }));
+      boxes.forEach((b) => b.addEventListener('change', () => { all.checked = boxes.every((x) => x.checked); }));
+      // The server dumps every table when none is named, so never send none.
+      document.getElementById('dump-form').addEventListener('submit', (e) => {
+        if (!boxes.some((b) => b.checked)) { e.preventDefault(); alert('Chọn ít nhất một bảng.'); }
+      });
+    })();
+  </script>
+</body>
+</html>

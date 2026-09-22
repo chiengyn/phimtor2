@@ -59,22 +59,25 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		return "—"
 	},
 	// filesize renders a byte count as a human-readable size.
-	"filesize": func(n int64) string {
-		if n <= 0 {
-			return "—"
-		}
-		const unit = 1024
-		if n < unit {
-			return fmt.Sprintf("%d B", n)
-		}
-		div, exp := int64(unit), 0
-		for x := n / unit; x >= unit; x /= unit {
-			div *= unit
-			exp++
-		}
-		return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
-	},
+	"filesize": filesize,
 }).ParseFS(templatesFS, "templates/*.html"))
+
+// filesize renders a byte count as a human-readable size ("—" when unknown).
+func filesize(n int64) string {
+	if n <= 0 {
+		return "—"
+	}
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
 
 // defaultSubtitleProvider is preferred when a request does not name one (and for
 // the crawler's automatic subtitle fetch). subtitleProviderOrder is the order the
@@ -187,6 +190,9 @@ func (s *Server) setupRouter() {
 	r.Get("/users", s.handleUsersPage)
 	r.Post("/users/{id}/comp", s.handleSetUserComp)
 	r.Get("/payments", s.handlePaymentsPage)
+	r.Get("/sql", s.handleSQLPage)
+	r.Post("/sql", s.handleSQLQuery)
+	r.Get("/sql/dump", s.handleSQLDump)
 	r.Get("/titles/{id}", s.handleTitleDetail)
 	r.Get("/titles/{id}/torrents/new", s.handleAddTorrentPage)
 	r.Get("/videos/{id}/play", s.handlePlayVideo)

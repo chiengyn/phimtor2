@@ -194,6 +194,33 @@ Flat single `main` package. Layers, in request order:
       permanently holds those five bad rows, and an alarm that fired forever over
       a fixed fault would be ignored by the time it mattered. Superseded bad
       addresses stay visibly flagged in the table (`StaleAddresses`).
+  - `GET /sql` (`sql.html`, `sqlconsole.go`) — a **raw SQL console** plus a
+    **backup dump**, plain forms, no htmx.
+    - `POST /sql` runs one statement (the DSN has no `multiStatements`) inside a
+      transaction. The default is **`READ ONLY` + rollback**, so MySQL itself
+      refuses writes and DDL (error 1792). Keep that guard in the server: do not
+      swap it for a keyword filter. With **"Cho phép ghi"** ticked it runs a
+      normal transaction and commits. That mode sidesteps the admin/viewer
+      write split described above: it can write `users.plan` or
+      `payment_invoices`, which nothing else in this service may touch. Use it
+      knowingly. `returnsRows` looks at the first keyword only to choose between
+      Query and Exec; it is not a safety check. Results cap at `sqlMaxRows`
+      (1000), statements time out after 60s, and every statement is
+      `log.Printf`ed. The POST is refused unless `sameOriginPost` passes,
+      because basic auth is ambient: a cross-site form would otherwise carry
+      the credentials, and with writes on that means arbitrary SQL.
+    - `GET /sql/dump` streams a mysqldump-style file written in pure Go (the
+      image is distroless, so there is no `mysqldump`). It contains `DROP` +
+      `SHOW CREATE TABLE` + batched multi-row `INSERT`s, all taken from **one**
+      `READ ONLY` repeatable-read snapshot. Parameters: `table` (repeatable;
+      only names found in `information_schema` are used), `blobs`, `gzip`.
+      Flags default to on and any `1` value wins, because each checkbox is
+      paired with a hidden `0`. Binary columns are hex-encoded; JSON is
+      deliberately quoted text, since MySQL rejects binary strings for JSON.
+      Times are written as their wall clock, and the header pins the session
+      `time_zone`. Restore with `gunzip -c f.sql.gz | mysql <db>`. The restore
+      drops and recreates every table in the file, including
+      `schema_migrations`.
   - `GET /api/subtitles/search` (`?file=&query=&languages=&season=&episode=`) and
     `GET /api/subtitles/download` (`?file_id=`) — the live subtitle-provider proxy
     (`opensubtitles.go`, behind the `SubtitleProvider` interface so more providers
