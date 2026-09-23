@@ -1,0 +1,45 @@
+package online.phimnet.tv
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
+import androidx.tv.material3.SurfaceDefaults
+import online.phimnet.tv.ui.AppNav
+import online.phimnet.tv.ui.theme.PhimnetTheme
+
+class MainActivity : ComponentActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val graph = (application as PhimnetApp).graph
+        setContent {
+            PhimnetTheme {
+                CompositionLocalProvider(LocalGraph provides graph) {
+                    // A Surface at the root is what gives every Text its colour:
+                    // tv-material's Text inherits LocalContentColor, which is
+                    // otherwise unset — black text on a black screen.
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        colors = SurfaceDefaults.colors(
+                            containerColor = MaterialTheme.colorScheme.background,
+                            contentColor = MaterialTheme.colorScheme.onBackground,
+                        ),
+                    ) {
+                        val prefs by graph.settings.prefs.collectAsStateWithLifecycle()
+                        // Wait for the first settings read, so the very first
+                        // request already goes to the right server with the right token.
+                        if (prefs == null) Box(Modifier.fillMaxSize()) else AppNav()
+                    }
+                }
+            }
+        }
+    }
+}

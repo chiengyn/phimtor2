@@ -1,0 +1,1 @@
+[0:v]drawtext=fontfile=FONTFILE:text='%{pts\:hms}':fontsize=96:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=20:x=(w-tw)/2:y=h-th-80[v]
