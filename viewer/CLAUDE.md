@@ -28,7 +28,7 @@ It **owns no schema and never runs migrations** —
 tables already exist. It is **read-only for the catalog** (`titles`, `videos`,
 `featured_titles`, …) with exactly one exception, noted below.
 
-The viewer writes **three** things, and nothing else, ever:
+The viewer writes **four** things, and nothing else, ever:
 
 1. `users` (created/refreshed on login) and 2. `user_bookmarks` (the saved
 list) — both declared by `admin/migrations/0007_users.sql`, both tables the
@@ -38,6 +38,10 @@ from the watch page and save the result for everyone (*Contributed subtitles*
 below). Contributed rows carry `added_by_user_id`; admin-curated rows leave it
 `NULL`. So this table has two writers separated by **rows**, where `users` has
 two writers separated by **columns**.
+4. `tv_devices` (paired televisions), declared by
+`admin/migrations/0012_tv_devices.sql` — the same arrangement as `0007`: the
+admin declares it and never writes it, because pairing is an account action and
+accounts live entirely on this side. See *The TV client API* below.
 
 > That third one is a deliberate hole in an otherwise airtight invariant, so do
 > not "restore" it by accident. The reasoning is in
@@ -46,10 +50,11 @@ two writers separated by **columns**.
 > subtitle row, which stays an admin action.
 
 > Deploy ordering matters because of this: the admin must apply `0007` **before**
-> a viewer that writes those tables boots, and `0011` before one that contributes
-> subtitles. The `0007` failure is contained by design — `currentUser` and the
-> auth handlers treat a store error as "anonymous" and log it, so an un-migrated
-> database breaks sign-in only, not the site.
+> a viewer that writes those tables boots, `0011` before one that contributes
+> subtitles, and `0012` before one that pairs televisions. The `0007` failure is
+> contained by design — `currentUser` and the auth handlers treat a store error
+> as "anonymous" and log it, so an un-migrated database breaks sign-in only, not
+> the site.
 
 ## Commands
 
@@ -57,7 +62,24 @@ two writers separated by **columns**.
 go build -o viewer .   # build (static CGO_ENABLED=0 binary)
 go run .               # run (listens on :8082, needs the shared MySQL)
 go vet ./...
+go test ./...          # hermetic: no database, no network
+
+# The device-pairing + TV-API integration tests need a real MySQL with the
+# admin's migrations applied (docker compose up -d, then run the admin once).
+# They are SKIPPED unless the DSN is set, so the line above stays hermetic.
+PHIMTOR_TEST_DSN='phimtor:<pw>@tcp(127.0.0.1:3306)/phimtor?parseTime=true&charset=utf8mb4' \
+  go test -run Integration ./...
 ```
+
+Those integration tests exist because the things they check are owned by the
+**database**, not by Go: the UNIQUE/NULL interaction that recycles a settled
+`user_code`, the `status = 'pending'` guard that makes approval single-use, and
+`expires_at <= NOW()` being evaluated by MySQL rather than compared against a Go
+`time.Time`. `TestTVWatchLocksMatchResolutionLockIntegration` additionally pins
+the central claim of the TV API — that its watch endpoint reports exactly what
+`resolutionLock` computes — by asserting the two agree for the same access
+snapshot. They clean up after themselves apart from one throwaway `users` row,
+left deliberately (deleting it would cascade).
 
 Templates (`templates/`) and `static/` are loaded via **cwd-relative paths**
 (`server.go`), so run from `viewer/`. Targets Go 1.26. There is no Dockerfile yet.
@@ -539,6 +561,66 @@ Flat single `main` package.
   the returned public URL flows through the prepare response so the browser streams
   from the right instance. Keeping these on the server means only the streamers'
   stats + stream endpoints are browser-reachable; everything else is internal.
+
+- **The TV client API** (`tvapi.go`, `device.go`, `templates/link.html`). The
+  Android TV app is a second **client** of this service, never a second
+  implementation of it — the whole design follows from that.
+  - `/api/tv/v1/*`. **The only versioned path in the repo**, because it is the
+    only client that cannot be force-updated: an APK installed today will still
+    be calling these URLs in two years. Wire types are declared in `tvapi.go`
+    rather than reusing `models.go` structs, for the same reason — renaming a
+    field must not silently break a client nobody can push a fix to. The two
+    exceptions are `watchVideo` / `watchSubtitle`, reused as-is because they are
+    already a published contract.
+  - **The watch endpoints emit `s.toWatchVideos(videos, access)` verbatim**, so
+    `resolutionLock` stays the single source of truth across three clients
+    instead of two, and `handlePrepareSource` remains the only enforcement —
+    the TV's chips are advisory exactly as the web page's are. `watchSubtitle`
+    gained a `format` field for this: the browser hands the URL to a `<track>`
+    and lets the element work it out, but a native player must be told
+    `text/vtt` vs `application/x-subrip` before it opens the file.
+  - Locale rides in `X-Phimnet-Locale` (the existing JSON convention) or
+    `?locale=`. Row labels are **resolved server-side**, so a locale the app
+    ships no strings for still reads correctly.
+  - **Read routes are always registered; pairing routes need accounts.** With
+    `GOOGLE_CLIENT_ID=""` the app browses anonymously at 720p and offers no
+    sign-in, which is the documented rollback — pinned by
+    `TestTVRouteRegistration`.
+  - **Pairing is device-code (RFC 8628 shapes), not OAuth.** The TV shows a
+    short code, the user approves it at `/{locale}/link` on a phone that is
+    already signed in, and the TV trades its long `device_code` for a bearer
+    token. No Google token ever reaches the television — which is the point:
+    `decodeIDToken` skips signature verification (sound only because `exchange`
+    fetches the token server-side over TLS), so any flow letting a device
+    present us a Google token would turn that shortcut into a **complete auth
+    bypass**. See the comment on the function.
+  - **Two codes, two jobs.** `device_code` is long, secret and crypto-random —
+    the actual credential, seen only by the TV. `user_code` is 8 characters
+    read off a screen across a room, so its alphabet drops every ambiguous
+    glyph (`O/0`, `I/1/L`, `S/5`, `B/8`, `U/V`) and it is necessarily
+    low-entropy: the 15-minute expiry, single use, and the per-account rate
+    limit are what make that safe, not the code itself.
+  - `user_code` is `UNIQUE` but **NULLable, and NULLed the moment a pairing
+    settles**. MySQL treats NULLs as DISTINCT in a unique index — the same
+    property `0011` works around — so no two *open* pairings can collide while
+    a settled one stops burning a code out of a small alphabet forever. A
+    collision on insert is an ordinary outcome, retried via `isDuplicateKey`,
+    exactly as the billing amount reservation does.
+  - **The bearer token is the session cookie's construction with a different
+    payload version** (`v1tv:<userID>:<deviceID>:<exp>` vs `v1:<userID>:<exp>`),
+    and each reader accepts only its own. That separation is the *only* thing
+    stopping a stolen cookie being replayed as a TV token, so
+    `TestDeviceTokenAndSessionCookieAreNotInterchangeable` asserts it in both
+    directions. `currentUser` tries the cookie, then the bearer.
+  - **Why `tv_devices` exists at all**, when a session is famously a signed
+    cookie with no storage behind it: rotating `SESSION_SECRET` is a stateless
+    token's only revocation lever, and that is the right trade for a browser
+    somebody controls and the wrong one for a television in a shared room. The
+    row makes "sign out this TV" one `UPDATE`, at the cost of one indexed lookup
+    per TV request (`DeviceActive`, on TV traffic only). Token TTL is 180 days
+    because a TV is paired once — the row, not the expiry, is the lever.
+  - Abandoned pending pairings are swept every 10 minutes by
+    `reapDevicePairings`, started from `main.go` and a no-op without accounts.
 
 - **Subtitle blob store** (`blobstore.go`): a full port of admin's store
   (`Put`/`Get`/`Delete`, `local` + `s3`); `handleSubtitleFile` routes a subtitle

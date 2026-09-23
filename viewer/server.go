@@ -79,6 +79,14 @@ type Server struct {
 
 	plans   localizedTemplate
 	invoice localizedTemplate
+
+	// link is the page where someone types the code their television is
+	// showing, and deviceApprovals bounds how fast one account may guess at
+	// those codes. Both are always present: pairing routes are registered only
+	// when accounts are configured (see setupRouter), but the template parses
+	// unconditionally so a misconfiguration cannot produce a nil deref.
+	link            localizedTemplate
+	deviceApprovals *rateLimiter
 }
 
 type localizedTemplate map[Locale]*template.Template
@@ -131,6 +139,9 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		log.Printf("Subtitle search disabled (needs accounts plus OPENSUBTITLES_API_KEY or SUBSOURCE_API_KEY)")
 	}
 	s.watcher = newWatchTracker(time.Duration(cfg.WatchHeartbeatTTL)*time.Second, s.manager.deleteTorrent)
+	// Bounds guessing at a television's short pairing code. Keyed by account
+	// (rateKey), because approving requires being signed in.
+	s.deviceApprovals = newRateLimiter(deviceApprovalsPerHour, time.Hour)
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
 	}
@@ -338,6 +349,7 @@ func (s *Server) parseTemplates() error {
 	s.home, s.detail, s.watch = localizedTemplate{}, localizedTemplate{}, localizedTemplate{}
 	s.bookmarks, s.notFound = localizedTemplate{}, localizedTemplate{}
 	s.plans, s.invoice = localizedTemplate{}, localizedTemplate{}
+	s.link = localizedTemplate{}
 	for _, locale := range supportedLocales {
 		var err error
 		if s.home[locale], err = parse(locale, "layout.html", "home.html", "rows.html", "grid.html"); err != nil {
@@ -360,6 +372,9 @@ func (s *Server) parseTemplates() error {
 		}
 		if s.invoice[locale], err = parse(locale, "layout.html", "invoice.html"); err != nil {
 			return fmt.Errorf("parse %s invoice templates: %w", locale, err)
+		}
+		if s.link[locale], err = parse(locale, "layout.html", "link.html"); err != nil {
+			return fmt.Errorf("parse %s link templates: %w", locale, err)
 		}
 	}
 	return nil
@@ -399,6 +414,12 @@ func (s *Server) setupRouter() {
 		if s.billing.enabled() {
 			r.Get("/plans", s.handlePlansPage)
 			r.Get("/payment/{ref}", s.handleInvoicePage)
+		}
+		// Where someone types the code their television is showing. Registered
+		// only with accounts, like /auth/google/*: approving a pairing binds it
+		// to a user, so without sign-in the page could only ever fail.
+		if s.google.enabled() {
+			r.Get("/link", s.handleLinkPage)
 		}
 	})
 	for _, pattern := range []string{"/titles/{id}", "/bookmarks", "/watch/movie/{id}", "/watch/episode/{id}"} {
@@ -456,6 +477,34 @@ func (s *Server) setupRouter() {
 
 	r.Post("/api/watch/heartbeat", s.handleWatchHeartbeat)
 	r.Post("/api/watch/leave", s.handleWatchLeave)
+
+	// The Android TV client. Read routes are always registered — browsing
+	// without an account is supported, and the app degrades to 720p exactly as
+	// an anonymous browser does. The PAIRING routes follow the same rule as
+	// /auth/google/*: without accounts there is nothing to pair to.
+	//
+	// The path is versioned because this is the one client that cannot be
+	// force-updated; see tvapi.go.
+	r.Route("/api/tv/v1", func(r chi.Router) {
+		r.Get("/home", s.handleTVHome)
+		r.Get("/titles", s.handleTVTitles)
+		r.Get("/titles/{id}", s.handleTVTitle)
+		r.Get("/genres", s.handleTVGenres)
+		r.Get("/watch/movie/{id}", s.handleTVWatchMovie)
+		r.Get("/watch/episode/{id}", s.handleTVWatchEpisode)
+		r.Get("/me", s.handleTVMe)
+
+		if s.google.enabled() {
+			r.Post("/device/code", s.handleDeviceCode)
+			r.Post("/device/token", s.handleDeviceToken)
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireUser)
+				r.Post("/device/approve", s.handleDeviceApprove)
+				r.Get("/devices", s.handleDeviceList)
+				r.Delete("/devices/{id}", s.handleDeviceRevoke)
+			})
+		}
+	})
 
 	// Billing APIs stay unprefixed; the page URL returned when creating an
 	// invoice is localized from the request payload.
@@ -1228,6 +1277,13 @@ type watchSubtitle struct {
 	Provider       string `json:"provider"`
 	ProviderFileID string `json:"provider_file_id"`
 	DownloadCount  int    `json:"download_count"`
+	// Format is "srt" or "vtt", mirroring what GET /api/subtitles/{id}/file will
+	// serve for this row (see subtitleContentType). The browser never needed it —
+	// it hands the response to a <track> and lets the element sort it out — but a
+	// native player must be told the MIME type before it opens the URL, so the
+	// TV client picks TEXT_VTT vs APPLICATION_SUBRIP from this. Additive, so the
+	// watch page is unaffected.
+	Format string `json:"format"`
 }
 
 func (s *Server) toWatchVideos(vs []Video, a titleAccess) []watchVideo {
@@ -1250,6 +1306,7 @@ func toWatchSubtitle(sub Subtitle) watchSubtitle {
 		Provider:       sub.Provider,
 		ProviderFileID: sub.ProviderFileID,
 		DownloadCount:  sub.DownloadCount,
+		Format:         sub.Format,
 	}
 }
 

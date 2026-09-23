@@ -228,3 +228,23 @@ func (u *User) Initial() string {
 	}
 	return "?"
 }
+
+// DevicePairing is one television's pairing record (tv_devices, declared by
+// admin/migrations/0012). It is the viewer's own table, like users and
+// user_bookmarks, and the only reason a TV bearer token can be revoked
+// individually where a session cookie cannot.
+//
+// UserCode is empty once the pairing is settled — it is NULLed on approval so
+// the short code returns to circulation. Expired is computed by the database
+// (expires_at <= NOW()) rather than compared in Go, so clock skew between the
+// app and MySQL cannot expire a code early.
+type DevicePairing struct {
+	ID         int64      `json:"id"`
+	UserID     int64      `json:"-"`
+	UserCode   string     `json:"-"`
+	DeviceName string     `json:"device_name"`
+	Status     string     `json:"status"`
+	Expired    bool       `json:"-"`
+	ApprovedAt *time.Time `json:"approved_at,omitempty"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+}
