@@ -68,6 +68,10 @@ func TestLocalizedTemplatesParse(t *testing.T) {
 		{"not-found", s.notFound, nil},
 		{"plans", s.plans, plansData{}},
 		{"invoice", s.invoice, invoiceData{}},
+		// Rendered SIGNED IN, because that branch carries the inline script and
+		// its translated JS string literals — the anonymous branch is only the
+		// sign-in prompt and would exercise almost none of the template.
+		{"link", s.link, linkData{SignedIn: true}},
 	}
 	for _, locale := range supportedLocales {
 		for _, page := range pages {

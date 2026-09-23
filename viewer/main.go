@@ -41,6 +41,9 @@ func main() {
 	// Reap watch sessions whose heartbeats stopped, dropping their torrents.
 	go server.watcher.run(ctx)
 
+	// Delete pairing codes nobody ever approved. A no-op without accounts.
+	go server.reapDevicePairings(ctx)
+
 	// Watch the configured chains for incoming payments and credit them. A no-op
 	// when no crypto rail is configured, or when the poll interval is 0.
 	go server.billing.run(ctx)

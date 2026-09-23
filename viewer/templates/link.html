@@ -1,0 +1,94 @@
+{{define "head_title"}}{{t "link.title"}} – phimnet{{end}}
+{{define "head_extra"}}
+<meta name="description" content="{{t "link.description"}}">
+{{/* Pairing is a per-account action reached from a code shown on a television:
+     there is no URL here a crawler could usefully index, and the page is
+     per-visitor either way. */}}
+<meta name="robots" content="noindex, nofollow">
+{{end}}
+{{define "content"}}
+<section class="billing wrap" id="link-page">
+	<h1>{{t "link.heading"}}</h1>
+
+	{{if not .SignedIn}}
+	{{/* Approving binds the television to an account, so sign-in is genuinely
+	     step one rather than an upsell — the same shape plans.html uses. The
+	     return path rides in the login URL, so the visitor lands back here. */}}
+	<p class="billing-note">{{t "link.sign_in_note"}}</p>
+	{{with .LoginURL}}<a class="login-link" href="{{.}}"><span>{{t "account.sign_in_google"}}</span></a>{{end}}
+	{{else}}
+	<p class="billing-note">{{t "link.intro"}}</p>
+
+	<form id="link-form" autocomplete="off">
+		{{/* inputmode/autocapitalize matter here: the code is typed on a phone
+		     while looking at a television, and the alphabet is upper-case only. */}}
+		<input id="link-code" name="user_code" type="text"
+		       inputmode="latin" autocapitalize="characters" spellcheck="false"
+		       maxlength="9" placeholder="XXXX-XXXX" aria-label="{{t "link.code_label"}}">
+		<button type="submit" id="link-submit">{{t "link.submit"}}</button>
+	</form>
+
+	<p class="billing-note" id="link-status" role="status" aria-live="polite" hidden></p>
+	{{end}}
+</section>
+
+{{if .SignedIn}}
+<script>
+(function () {
+	const form = document.getElementById('link-form');
+	const input = document.getElementById('link-code');
+	const button = document.getElementById('link-submit');
+	const status = document.getElementById('link-status');
+	if (!form) return;
+
+	const MSG = {
+		linked: {{t "link.linked" | js}},
+		failed: {{t "link.failed" | js}},
+	};
+
+	// Re-insert the display hyphen as they type, so what is on screen matches
+	// what is on the television. The server normalises anyway — this is purely
+	// so the two read the same.
+	input.addEventListener('input', () => {
+		const raw = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+		input.value = raw.length > 4 ? raw.slice(0, 4) + '-' + raw.slice(4, 8) : raw;
+	});
+
+	function show(text, ok) {
+		status.textContent = text;
+		status.hidden = false;
+		status.classList.toggle('ok', !!ok);
+	}
+
+	form.addEventListener('submit', async (e) => {
+		e.preventDefault();
+		button.disabled = true;
+		try {
+			const res = await fetch('/api/tv/v1/device/approve', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ user_code: input.value }),
+			});
+			if (res.ok) {
+				show(MSG.linked, true);
+				form.hidden = true;
+				return;
+			}
+			// The server localises its own rejections (bad code, rate limited),
+			// so prefer its message and fall back only if it sent none.
+			let msg = MSG.failed;
+			try {
+				const body = await res.json();
+				if (body && body.error) msg = body.error;
+			} catch (_) { /* non-JSON error: keep the generic message */ }
+			show(msg, false);
+		} catch (_) {
+			show(MSG.failed, false);
+		} finally {
+			button.disabled = false;
+		}
+	});
+})();
+</script>
+{{end}}
+{{end}}

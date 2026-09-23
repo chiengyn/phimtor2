@@ -1382,3 +1382,157 @@ func (s *Store) ClearBookmarks(ctx context.Context, userID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM user_bookmarks WHERE user_id = ?`, userID)
 	return err
 }
+
+// --- Paired televisions (tv_devices, created by admin/migrations/0012) --------
+//
+// The viewer is the sole writer of this table, as it is for users and
+// user_bookmarks. Every timestamp comparison below uses MySQL's own NOW()
+// rather than a Go time.Time, the same rule the billing queries follow: the app
+// and the database can disagree about clock or zone, and a pairing code must
+// not expire early because of skew.
+
+// CreateDevicePairing opens a pending pairing. The caller supplies both codes
+// because it owns their alphabets (see device.go); this only records them.
+//
+// A duplicate user_code is an ordinary outcome, not an error: the code space is
+// small on purpose, so the caller retries with a fresh one. isDuplicateKey is
+// the same helper the invoice amount reservation uses for the same reason.
+func (s *Store) CreateDevicePairing(ctx context.Context, deviceCode, userCode, deviceName string, ttl time.Duration) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO tv_devices (device_code, user_code, device_name, status, expires_at)
+		VALUES (?, ?, ?, 'pending', DATE_ADD(NOW(), INTERVAL ? SECOND))`,
+		deviceCode, userCode, deviceName, int64(ttl.Seconds()))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// DevicePairing loads a pairing by its long secret code — the lookup the TV's
+// token poll makes. It returns (nil, nil) on a miss so the caller can answer
+// "expired_token" without distinguishing a wrong code from a reaped one.
+func (s *Store) DevicePairing(ctx context.Context, deviceCode string) (*DevicePairing, error) {
+	var d DevicePairing
+	var userID sql.NullInt64
+	var userCode sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, user_code, user_id, status, expires_at <= NOW()
+		FROM tv_devices WHERE device_code = ?`, deviceCode).
+		Scan(&d.ID, &userCode, &userID, &d.Status, &d.Expired)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	d.UserCode = userCode.String
+	d.UserID = userID.Int64
+	return &d, nil
+}
+
+// ApproveDevicePairing binds a pending, unexpired pairing to an account. It
+// matches on user_code — the short code the person typed on their phone.
+//
+// user_code is set to NULL in the same statement that approves the row. That is
+// what lets the code be handed out again later: MySQL treats NULLs as DISTINCT
+// in the unique index, so a settled pairing stops occupying a code (see the
+// reasoning in 0012). It also makes this idempotent-ish under a double submit —
+// the second attempt matches no row rather than re-approving.
+//
+// The status = 'pending' AND expires_at > NOW() guard is the whole of the
+// concurrency story here, exactly as SettleInvoice's status guard is for
+// billing: a replayed submit collapses to zero rows affected.
+func (s *Store) ApproveDevicePairing(ctx context.Context, userCode string, userID int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tv_devices
+		SET user_id = ?, status = 'approved', approved_at = NOW(), user_code = NULL
+		WHERE user_code = ? AND status = 'pending' AND expires_at > NOW()`,
+		userID, userCode)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// DeviceActive reports whether this pairing still grants access to this user.
+// currentUser calls it on every request carrying a TV bearer token, which is
+// what makes "sign out this television" a real lever rather than a
+// SESSION_SECRET rotation that would sign everyone out everywhere.
+//
+// It deliberately re-checks user_id against the token's claim: a row that was
+// revoked and later re-paired to a different account must not honour the old
+// token.
+func (s *Store) DeviceActive(ctx context.Context, deviceID, userID int64) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT 1 FROM tv_devices
+		WHERE id = ? AND user_id = ? AND status = 'approved'`, deviceID, userID).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// TouchDevice records that a paired TV was seen. Best-effort telemetry for the
+// "your devices" list, never on the critical path of a request.
+func (s *Store) TouchDevice(ctx context.Context, deviceID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tv_devices SET last_seen_at = NOW() WHERE id = ?`, deviceID)
+	return err
+}
+
+// ListDevices returns a user's paired televisions, newest first, for the
+// account page that offers to sign one out.
+func (s *Store) ListDevices(ctx context.Context, userID int64) ([]DevicePairing, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, device_name, approved_at, last_seen_at
+		FROM tv_devices
+		WHERE user_id = ? AND status = 'approved'
+		ORDER BY approved_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DevicePairing
+	for rows.Next() {
+		var d DevicePairing
+		var approved, seen sql.NullTime
+		if err := rows.Scan(&d.ID, &d.DeviceName, &approved, &seen); err != nil {
+			return nil, err
+		}
+		d.UserID = userID
+		d.Status = "approved"
+		if approved.Valid {
+			t := approved.Time
+			d.ApprovedAt = &t
+		}
+		if seen.Valid {
+			t := seen.Time
+			d.LastSeenAt = &t
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// RevokeDevice unpairs one television. Scoped by user_id so a forged id can
+// only ever revoke the caller's own device.
+func (s *Store) RevokeDevice(ctx context.Context, deviceID, userID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tv_devices SET status = 'revoked', user_code = NULL WHERE id = ? AND user_id = ?`,
+		deviceID, userID)
+	return err
+}
+
+// ReapDevicePairings deletes pending pairings nobody ever approved. Called from
+// the same sweep that reaps watch sessions, so an abandoned code does not hold
+// its slot in the small user_code alphabet until the heat death of the table.
+func (s *Store) ReapDevicePairings(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM tv_devices WHERE status = 'pending' AND expires_at <= NOW()`)
+	return err
+}

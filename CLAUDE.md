@@ -38,8 +38,10 @@ is **API-only** (no UI) and **must** register with a manager — there is no
 standalone mode.
 
 When working inside a module, read **that module's `CLAUDE.md`** — file paths in
-each are relative to the module directory. The viewer has focused localization
-and routing tests; the other modules currently have no tests.
+each are relative to the module directory. The viewer has focused localization,
+routing, and TV-client tests, plus a database integration suite that is skipped
+unless `PHIMTOR_TEST_DSN` is set (see [`viewer/CLAUDE.md`](viewer/CLAUDE.md));
+the other modules currently have no tests.
 
 ## The shared MySQL catalog (admin ⇄ viewer)
 
@@ -59,7 +61,9 @@ and routing tests; the other modules currently have no tests.
   (created by `admin/migrations/0007_users.sql`), which back Google sign-in and
   the per-account watch-later list, plus the **billing** tables from
   `0008_billing.sql` (`payment_invoices`, `user_title_unlocks`,
-  `billing_chain_cursors`) behind the paid 4K tier. Of the **catalog** it is a
+  `billing_chain_cursors`) behind the paid 4K tier, plus `tv_devices` from
+  `0012_tv_devices.sql` (paired televisions — see the TV client API in
+  [`viewer/CLAUDE.md`](viewer/CLAUDE.md)). Of the **catalog** it is a
   reader, with exactly one exception — contributed `subtitles` rows, insert-only,
   and the `titles.has_vietsub` recompute that follows one (see below). It writes
   nothing else, ever.

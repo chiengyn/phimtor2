@@ -29,6 +29,12 @@ const (
 	sessionTTL = 30 * 24 * time.Hour
 	stateTTL   = 10 * time.Minute
 
+	// deviceTokenTTL is how long a paired TV stays signed in. It is far longer
+	// than sessionTTL because a television is paired once, by someone holding a
+	// phone in front of it, and re-pairing is a deliberately awkward flow. The
+	// tv_devices row — not the expiry — is the revocation lever here.
+	deviceTokenTTL = 180 * 24 * time.Hour
+
 	// minSecretLen is the shortest SESSION_SECRET we accept, matching the
 	// `openssl rand -hex 32` the docs prescribe.
 	minSecretLen = 32
@@ -156,6 +162,60 @@ func (s *sessionSigner) readSession(r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// mintDeviceToken issues the bearer token a paired TV holds. It is the same
+// construction as the session cookie — HMAC-SHA256 over SESSION_SECRET — carried
+// in a header instead of a Set-Cookie, so a TV request lands on the very same
+// currentUser → requireUser → resolutionLock path a browser request does.
+//
+// The payload version is deliberately DIFFERENT from the cookie's ("v1tv" vs
+// "v1"), and the two readers each accept only their own. That means a stolen
+// cookie value cannot be replayed as a TV token, a stolen TV token cannot be
+// pasted into a cookie jar, and the two can diverge in TTL (they already do)
+// without either reader having to guess which kind it is holding.
+//
+// The deviceID is what the cookie has no equivalent of: it names the tv_devices
+// row, so revoking one television is a row update rather than a SESSION_SECRET
+// rotation that would sign every user out everywhere.
+func (s *sessionSigner) mintDeviceToken(userID, deviceID int64) string {
+	payload := fmt.Sprintf("v1tv:%d:%d:%d", userID, deviceID, time.Now().Add(deviceTokenTTL).Unix())
+	return s.sign(payload)
+}
+
+// readBearer returns the user and device ids carried by a valid, unexpired
+// Authorization: Bearer token. As in readSession the MAC is verified BEFORE the
+// payload is parsed, so unauthenticated bytes are never interpreted.
+//
+// It reports ok only for a well-formed "v1tv" payload; a session-cookie payload
+// presented here is rejected outright.
+func (s *sessionSigner) readBearer(r *http.Request) (userID, deviceID int64, ok bool) {
+	raw := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(raw) <= len(prefix) || !strings.EqualFold(raw[:len(prefix)], prefix) {
+		return 0, 0, false
+	}
+	payload, ok := s.verify(strings.TrimSpace(raw[len(prefix):]))
+	if !ok {
+		return 0, 0, false
+	}
+	parts := strings.Split(payload, ":")
+	if len(parts) != 4 || parts[0] != "v1tv" {
+		return 0, 0, false
+	}
+	userID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || userID <= 0 {
+		return 0, 0, false
+	}
+	deviceID, err = strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || deviceID <= 0 {
+		return 0, 0, false
+	}
+	exp, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil || time.Now().Unix() >= exp {
+		return 0, 0, false
+	}
+	return userID, deviceID, true
 }
 
 // setState stores the OAuth CSRF nonce together with the path to return to after

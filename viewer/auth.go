@@ -24,12 +24,22 @@ func userFrom(ctx context.Context) *User {
 	return u
 }
 
-// currentUser decodes the signed session cookie and, when it is valid, loads the
+// currentUser resolves the caller's identity and, when there is one, loads the
 // user (and their saved-title set) onto the request context. It is applied
 // GLOBALLY so every page can render its own header state.
 //
+// Two credentials are accepted, in this order:
+//
+//  1. the signed session cookie — every browser request, and
+//  2. an Authorization: Bearer token — the Android TV client.
+//
+// They are the same HMAC construction over the same SESSION_SECRET, differing
+// only in payload version and in how they travel, so everything downstream
+// (requireUser, accessForTitle, resolutionLock) is identical for both and the
+// entitlement rules have exactly one implementation.
+//
 // Anonymous requests — the overwhelming majority, including all crawler traffic
-// — carry no cookie and return before touching the database, so the public site
+// — carry neither and return before touching the database, so the public site
 // pays nothing for this.
 //
 // A cookie that no longer resolves to a row (user deleted or blocked, or
@@ -43,8 +53,15 @@ func (s *Server) currentUser(next http.Handler) http.Handler {
 		}
 		id, ok := s.sess.readSession(r)
 		if !ok {
-			next.ServeHTTP(w, r)
-			return
+			// No cookie: this may still be the TV client. The bearer path costs
+			// one extra lookup (the pairing row) that the cookie path does not,
+			// which is the price of being able to revoke one television without
+			// rotating the secret for everybody.
+			id, ok = s.deviceUser(r)
+			if !ok {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 		user, err := s.store.UserByID(r.Context(), id)
 		if err != nil {
@@ -62,6 +79,34 @@ func (s *Server) currentUser(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userCtxKey, user)))
 	})
+}
+
+// deviceUser resolves an Authorization: Bearer token to a user id, verifying
+// that the television it was issued to is still paired.
+//
+// That second check is the entire reason tv_devices exists. A session cookie is
+// stateless by design (see session.go) and the only way to revoke one is to
+// rotate SESSION_SECRET, which signs every user out on every device. That trade
+// is fine for a browser somebody controls and wrong for a television in a shared
+// room, so a TV token names its pairing row and pays one indexed lookup per
+// request to make "sign out this TV" a real lever.
+//
+// A store error degrades to anonymous and is logged, exactly as the cookie path
+// does: a database blip must not hand out access, but it must not 500 either.
+func (s *Server) deviceUser(r *http.Request) (int64, bool) {
+	userID, deviceID, ok := s.sess.readBearer(r)
+	if !ok {
+		return 0, false
+	}
+	active, err := s.store.DeviceActive(r.Context(), deviceID, userID)
+	if err != nil {
+		log.Printf("deviceUser: device %d: %v", deviceID, err)
+		return 0, false
+	}
+	if !active {
+		return 0, false
+	}
+	return userID, true
 }
 
 // requireUser gates the write APIs. Read pages never use it — they degrade to
