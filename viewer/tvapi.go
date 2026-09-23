@@ -250,10 +250,10 @@ func (s *Server) handleTVTitles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"page":     page,
-		"pageSize": tvPageSize,
-		"total":    total,
-		"titles":   toTVCards(titles),
+		"page":      page,
+		"page_size": tvPageSize,
+		"total":     total,
+		"titles":    toTVCards(titles),
 	})
 }
 

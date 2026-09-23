@@ -24,7 +24,8 @@
 		     while looking at a television, and the alphabet is upper-case only. */}}
 		<input id="link-code" name="user_code" type="text"
 		       inputmode="latin" autocapitalize="characters" spellcheck="false"
-		       maxlength="9" placeholder="XXXX-XXXX" aria-label="{{t "link.code_label"}}">
+		       maxlength="9" placeholder="XXXX-XXXX" aria-label="{{t "link.code_label"}}"
+		       {{with .Code}}value="{{.}}"{{end}}>
 		<button type="submit" id="link-submit">{{t "link.submit"}}</button>
 	</form>
 
@@ -66,7 +67,13 @@
 		try {
 			const res = await fetch('/api/tv/v1/device/approve', {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				// Same convention as the watch page, so the server's refusals ("wrong
+				// or expired code", "too many attempts") come back in this page's
+				// language rather than the API default.
+				headers: {
+					'Content-Type': 'application/json',
+					'X-Phimnet-Locale': document.body.dataset.locale || 'vi',
+				},
 				body: JSON.stringify({ user_code: input.value }),
 			});
 			if (res.ok) {

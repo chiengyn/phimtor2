@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -236,6 +237,7 @@ func TestTVRouteRegistration(t *testing.T) {
 		"POST /api/tv/v1/device/code",
 		"POST /api/tv/v1/device/token",
 		"POST /api/tv/v1/device/approve",
+		"POST /api/tv/v1/device/logout",
 		"GET /api/tv/v1/devices",
 		"DELETE /api/tv/v1/devices/{id}",
 	}
@@ -270,4 +272,65 @@ func TestTVRouteRegistration(t *testing.T) {
 			t.Error("/{locale}/link should be registered with accounts, but is not")
 		}
 	})
+}
+
+// The QR code the television shows opens /link with ?code= already set. The page
+// must pre-fill the NORMALISED code — and anything that is not a well-formed code
+// must be dropped rather than echoed, since it arrives from a query string.
+func TestLinkPagePrefillsScannedCode(t *testing.T) {
+	s := &Server{google: newGoogleClient("client-id", "secret", "http://localhost/cb")}
+	if err := s.parseTemplates(); err != nil {
+		t.Fatal(err)
+	}
+
+	// codeInput returns just the <input id="link-code" ...> tag. The rest of the
+	// page has its own value= attributes (the signed-in header's logout form), so
+	// asserting on the whole body would be testing the layout, not this input.
+	codeInput := func(query string) string {
+		t.Helper()
+		// Signed in, so the form (and its input) actually renders.
+		r := httptest.NewRequest(http.MethodGet, "/vi/link"+query, nil)
+		r = r.WithContext(context.WithValue(r.Context(), userCtxKey, &User{ID: 1}))
+		w := httptest.NewRecorder()
+		s.handleLinkPage(w, r)
+		body := w.Body.String()
+		start := strings.Index(body, `id="link-code"`)
+		if start < 0 {
+			t.Fatalf("query %q: code input not rendered", query)
+		}
+		end := strings.Index(body[start:], ">")
+		return body[start : start+end]
+	}
+
+	if in := codeInput("?code=acde-fghj"); !strings.Contains(in, `value="ACDE-FGHJ"`) {
+		t.Fatalf("a scanned code was not pre-filled in normalised form: %s", in)
+	}
+	for _, junk := range []string{"?code=ACD", `?code="><script>`, "?code=OOOO-0000", ""} {
+		if in := codeInput(junk); strings.Contains(in, "value=") {
+			t.Fatalf("query %q pre-filled something it should have dropped: %s", junk, in)
+		}
+	}
+}
+
+// The pairing link is shown on a television and encoded in a QR code for a phone,
+// so it must be absolute — even on a deploy without VIEWER_PUBLIC_URL, where the
+// SEO helper s.abs deliberately returns a bare path. (Found on the emulator: the
+// TV displayed "/en/link", which no phone could open.)
+func TestPairingLinkIsAlwaysAbsolute(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "http://tv-host.example:8082/api/tv/v1/device/code", nil)
+
+	unset := &Server{}
+	if got, want := unset.absoluteFor(r, "/en/link"), "http://tv-host.example:8082/en/link"; got != want {
+		t.Fatalf("without a public URL: got %q, want %q", got, want)
+	}
+
+	r.Header.Set("X-Forwarded-Proto", "https")
+	if got, want := unset.absoluteFor(r, "/en/link"), "https://tv-host.example:8082/en/link"; got != want {
+		t.Fatalf("behind a TLS proxy: got %q, want %q", got, want)
+	}
+
+	configured := &Server{publicURL: "https://phimnet.online"}
+	if got, want := configured.absoluteFor(r, "/en/link"), "https://phimnet.online/en/link"; got != want {
+		t.Fatalf("with a public URL: got %q, want %q", got, want)
+	}
 }

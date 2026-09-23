@@ -22,6 +22,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -142,13 +143,40 @@ func (s *Server) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	verification := s.absoluteFor(r, localeURL(tvLocale(r), "/link"))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"device_code":      deviceCode,
 		"user_code":        formatUserCode(userCode),
-		"verification_uri": s.abs(localeURL(tvLocale(r), "/link")),
-		"expires_in":       int(devicePairingTTL.Seconds()),
-		"interval":         int(devicePollInterval.Seconds()),
+		"verification_uri": verification,
+		// verification_uri_complete is RFC 8628's "the code is already in the
+		// link" variant. The TV renders it as a QR code, so scanning it lands on
+		// /link with the box pre-filled — the person still has to press Connect,
+		// which is the confirmation step §3.3.1 asks for. Without it, a QR code
+		// saves nothing over reading the URL off the screen.
+		"verification_uri_complete": verification + "?code=" + url.QueryEscape(formatUserCode(userCode)),
+		"expires_in":                int(devicePairingTTL.Seconds()),
+		"interval":                  int(devicePollInterval.Seconds()),
 	})
+}
+
+// absoluteFor builds an ABSOLUTE URL for a path, even when VIEWER_PUBLIC_URL is
+// unset. s.abs deliberately falls back to a bare path there, which is right for
+// the SEO tags it serves and useless here: the pairing link is read off a
+// television and scanned as a QR code by a phone, and neither can do anything
+// with "/en/link".
+//
+// Without a configured origin it describes the host the television itself just
+// reached. Trusting Host and X-Forwarded-Proto is safe for this one purpose: the
+// URL only ever goes back to the same caller, which already knows the address.
+func (s *Server) absoluteFor(r *http.Request, path string) string {
+	if s.publicURL != "" {
+		return s.abs(path)
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + path
 }
 
 // handleDeviceToken is the TV's poll. It answers with RFC 8628's error strings
@@ -268,6 +296,30 @@ func (s *Server) handleDeviceRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleDeviceLogout is the television signing ITSELF out. It revokes the
+// pairing row the caller's own bearer token names, so the token stops working
+// immediately rather than living out its 180 days on a device someone has
+// "signed out" of.
+//
+// Without this, sign-out on the TV could only forget the token locally, and the
+// grant would stay live until somebody found the television in their account
+// page. Only a bearer request carries a device id, so a browser session calling
+// this gets a 400 rather than silently revoking nothing.
+func (s *Server) handleDeviceLogout(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	deviceID := deviceFrom(r.Context())
+	if deviceID == 0 {
+		writeJSONError(w, http.StatusBadRequest, "not a device session")
+		return
+	}
+	if err := s.store.RevokeDevice(r.Context(), deviceID, u.ID); err != nil {
+		log.Printf("device: logout %d: %v", deviceID, err)
+		writeJSONError(w, http.StatusInternalServerError, "could not sign out")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // linkData is the /link page's view model. It carries LoginURL itself rather
 // than reading it off the pageData envelope, for the reason spelled out on
 // watchData: layout.html invokes the body as {{block "content" .Data}}, so
@@ -275,13 +327,27 @@ func (s *Server) handleDeviceRevoke(w http.ResponseWriter, r *http.Request) {
 type linkData struct {
 	SignedIn bool
 	LoginURL string
+	// Code pre-fills the box when the visitor arrived by scanning the QR code
+	// the television shows (verification_uri_complete). It is normalised and
+	// re-formatted here, so whatever rides in the query string can only ever
+	// render as characters from the code alphabet.
+	Code string
 }
 
 // handleLinkPage is where someone types the code their television is showing.
+//
+// An anonymous visitor who scanned the QR code is sent through sign-in and back
+// here; the pre-filled code survives that round trip because loginURL returns
+// to the full request URI, query string included.
 func (s *Server) handleLinkPage(w http.ResponseWriter, r *http.Request) {
+	code := normalizeUserCode(r.URL.Query().Get("code"))
+	if len(code) != userCodeLen {
+		code = ""
+	}
 	s.render(w, r, s.link, linkData{
 		SignedIn: userFrom(r.Context()) != nil,
 		LoginURL: s.loginURL(r),
+		Code:     formatUserCode(code),
 	})
 }
 

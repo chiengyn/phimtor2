@@ -500,6 +500,7 @@ func (s *Server) setupRouter() {
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireUser)
 				r.Post("/device/approve", s.handleDeviceApprove)
+				r.Post("/device/logout", s.handleDeviceLogout)
 				r.Get("/devices", s.handleDeviceList)
 				r.Delete("/devices/{id}", s.handleDeviceRevoke)
 			})

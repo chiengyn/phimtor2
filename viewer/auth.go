@@ -15,13 +15,26 @@ import (
 // context keys.
 type ctxKey int
 
-const userCtxKey ctxKey = iota
+const (
+	userCtxKey ctxKey = iota
+	// deviceCtxKey carries the tv_devices id when — and only when — the request
+	// authenticated with a TV bearer token. A cookie request never has one, which
+	// is what lets handleDeviceLogout tell "this television" from "some browser".
+	deviceCtxKey
+)
 
 // userFrom returns the signed-in user for this request, or nil for an anonymous
 // visitor. Safe to call from any handler behind the currentUser middleware.
 func userFrom(ctx context.Context) *User {
 	u, _ := ctx.Value(userCtxKey).(*User)
 	return u
+}
+
+// deviceFrom returns the paired television this request came from, or 0 when it
+// was not a TV bearer request (a browser, or anonymous).
+func deviceFrom(ctx context.Context) int64 {
+	id, _ := ctx.Value(deviceCtxKey).(int64)
+	return id
 }
 
 // currentUser resolves the caller's identity and, when there is one, loads the
@@ -51,17 +64,20 @@ func (s *Server) currentUser(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		ctx := r.Context()
 		id, ok := s.sess.readSession(r)
 		if !ok {
 			// No cookie: this may still be the TV client. The bearer path costs
 			// one extra lookup (the pairing row) that the cookie path does not,
 			// which is the price of being able to revoke one television without
 			// rotating the secret for everybody.
-			id, ok = s.deviceUser(r)
+			var deviceID int64
+			id, deviceID, ok = s.deviceUser(r)
 			if !ok {
 				next.ServeHTTP(w, r)
 				return
 			}
+			ctx = context.WithValue(ctx, deviceCtxKey, deviceID)
 		}
 		user, err := s.store.UserByID(r.Context(), id)
 		if err != nil {
@@ -77,7 +93,7 @@ func (s *Server) currentUser(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userCtxKey, user)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, userCtxKey, user)))
 	})
 }
 
@@ -93,20 +109,20 @@ func (s *Server) currentUser(next http.Handler) http.Handler {
 //
 // A store error degrades to anonymous and is logged, exactly as the cookie path
 // does: a database blip must not hand out access, but it must not 500 either.
-func (s *Server) deviceUser(r *http.Request) (int64, bool) {
-	userID, deviceID, ok := s.sess.readBearer(r)
+func (s *Server) deviceUser(r *http.Request) (userID, deviceID int64, ok bool) {
+	userID, deviceID, ok = s.sess.readBearer(r)
 	if !ok {
-		return 0, false
+		return 0, 0, false
 	}
 	active, err := s.store.DeviceActive(r.Context(), deviceID, userID)
 	if err != nil {
 		log.Printf("deviceUser: device %d: %v", deviceID, err)
-		return 0, false
+		return 0, 0, false
 	}
 	if !active {
-		return 0, false
+		return 0, 0, false
 	}
-	return userID, true
+	return userID, deviceID, true
 }
 
 // requireUser gates the write APIs. Read pages never use it — they degrade to
