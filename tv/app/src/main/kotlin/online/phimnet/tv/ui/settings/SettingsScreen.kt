@@ -55,6 +55,8 @@ import online.phimnet.tv.ui.common.ChoiceChip
 import online.phimnet.tv.ui.common.SectionTitle
 import online.phimnet.tv.ui.common.Tab
 import online.phimnet.tv.ui.common.TopBar
+import online.phimnet.tv.ui.common.UpdatePanel
+import online.phimnet.tv.ui.common.dpadLeavesTextField
 import online.phimnet.tv.ui.common.focusWhenReady
 import online.phimnet.tv.ui.theme.Accent
 import online.phimnet.tv.ui.theme.Surface2
@@ -147,7 +149,14 @@ fun SettingsScreen(onTab: (Tab) -> Unit, onSignIn: () -> Unit) {
 
             ServerSection(current.serverUrl) { url -> scope.launch { graph.settings.setServerUrl(url) } }
 
-            Text(stringResource(R.string.settings_version, BuildConfig.VERSION_NAME), color = TextMuted)
+            // The app itself: which version this is, and updates. Sideloaded, so
+            // this is the only place (with the Home banner) that ever updates it.
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SectionTitle(stringResource(R.string.settings_app))
+                Text(stringResource(R.string.settings_version, BuildConfig.VERSION_NAME))
+                val update by graph.updater.state.collectAsStateWithLifecycle()
+                UpdatePanel(update, inSettings = true)
+            }
         }
     }
 }
@@ -190,7 +199,7 @@ private fun ServerSection(saved: String, onSave: (String) -> Unit) {
                     cursorBrush = SolidColor(Color.White),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { save() }),
-                    modifier = Modifier.onFocusChanged { focused = it.isFocused },
+                    modifier = Modifier.dpadLeavesTextField().onFocusChanged { focused = it.isFocused },
                 )
             }
             Button(onClick = { save() }) { Text(stringResource(R.string.action_save)) }

@@ -240,6 +240,16 @@ the hash, renames it into place, switches `latest.json` atomically, keeps the
 last five APKs, and finally downloads the APK back from the live site to check
 it matches byte for byte.
 
+**Installed TVs update themselves.** On launch the app reads `/api/tv/v1/app`
+and offers a newer `versionCode` on its Home screen (and in Settings). It
+downloads the APK only from the viewer it is configured for, checks the manifest's
+size and SHA-256, and hands it to Android, which asks the person to confirm and
+refuses anything not signed with the installed app's key. The first time,
+Android also asks them to allow phimnet to "install unknown apps" — the app opens
+that screen. The app then closes, and they reopen it from the home screen (it
+says so beforehand: Android will not restart an app it has just replaced).
+Nobody has to go back to Downloader after the first install.
+
 **Rolling back** is pointing `/srv/phimnet-tv/latest.json` at an older APK in
 that directory — but it only helps TVs that have not updated yet. Android
 refuses to install a lower `versionCode` over a higher one
