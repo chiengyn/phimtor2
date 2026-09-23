@@ -18,8 +18,12 @@ android {
         // this is as low as the dependencies allow — Navigation 2.10 is the floor.
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI stamps these from the release tag (tv-v1.2.3 → "1.2.3" / 1002003; see
+        // .github/workflows/android.yml). Android refuses an "update" whose
+        // versionCode is not higher than the installed one, so a published build
+        // must never reuse a code. Local builds get 1, below any release.
+        versionCode = System.getenv("PHIMNET_TV_VERSION_CODE")?.toInt() ?: 1
+        versionName = System.getenv("PHIMNET_TV_VERSION_NAME") ?: "0.0.0-dev"
 
         // The viewer this build talks to on first launch. phimtor2 is
         // self-hosted, so this is only a default: Settings can point the app at

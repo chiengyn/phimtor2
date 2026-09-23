@@ -100,6 +100,10 @@ service).
 - Watch-session reaping: `WATCH_HEARTBEAT_TTL` (30s) — how long a watch session
   may go silent before the viewer drops its torrent (via the manager) to free
   streamer resources. Keep it well above the watch page's 10s heartbeat interval.
+- Android TV app downloads (`tvapk.go`): `TV_APK_DIR` — the directory CI
+  publishes signed APKs and `latest.json` into (`/tv` in production, a read-only
+  mount of the host's `/srv/phimnet-tv`). **Empty ⇒ the routes are not
+  registered**, the usual rollback. See *Serving the TV app* below.
 - Google sign-in (`googleauth.go`): `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`
   (env-only secrets). **Both empty ⇒ accounts are off**: the `/auth/google/*`
   routes are not registered and the header shows no login button, so the site is
@@ -192,6 +196,9 @@ Flat single `main` package.
   - `POST /api/watch/heartbeat` and `POST /api/watch/leave` — watch-session
     liveness (see *Watch-session reaping* below); drop a torrent once its last
     viewer goes away.
+  - `GET|HEAD /tv`, `GET|HEAD /download/phimnet-tv.apk`, `GET /api/tv/v1/app` —
+    the sideloaded Android TV app and its update manifest, registered only with
+    `TV_APK_DIR` (see *Serving the TV app*).
   - `/static/*` — static assets (`style.css`, `bookmarks.js`).
   Unknown / bad ids render the `404.html` page (not a bare error).
 
@@ -642,6 +649,30 @@ Flat single `main` package.
     — fixed before any client shipped, since this is the one API that cannot be
     changed later. The two camelCase shapes a TV sees are the web page's own
     existing contracts: `prepare`'s answer and the heartbeat body.
+
+- **Serving the TV app** (`tvapk.go`). The app is sideloaded — people type
+  `<host>/tv` into Downloader — so the viewer serves it: `GET /tv` and
+  `GET /download/phimnet-tv.apk` (the same file; `/tv` is short enough to type
+  with a remote, and serves the APK directly rather than redirecting, so it
+  does not depend on a sideloader's redirect handling), both also answering
+  `HEAD` (chi does not, for a GET route, and download managers HEAD first for
+  the size); and `GET /api/tv/v1/app`, the update manifest.
+  - **The viewer never writes any of it.** `.github/workflows/android.yml` signs
+    the APK, scp's it in under a dot-name, checks its hash, renames it into place
+    and only then replaces `latest.json` by rename — so the manifest, the single
+    source of truth for "which APK is current", can never name a partial file.
+    Keeping the APK out of the image means a new app version needs no viewer
+    deploy and a viewer build needs no Android build.
+  - `latest.json` is re-read per request (tiny; and it makes a release or a
+    rollback take effect at the rename) and **validated, not trusted**: it names
+    a file on disk, so the name must match `phimnet-tv-*.apk` (no path
+    traversal), and the size must match the file, or the routes answer 503.
+  - `ServeContent` gives Range (a TV box on flaky Wi-Fi resumes rather than
+    restarting); the ETag is the APK's SHA-256 and `Cache-Control: no-cache`,
+    because the URL is stable while its content changes.
+  - Rolling back by pointing `latest.json` at an older APK only helps TVs that
+    have not updated: Android refuses a lower `versionCode`
+    (`INSTALL_FAILED_VERSION_DOWNGRADE`). Bad releases are fixed forward.
 
 - **Subtitle blob store** (`blobstore.go`): a full port of admin's store
   (`Put`/`Get`/`Delete`, `local` + `s3`); `handleSubtitleFile` routes a subtitle

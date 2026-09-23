@@ -45,6 +45,10 @@ env:
     DB_PORT: 3306
     DB_NAME: phimtor
     DB_USER: phimtor
+    # The Android TV app, published by CI (.github/workflows/android.yml) into
+    # the host directory mounted at /tv below, and served at /tv and
+    # /download/phimnet-tv.apk (viewer/tvapk.go). Unset → those routes are off.
+    TV_APK_DIR: /tv
     # Streamer manager (control plane), server-to-server over the kamal network.
     # The viewer adds torrents via the manager, which returns the owning streamer's
     # public URL per prepare for the browser to stream from directly — so there is
@@ -113,5 +117,13 @@ env:
 
 # Mount the SAME named volume admin writes subtitles to. The viewer reads it and
 # also writes user-contributed subtitles into it.
+#
+# /srv/phimnet-tv is where the Android TV workflow scp's each signed APK and its
+# latest.json. READ-ONLY here: the viewer only serves it, and CI (as root over
+# SSH) is its only writer. A plain host directory rather than a named volume so
+# CI can write it with scp, and so a new app version needs no viewer redeploy.
+# Docker creates it on first boot if CI has not run yet (the routes then 404
+# until the first release).
 volumes:
   - "phimtor2_subtitles:/data"
+  - "/srv/phimnet-tv:/tv:ro"
