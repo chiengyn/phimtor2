@@ -1,19 +1,42 @@
 name: Android TV app
 
-# Builds and tests tv/. It never deploys anything: the TV app is distributed as
-# an APK, not run on the server, so Kamal is not involved.
+# Builds, tests and PUBLISHES tv/ — the Android TV client.
 #
-#  - Every push / PR touching tv/: unit tests, lint, and a minified release
-#    build (R8 problems only show in minified builds).
-#  - A tag "tv-v*" (e.g. tv-v0.1.0) additionally SIGNS the release APK and keeps
-#    it as a workflow artifact. Deliberately not "v*", which is the Docker
-#    workflow's trigger for the Go services.
+#  - Every push / PR touching tv/: unit tests, lint and a minified release
+#    build (R8 problems only show in minified builds). Nothing is published.
 #
-# Signing needs these repo SECRETS (the release is left unsigned without them):
-#   PHIMNET_TV_KEYSTORE_B64       base64 of the .jks keystore
+#  - A tag "tv-v<major>.<minor>.<patch>" (e.g. tv-v0.2.0) additionally:
+#      1. builds a SIGNED release, versionName "0.2.0", versionCode 2000
+#         (major*1000000 + minor*1000 + patch, so each release is higher than
+#         the last — Android refuses an "update" that is not);
+#      2. copies it to the production host, into /srv/phimnet-tv/, and switches
+#         latest.json to it with one atomic rename;
+#      3. checks that the live viewer now serves exactly that file.
+#    The viewer mounts /srv/phimnet-tv read-only (config/deploy.viewer.yml) and
+#    serves it at /download/phimnet-tv.apk and /api/tv/v1/app (viewer/tvapk.go).
+#    A new app version needs NO viewer deploy.
+#
+#    Deliberately "tv-v*", never "v*": that is the Docker workflow's trigger for
+#    the Go services, and an app release must not rebuild them.
+#
+# Release a new version:
+#     git tag tv-v0.2.0 && git push origin tv-v0.2.0
+#
+# Roll back: point /srv/phimnet-tv/latest.json at an older APK (the last five
+# are kept). Rolling back a version CODE is not possible on devices that already
+# updated — Android will not downgrade — so a bad release is fixed forward.
+#
+# Required repo SECRETS:
+#   PHIMNET_TV_KEYSTORE_B64       base64 of the release keystore (.jks)
 #   PHIMNET_TV_KEYSTORE_PASSWORD
 #   PHIMNET_TV_KEY_ALIAS
 #   PHIMNET_TV_KEY_PASSWORD
+#   KAMAL_SSH_PRIVATE_KEY         the deploy key deploy.yml already uses
+# Required repo VARIABLES: SERVER_IP, VIEWER_HOST (already set for deploy.yml).
+#
+# THE KEYSTORE IS PERMANENT. Every future update must be signed with the same
+# key, or installed TVs refuse it and people must uninstall (losing their
+# pairing) to upgrade. Keep an offline backup; see tv/CLAUDE.md.
 
 on:
   push:
@@ -33,6 +56,10 @@ jobs:
     defaults:
       run:
         working-directory: tv
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      version_name: ${{ steps.version.outputs.name }}
+      version_code: ${{ steps.version.outputs.code }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,31 +77,173 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Work out the version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != tag || "$GITHUB_REF_NAME" != tv-v* ]]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ver="${GITHUB_REF_NAME#tv-v}"
+          if ! [[ "$ver" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not tv-v<major>.<minor>.<patch>"
+            exit 1
+          fi
+          major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
+          if (( minor > 999 || patch > 999 || major > 2000 )); then
+            echo "::error::minor and patch must be < 1000 and major <= 2000 (versionCode arithmetic)"
+            exit 1
+          fi
+          {
+            echo "release=true"
+            echo "name=$ver"
+            echo "code=$(( major * 1000000 + minor * 1000 + patch ))"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Unit tests, lint, release build
         run: ./gradlew --no-configuration-cache :app:testDebugUnitTest :app:lintDebug :app:assembleRelease
 
-      - name: Sign release (tags only)
-        if: startsWith(github.ref, 'refs/tags/tv-v')
+      # A release tag must produce an INSTALLABLE apk: Android will not install an
+      # unsigned one, so publishing without the key would ship a file that fails
+      # on every TV. Fail the run instead.
+      - name: Build the signed release
+        if: steps.version.outputs.release == 'true'
         env:
           KEYSTORE_B64: ${{ secrets.PHIMNET_TV_KEYSTORE_B64 }}
           PHIMNET_TV_KEYSTORE_PASSWORD: ${{ secrets.PHIMNET_TV_KEYSTORE_PASSWORD }}
           PHIMNET_TV_KEY_ALIAS: ${{ secrets.PHIMNET_TV_KEY_ALIAS }}
           PHIMNET_TV_KEY_PASSWORD: ${{ secrets.PHIMNET_TV_KEY_PASSWORD }}
+          PHIMNET_TV_VERSION_NAME: ${{ steps.version.outputs.name }}
+          PHIMNET_TV_VERSION_CODE: ${{ steps.version.outputs.code }}
         run: |
+          set -euo pipefail
           if [ -z "$KEYSTORE_B64" ]; then
-            echo "::warning::No signing secrets configured; the release APK stays unsigned."
-            exit 0
+            echo "::error::PHIMNET_TV_KEYSTORE_B64 is not set; refusing to publish an unsigned (uninstallable) APK."
+            exit 1
           fi
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          PHIMNET_TV_KEYSTORE="$RUNNER_TEMP/release.jks" ./gradlew --no-configuration-cache :app:assembleRelease
-          rm -f "$RUNNER_TEMP/release.jks"
+          keystore="$RUNNER_TEMP/release.jks"
+          trap 'rm -f "$keystore"' EXIT
+          echo "$KEYSTORE_B64" | base64 -d > "$keystore"
+          PHIMNET_TV_KEYSTORE="$keystore" ./gradlew --no-configuration-cache :app:assembleRelease
 
-      - name: Keep the APK and reports
+          apk=app/build/outputs/apk/release/app-release.apk
+          apksigner="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)/apksigner"
+          "$apksigner" verify --print-certs "$apk" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+
+          # Name, hash and manifest — what the host will serve.
+          file="phimnet-tv-$PHIMNET_TV_VERSION_NAME.apk"
+          mkdir -p "$RUNNER_TEMP/publish"
+          cp "$apk" "$RUNNER_TEMP/publish/$file"
+          cd "$RUNNER_TEMP/publish"
+          jq -n \
+            --argjson code "$PHIMNET_TV_VERSION_CODE" \
+            --arg name "$PHIMNET_TV_VERSION_NAME" \
+            --arg file "$file" \
+            --arg sha "$(sha256sum "$file" | cut -d' ' -f1)" \
+            --argjson size "$(stat -c %s "$file")" \
+            --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg commit "$GITHUB_SHA" \
+            '{version_code: $code, version_name: $name, file: $file, sha256: $sha,
+              size: $size, published_at: $at, commit: $commit}' > latest.json
+          cat latest.json
+
+      - name: Keep the release for the publish job
+        if: steps.version.outputs.release == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tv-release
+          path: ${{ runner.temp }}/publish/
+          if-no-files-found: error
+
+      - name: Keep the reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: phimnet-tv-${{ github.sha }}
-          path: |
-            tv/app/build/outputs/apk/release/*.apk
-            tv/app/build/reports/
+          name: tv-reports-${{ github.sha }}
+          path: tv/app/build/reports/
           if-no-files-found: ignore
+
+  publish:
+    needs: build
+    if: needs.build.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    # The same approval gate as the service deploys (deploy.yml).
+    environment: production
+    concurrency:
+      group: tv-publish
+      cancel-in-progress: false
+    env:
+      HOST: root@${{ vars.SERVER_IP }}
+      DIR: /srv/phimnet-tv
+    steps:
+      - name: Fetch the signed release
+        uses: actions/download-artifact@v8
+        with:
+          name: tv-release
+          path: release
+
+      - name: Load SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.KAMAL_SSH_PRIVATE_KEY }}
+
+      - name: Seed known_hosts
+        # Unhashed (no -H), matching deploy.yml.
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan "${{ vars.SERVER_IP }}" >> ~/.ssh/known_hosts
+
+      # Order is the whole safety story. The APK goes up under a dot-name the
+      # viewer can never serve (it only serves what latest.json names, and the
+      # name pattern excludes dot-files), is checked against its hash, and is only
+      # then renamed into place; latest.json is replaced last, by rename, which is
+      # atomic. At no instant does the manifest point at a partial file.
+      - name: Upload and switch
+        working-directory: release
+        run: |
+          set -euo pipefail
+          file=$(jq -r .file latest.json)
+          sha=$(jq -r .sha256 latest.json)
+          # $DIR is this workflow's own constant, so expanding it client-side is intended.
+          # shellcheck disable=SC2029
+          ssh "$HOST" "mkdir -p '$DIR' && chmod 755 '$DIR'"
+          scp "$file" "$HOST:$DIR/.incoming-$file"
+          scp latest.json "$HOST:$DIR/.latest.json.incoming"
+          ssh "$HOST" bash -s -- "$DIR" "$file" "$sha" <<'REMOTE'
+          set -euo pipefail
+          dir=$1 file=$2 sha=$3
+          cd "$dir"
+          echo "$sha  .incoming-$file" | sha256sum -c -
+          chmod 644 ".incoming-$file" .latest.json.incoming
+          mv -f ".incoming-$file" "$file"
+          mv -f .latest.json.incoming latest.json
+          # Keep the five newest APKs for rollback; never the one just published.
+          # A loop, not "| grep -v | xargs rm": with fewer than six APKs there is
+          # nothing to prune, grep then exits 1, and pipefail would fail the job
+          # AFTER latest.json had already switched (caught in rehearsal).
+          ls -1t phimnet-tv-*.apk | tail -n +6 | while read -r old; do
+            [ "$old" = "$file" ] || rm -f -- "$old"
+          done
+          ls -la
+          REMOTE
+
+      # Proves the viewer end, not just the copy: the live manifest reports this
+      # version, and the live download is byte-for-byte this APK. If the viewer
+      # has not been deployed with TV_APK_DIR yet, this is where that shows.
+      - name: Check the viewer serves it
+        working-directory: release
+        run: |
+          set -euo pipefail
+          base="https://${{ vars.VIEWER_HOST }}"
+          want=$(jq -r .version_code latest.json)
+          got=$(curl -fsS "$base/api/tv/v1/app" | jq -r .version_code) || {
+            echo "::error::$base/api/tv/v1/app did not answer. Deploy the viewer with TV_APK_DIR (config/deploy.viewer.yml) once; the APK itself is already in place."
+            exit 1
+          }
+          if [ "$got" != "$want" ]; then
+            echo "::error::The viewer reports version_code $got, expected $want."
+            exit 1
+          fi
+          curl -fsS -o served.apk "$base/download/phimnet-tv.apk"
+          echo "$(jq -r .sha256 latest.json)  served.apk" | sha256sum -c -
+          echo "Published $(jq -r .version_name latest.json) ($want): $base/download/phimnet-tv.apk" >> "$GITHUB_STEP_SUMMARY"

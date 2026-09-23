@@ -60,6 +60,10 @@ type Server struct {
 	// exposed to templates via the discordURL helper. Empty → link is hidden.
 	discordURL string
 
+	// tvApkDir is where the published Android TV app lives; "" turns the
+	// download routes off (see tvapk.go).
+	tvApkDir string
+
 	// google and sess implement accounts. google is nil-safe and reports
 	// enabled() == false when GOOGLE_CLIENT_ID is unset, in which case the
 	// /auth routes are never registered and the header shows no login button —
@@ -114,6 +118,7 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		blobPrimary: blobPrimary,
 		publicURL:   strings.TrimRight(cfg.PublicURL, "/"),
 		discordURL:  cfg.DiscordURL,
+		tvApkDir:    cfg.TVApkDir,
 		sess:        sess,
 	}
 	if cfg.accountsEnabled() {
@@ -485,7 +490,26 @@ func (s *Server) setupRouter() {
 	//
 	// The path is versioned because this is the one client that cannot be
 	// force-updated; see tvapi.go.
+	// The Android TV app itself, published by CI (tvapk.go). It is sideloaded —
+	// never on a store — so the viewer serves it: a stable download URL, and a
+	// manifest the installed app can check for updates.
+	//
+	// "/tv" is the same file under a URL short enough to type into Downloader
+	// (or any sideloader) with a TV remote. It serves the APK directly rather
+	// than redirecting, so it does not depend on how a given sideloader handles
+	// redirects. HEAD is registered explicitly: chi does not answer HEAD for a
+	// GET route, and download managers commonly HEAD first for the size.
+	if s.tvApkDir != "" {
+		for _, path := range []string{"/tv", "/download/phimnet-tv.apk"} {
+			r.Get(path, s.handleTVApk)
+			r.Head(path, s.handleTVApk)
+		}
+	}
+
 	r.Route("/api/tv/v1", func(r chi.Router) {
+		if s.tvApkDir != "" {
+			r.Get("/app", s.handleTVAppRelease)
+		}
 		r.Get("/home", s.handleTVHome)
 		r.Get("/titles", s.handleTVTitles)
 		r.Get("/titles/{id}", s.handleTVTitle)

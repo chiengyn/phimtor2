@@ -19,7 +19,9 @@ The web page copes with a remux-in-JavaScript ladder and an unseekable ffmpeg
 fallback; **ExoPlayer demuxes Matroska, AVI and MPEG-TS natively**, so the TV
 plays the torrent's own bytes with real range seeking and hardware decode.
 
-It is not deployed — it is distributed as an APK — so Kamal is not involved.
+It is **sideloaded, never published to a store**: people install it with
+Downloader (or any sideloader) from `<viewer-host>/tv`, which the viewer serves.
+See *Releasing* below; Kamal is not involved.
 
 ## Commands
 
@@ -36,7 +38,8 @@ python3 tools/sync_strings.py        # regenerate res/values*/strings.xml
 ```
 
 CI is `.github/workflows/android.yml`: tests + lint + a minified release on every
-change under `tv/`; a `tv-v*` tag also signs it (never `v*`, the Docker trigger).
+change under `tv/`; a `tv-v*` tag also signs and **publishes** it (see
+*Releasing*). Never `v*`, which is the Docker trigger for the Go services.
 
 ### Build types
 
@@ -179,6 +182,36 @@ Server-authored text (row labels, lock messages, episode captions) arrives
 already translated via `X-Phimnet-Locale`. Settings' language picker changes the
 **content** language; the app chrome follows the system (and Android 13+'s
 per-app language, via `localeConfig`).
+
+## Releasing (sideloaded)
+
+`git tag tv-v1.2.3 && git push origin tv-v1.2.3`. The workflow stamps
+`versionName` 1.2.3 and `versionCode` 1002003 (`major*1000000 + minor*1000 +
+patch`; `app/build.gradle.kts` reads `PHIMNET_TV_VERSION_*`, and local builds get
+1), signs with the release key from repo secrets, verifies the signature, copies
+the APK to the host's `/srv/phimnet-tv`, switches `latest.json` atomically, and
+then downloads it back from the live viewer to check the bytes. One-time setup
+(the key, the secrets, one viewer deploy) is in `../DEPLOY.md` §7.
+
+Why each piece is the way it is — all verified on the emulator:
+- **The signing key is permanent.** A TV refuses an update signed by a
+  different key; the only way out is uninstalling, which also unpairs it. A
+  release tag without the key FAILS rather than publishing an unsigned APK,
+  because Android will not install one at all.
+- **`versionCode` only goes up.** An update over an installed release works in
+  place (0.1.0 → 0.1.1: `Success`); going back is refused
+  (`INSTALL_FAILED_VERSION_DOWNGRADE`). So pointing `latest.json` at an older
+  APK only helps TVs that have not updated yet — bad releases are fixed forward.
+- The prune step keeps the five newest APKs. It is a `while read` loop, not
+  `grep -v | xargs rm`: with fewer than six APKs, grep exits 1 and `pipefail`
+  failed the job *after* `latest.json` had already switched (caught in rehearsal).
+- The APK served at `/tv` was fetched over HTTP and installed on the Android TV
+  16 emulator: it installs, appears in the TV launcher, and upgrades.
+
+Sideloaded apps never update themselves; nothing does it for them. The viewer's
+`/api/tv/v1/app` manifest (version, SHA-256, absolute download URL) exists for an
+in-app update check — **not built yet** (it needs `REQUEST_INSTALL_PACKAGES` and a
+`FileProvider`). Until it is, people update by re-running Downloader on `/tv`.
 
 ## Testing
 

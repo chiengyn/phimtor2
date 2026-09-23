@@ -195,6 +195,57 @@ Actions):
 Note: `.kamal/secrets` is committed (it holds only `${VAR}` references); the CD
 job fills those from the GitHub secrets above, exactly like `.env` does locally.
 
+## 7. The Android TV app (sideloaded APK)
+
+The TV app is not on any store. People install it with a sideloader such as
+**Downloader** by typing **`<VIEWER_HOST>/tv`**, and the viewer serves the APK
+there (and at `/download/phimnet-tv.apk`, plus a version manifest at
+`/api/tv/v1/app`). `.github/workflows/android.yml` builds, signs and publishes
+it; there is nothing to `kamal deploy` for a new app version.
+
+**One-time setup:**
+
+1. **Create the release signing key — once, ever.** Every future update must be
+   signed with this same key: a TV refuses an update signed by any other, and
+   the only way round that is uninstalling (which also unpairs the TV). Back the
+   file and passwords up somewhere offline; losing them means every installed TV
+   has to reinstall from scratch.
+   ```bash
+   keytool -genkeypair -v -keystore phimnet-tv-release.jks -alias phimnet-tv \
+     -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=phimnet TV"
+   ```
+   (`keytool` makes a PKCS12 store, whose key password is the store password.)
+2. Add the repo **Secrets** (or with `gh`, as below):
+   ```bash
+   base64 -w0 phimnet-tv-release.jks | gh secret set PHIMNET_TV_KEYSTORE_B64
+   gh secret set PHIMNET_TV_KEYSTORE_PASSWORD      # prompts
+   gh secret set PHIMNET_TV_KEY_PASSWORD           # same value, for PKCS12
+   gh secret set PHIMNET_TV_KEY_ALIAS --body phimnet-tv
+   ```
+   `KAMAL_SSH_PRIVATE_KEY`, `SERVER_IP` and `VIEWER_HOST` are reused from §6.
+3. **Deploy the viewer once** with the updated `config/deploy.viewer.yml`, which
+   mounts `/srv/phimnet-tv` read-only and sets `TV_APK_DIR`. Until then the
+   publish job copies the APK but its final check fails — by design, so a
+   release can't look published while nobody can download it.
+
+**Releasing:** tag and push.
+```bash
+git tag tv-v0.1.0 && git push origin tv-v0.1.0
+```
+`tv-v<major>.<minor>.<patch>` sets the app's `versionName` and a `versionCode`
+of `major*1000000 + minor*1000 + patch`, which is how installed TVs recognise
+an update. It never overlaps the services' `v*` tags. The job waits on the
+`production` environment's approval, uploads under a temporary name, verifies
+the hash, renames it into place, switches `latest.json` atomically, keeps the
+last five APKs, and finally downloads the APK back from the live site to check
+it matches byte for byte.
+
+**Rolling back** is pointing `/srv/phimnet-tv/latest.json` at an older APK in
+that directory — but it only helps TVs that have not updated yet. Android
+refuses to install a lower `versionCode` over a higher one
+(`INSTALL_FAILED_VERSION_DOWNGRADE`, confirmed on an emulator), so a bad
+release already installed is fixed by releasing a newer one.
+
 ## Notes & gotchas
 
 - **Database hostname.** Apps reach MariaDB at `phimtor2-admin-mysql` over Kamal's
