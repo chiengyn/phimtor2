@@ -3,6 +3,10 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The app is sideloaded, so it updates itself (update/Updater.kt). Android
+         still asks the person to allow it once, per app, in the TV's settings,
+         and still refuses any update not signed with this app's own key. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- A television app, and it asks for no touchscreen because a remote has
          none. It is sideloaded, not published: the package installer does NOT
@@ -40,5 +44,10 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The PackageInstaller session's outcome; only the system sends it. -->
+        <receiver
+            android:name=".update.InstallStatusReceiver"
+            android:exported="false" />
     </application>
 </manifest>

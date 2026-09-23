@@ -14,6 +14,8 @@ import online.phimnet.tv.api.baseUrlOf
 import online.phimnet.tv.settings.Prefs
 import online.phimnet.tv.settings.Settings
 import online.phimnet.tv.settings.SiteLocale
+import online.phimnet.tv.update.ApkDownloader
+import online.phimnet.tv.update.Updater
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -50,6 +52,16 @@ class AppGraph(app: Application) {
     val api = PhimnetApi(http, ::session, userAgent)
 
     val streamer = StreamerClient(streamHttp, userAgent)
+
+    /** Keeps the sideloaded app up to date from the viewer (update/Updater.kt). */
+    val updater = Updater(
+        context = app,
+        api = api,
+        downloader = ApkDownloader(http, userAgent),
+        scope = appScope,
+        installedVersionCode = BuildConfig.VERSION_CODE.toLong(),
+        server = { session().baseUrl },
+    )
 
     private fun session(): ApiSession {
         val prefs = settings.prefs.value

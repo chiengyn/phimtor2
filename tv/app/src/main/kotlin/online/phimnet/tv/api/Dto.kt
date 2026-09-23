@@ -221,3 +221,17 @@ internal data class DeviceCodeBody(@SerialName("device_name") val deviceName: St
 
 @Serializable
 internal data class DeviceTokenBody(@SerialName("device_code") val deviceCode: String)
+
+/**
+ * GET /api/tv/v1/app — the release the viewer currently serves (viewer/tvapk.go),
+ * which the installed app compares with its own versionCode. The app is
+ * sideloaded, so this is the only way it ever learns an update exists.
+ */
+@Serializable
+data class AppRelease(
+    @SerialName("version_code") val versionCode: Long,
+    @SerialName("version_name") val versionName: String,
+    val sha256: String,
+    val size: Long,
+    @SerialName("download_url") val downloadUrl: String,
+)

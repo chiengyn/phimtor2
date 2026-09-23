@@ -56,6 +56,7 @@ import online.phimnet.tv.ui.common.PosterCard
 import online.phimnet.tv.ui.common.PosterWidth
 import online.phimnet.tv.ui.common.Tab
 import online.phimnet.tv.ui.common.TopBar
+import online.phimnet.tv.ui.common.dpadLeavesTextField
 import online.phimnet.tv.ui.common.errorText
 import online.phimnet.tv.ui.common.rememberLoad
 import online.phimnet.tv.ui.common.rememberSessionKey
@@ -144,7 +145,7 @@ private fun SearchField(value: String, onChange: (String) -> Unit, onSubmit: () 
             cursorBrush = SolidColor(Color.White),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
-            modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
+            modifier = Modifier.fillMaxWidth().dpadLeavesTextField().onFocusChanged { focused = it.isFocused },
             decorationBox = { inner ->
                 if (value.isEmpty()) Text(stringResource(R.string.search_hint), color = TextMuted)
                 inner()

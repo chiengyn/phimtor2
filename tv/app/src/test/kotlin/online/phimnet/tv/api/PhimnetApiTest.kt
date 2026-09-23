@@ -122,4 +122,22 @@ class PhimnetApiTest {
     fun upgradeLinksResolveAgainstTheConfiguredViewer() {
         assertEquals(server.url("/vi/plans?title=9").toString(), api.absolute("/vi/plans?title=9"))
     }
+
+    // A viewer that publishes no TV app — or has not yet — answers 404, which is
+    // "no update", never an error to show someone.
+    @Test
+    fun noPublishedReleaseIsNull() = runTest {
+        respond(404, """{"error":"no release published"}""")
+        assertNull(api.appRelease())
+    }
+
+    @Test
+    fun decodesThePublishedRelease() = runTest {
+        respond(200, """{"version_code":1001,"version_name":"0.1.1","sha256":"${"a".repeat(64)}",
+            "size":2812856,"published_at":"2026-09-23T15:22:07Z","download_url":"https://v/download/phimnet-tv.apk"}""")
+        val release = api.appRelease()!!
+        assertEquals(1001L, release.versionCode)
+        assertEquals("https://v/download/phimnet-tv.apk", release.downloadUrl)
+        assertEquals("/api/tv/v1/app", server.takeRequest().url.encodedPath)
+    }
 }

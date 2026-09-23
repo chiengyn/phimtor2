@@ -74,6 +74,17 @@ class PhimnetApi(
     suspend fun me(): Me = get("api/tv/v1/me")
 
     /**
+     * The release the viewer serves, or null when it serves none — nothing
+     * published yet, or a viewer without TV_APK_DIR (both answer 404). A null is
+     * "no update", never an error worth showing.
+     */
+    suspend fun appRelease(): AppRelease? = try {
+        get<AppRelease>("api/tv/v1/app")
+    } catch (e: ApiException) {
+        if (e.status == 404) null else throw e
+    }
+
+    /**
      * Asks the viewer to put this source's torrent on a streamer. This is the
      * same endpoint the web watch page calls, and the only one that ENFORCES the
      * quality tiers: 401 means "sign in", 402 "upgrade", 403 "nobody can yet",

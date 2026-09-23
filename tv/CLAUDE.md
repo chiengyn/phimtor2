@@ -79,6 +79,9 @@ matching the repo's preference for small explicit clients).
   `WatchSession`, `RecoveryPolicy`, `SubtitleMime`; plus `PlayerViewModel`, which
   wires them to ExoPlayer.
 - `settings/` — DataStore prefs, `ServerUrl` validation, `SiteLocale`.
+- `update/` — the in-app updater (see *In-app updates*): `UpdatePolicy` and
+  `ApkDownloader` are JVM-tested; `Updater` and `InstallStatusReceiver` drive
+  Android's `PackageInstaller`.
 - `ui/` — one package per screen (home, browse, detail, player, link, settings)
   and `ui/common/` (cards, top bar, QR, `Load`, focus helper, `ChoiceChip`).
 
@@ -144,7 +147,12 @@ matching the repo's preference for small explicit clients).
   - tab screens pass `focusCurrent = true` to `TopBar`, so left/right keeps
     walking the tabs (Home instead focuses its hero);
   - when a focused control is swapped for another, move focus to the new one
-    (see the account button in `SettingsScreen`).
+    (see the account button in `SettingsScreen`, and `UpdatePanel`, whose
+    buttons change with every step once someone has pressed one — and Home,
+    which puts focus back on the hero when "Later" removes the banner);
+  - single-line text fields take `dpadLeavesTextField()`: `BasicTextField`
+    swallows ↑/↓ as cursor moves, so with the keyboard closed the remote could
+    not get out of the server field to the controls below it.
 - Player: with controls **hidden**, the D-pad drives playback (centre =
   play/pause, ←/→ = 10 s, the web page's `SEEK_STEP`; ↑/↓ = show controls); with
   controls **shown** it moves focus, and Back hides them. Media keys always work.
@@ -208,16 +216,50 @@ Why each piece is the way it is — all verified on the emulator:
 - The APK served at `/tv` was fetched over HTTP and installed on the Android TV
   16 emulator: it installs, appears in the TV launcher, and upgrades.
 
-Sideloaded apps never update themselves; nothing does it for them. The viewer's
-`/api/tv/v1/app` manifest (version, SHA-256, absolute download URL) exists for an
-in-app update check — **not built yet** (it needs `REQUEST_INSTALL_PACKAGES` and a
-`FileProvider`). Until it is, people update by re-running Downloader on `/tv`.
+### In-app updates (`update/`)
+
+A sideloaded app has no store to update it, so it updates itself from the
+viewer's `/api/tv/v1/app` manifest (version, SHA-256, size, absolute download URL):
+
+1. **Check** once per launch, after settings load (before that, requests go to
+   the default server), silently — a TV briefly offline hears nothing. Settings
+   has a manual check that reports every outcome. `UpdatePolicy` offers a release
+   only if its `versionCode` is **strictly higher** (Android refuses anything
+   else), the download URL is on the **same origin** as the configured server,
+   and the size and SHA-256 are usable.
+2. **Offer** on Home as a banner pinned under the top bar — never a list item
+   (focusing the hero scrolled it off-screen) and never the initial focus. The
+   banner arrives after Home has laid out and shrinks the list, so Home resets
+   the scroll once the pivot scroll settles, or the hero's title ends up under
+   the banner. "Later" lasts until the next launch.
+3. **Permission.** Android 8+ asks per app to "install unknown apps"
+   (`REQUEST_INSTALL_PACKAGES` in the manifest does not grant it).
+   `ACTION_MANAGE_UNKNOWN_APP_SOURCES` opens the TV's screen for it (exists on
+   Android TV as `ExternalSourcesActivity`); returning to the app with it granted
+   carries on by itself (`onAppResumed`). If a TV has no such screen, the panel
+   points at reinstalling from `/tv` instead.
+4. **Download** (`ApkDownloader`) into `cacheDir/updates` via a `.part` file,
+   hashing as it goes; aborts the moment the body exceeds the promised size;
+   renames into place only when size and SHA-256 both match. Old APKs are cleared
+   on every launch.
+5. **Install** through a `PackageInstaller` session (no `FileProvider` needed:
+   the session takes a copy). `STATUS_PENDING_USER_ACTION` → start the system's
+   confirm screen; `STATUS_FAILURE_ABORTED` (Cancel) → back to the offer, no
+   error. Android itself refuses an update signed with another key — the
+   guarantee the rest sits behind.
+6. **Android kills the app to replace it and does not restart it**, and on
+   Android 10+ the new version cannot restart itself either: both a
+   `MY_PACKAGE_REPLACED` receiver and an activity `PendingIntent` as the session
+   status were tried and blocked as background activity launches. So the
+   "Installing" message says up front that the app will close and to reopen it
+   from the home screen.
 
 ## Testing
 
-- **Unit tests** (`app/src/test`, 53): stream URLs, quality ladder, readiness,
+- **Unit tests** (`app/src/test`, 64): stream URLs, quality ladder, readiness,
   heartbeat timing, recovery classification, pairing flow (virtual time), server
-  URL and locale parsing, and the API client against MockWebServer.
+  URL and locale parsing, the update policy and the verifying APK download, and
+  the API client against MockWebServer.
 - **End to end on an emulator**, against a real viewer and database, with the
   harness in `e2e/` standing in for the manager and streamer:
   - `e2e/fake/` — a fake manager (`:18083`) + streamer (`:18090`) honouring the
@@ -255,11 +297,22 @@ open-ended ranges at the right clusters** — the shape the streamer's
 Home, re-prepare and resume on return; embedded audio/subtitle tracks; the saved
 Vietnamese `.srt`; sign-out revoking the pairing; and the R8 (`minified`) build.
 
+The in-app update, on the `minified` build against a local viewer serving a
+published `latest.json`: banner on Home with the hero intact; Update → the
+permission step → the TV's own settings screen → denied (stays on the step) and
+granted (carries on by itself) → download → the system's confirm screen → Cancel
+(back to the offer, focus on Update) → Update → **0.1.0 → 0.1.x installed**, from
+Home and from Settings; "Later" (focus back on the hero); and an up-to-date app
+showing no banner.
+
 ### Not verified / not built
 
 - A **real torrent swarm** and real streamer — the fake honours the contract, but
   timing, peers and `PrioritizeSeek` under load are untested from the TV.
 - **Real hardware**: HEVC / 10-bit / Dolby audio decode, 4K output, remote quirks.
+- The updater on **Android 7** (no per-app install permission) and on a TV with
+  **no "install unknown apps" screen** (the panel's fallback to `/tv`); only the
+  Android 16 emulator was used.
   Only the plain Android TV image, not Google TV's.
 - No instrumented (on-device) UI tests; the emulator runs were driven by hand.
 - Bookmarks ("xem sau") UI and server-side resume sync.

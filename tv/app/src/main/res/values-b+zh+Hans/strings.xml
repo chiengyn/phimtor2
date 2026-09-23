@@ -54,6 +54,7 @@
     <string name="search_all_genres">所有类型</string>
     <string name="search_empty">未找到影片。</string>
     <string name="search_hint">搜索电影和电视剧…</string>
+    <string name="settings_app">应用</string>
     <string name="settings_language">内容语言</string>
     <string name="settings_language_auto">跟随电视</string>
     <string name="settings_server">服务器</string>
@@ -64,4 +65,19 @@
     <string name="settings_signed_in_as">已登录：%1$s</string>
     <string name="settings_version">版本 %1$s</string>
     <string name="state_loading">正在加载信息…</string>
+    <string name="update_available">有可用更新：%1$s</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_check_failed">无法检查更新。</string>
+    <string name="update_checking">正在检查…</string>
+    <string name="update_continue">继续</string>
+    <string name="update_corrupt">下载的文件已损坏，请重试。</string>
+    <string name="update_downloading">正在下载更新… %1$d%%</string>
+    <string name="update_install_failed">无法安装更新。</string>
+    <string name="update_installing">正在安装更新… phimnet 将会关闭，请从主屏幕重新打开。</string>
+    <string name="update_later">稍后</string>
+    <string name="update_no_settings">无法打开设置。你也可以用 Downloader 从 %1$s 更新</string>
+    <string name="update_now">更新</string>
+    <string name="update_open_settings">打开设置</string>
+    <string name="update_permission">请在电视设置中允许 phimnet 安装应用，然后返回继续。</string>
+    <string name="update_up_to_date">已是最新版本。</string>
 </resources>

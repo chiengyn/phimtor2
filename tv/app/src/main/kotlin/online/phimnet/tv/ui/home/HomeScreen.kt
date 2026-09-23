@@ -25,6 +25,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -36,13 +38,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.OutlinedButton
 import androidx.tv.material3.Text
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import online.phimnet.tv.LocalGraph
 import online.phimnet.tv.R
 import online.phimnet.tv.api.Home
@@ -54,6 +59,8 @@ import online.phimnet.tv.ui.common.MetaLine
 import online.phimnet.tv.ui.common.PosterCard
 import online.phimnet.tv.ui.common.Tab
 import online.phimnet.tv.ui.common.TopBar
+import online.phimnet.tv.ui.common.UpdatePanel
+import online.phimnet.tv.ui.common.isActionable
 import online.phimnet.tv.ui.common.errorText
 import online.phimnet.tv.ui.common.focusWhenReady
 import online.phimnet.tv.ui.common.rememberLoad
@@ -70,18 +77,49 @@ fun HomeScreen(
     val graph = LocalGraph.current
     val home = rememberLoad(rememberSessionKey()) { graph.api.home() }
 
+    val update by graph.updater.state.collectAsStateWithLifecycle()
+    val updateDismissed by graph.updater.dismissed.collectAsStateWithLifecycle()
+    // "Later" removes the banner together with its focused button; the hero takes
+    // focus back — but only when it was dismissed on this visit, so coming back
+    // to Home from a title still returns to the card that was opened.
+    val dismissedOnEntry = remember { updateDismissed }
+
     Column(Modifier.fillMaxSize()) {
         TopBar(current = Tab.Home, onSelect = onTab)
+        // A sideloaded app has no store to update it. The offer is pinned under
+        // the top bar, NOT an item in the list below: as a list item, focusing the
+        // hero's Play on launch scrolled it straight off the top, so nobody saw it
+        // (found on the emulator). It never takes the initial focus — someone who
+        // opened the app to watch should not land on an update button — and is one
+        // press of ↑ away.
+        if (!updateDismissed && update.isActionable()) {
+            UpdatePanel(update, inSettings = false, modifier = Modifier.padding(bottom = 12.dp))
+        }
         when (val state = home.state) {
             Load.Loading -> LoadingBox()
             is Load.Failed -> ErrorBox(errorText(state.error), home.retry)
-            is Load.Ready -> HomeContent(state.value, onOpenTitle, onPlayMovie)
+            is Load.Ready -> HomeContent(
+                state.value,
+                onOpenTitle,
+                onPlayMovie,
+                compactHero = !updateDismissed && update.isActionable(),
+                focusHero = updateDismissed && !dismissedOnEntry,
+            )
         }
     }
 }
 
 @Composable
-private fun HomeContent(home: Home, onOpenTitle: (Long) -> Unit, onPlayMovie: (Long) -> Unit) {
+private fun HomeContent(
+    home: Home,
+    onOpenTitle: (Long) -> Unit,
+    onPlayMovie: (Long) -> Unit,
+    // With the update banner pinned above it the list is shorter; a compact hero
+    // keeps the first row peeking at the bottom, which is what tells someone the
+    // page continues.
+    compactHero: Boolean = false,
+    focusHero: Boolean = false,
+) {
     if (home.rows.isEmpty() && home.hero.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(stringResource(R.string.home_empty), color = TextMuted)
@@ -92,6 +130,7 @@ private fun HomeContent(home: Home, onOpenTitle: (Long) -> Unit, onPlayMovie: (L
     // Which card was opened last, so Back returns focus to it instead of to the
     // top of the page. Saved across the trip to the detail screen and back.
     var lastOpened by rememberSaveable { mutableStateOf<String?>(null) }
+
     val heroFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
 
@@ -103,6 +142,7 @@ private fun HomeContent(home: Home, onOpenTitle: (Long) -> Unit, onPlayMovie: (L
         if (home.hero.isNotEmpty()) {
             item(key = "hero") {
                 Hero(
+                    height = if (compactHero) 330.dp else 420.dp,
                     titles = home.hero,
                     playFocus = heroFocus,
                     onPlay = { t -> if (t.isSeries) onOpenTitle(t.id) else onPlayMovie(t.id) },
@@ -147,9 +187,31 @@ private fun HomeContent(home: Home, onOpenTitle: (Long) -> Unit, onPlayMovie: (L
         }
     }
 
-    // First visit: start on the hero's Play button, the most likely next press.
+    // First visit: start on the hero's Play button, the most likely next press —
+    // then put the list back at the top. On a TV, Compose brings a focused item
+    // into view with a "pivot" scroll (to a fixed fraction of the viewport) even
+    // when it was already fully visible; under the pinned update banner that
+    // shoved the hero's title out of sight. The pivot only runs on focus changes,
+    // so resetting once afterwards sticks.
     LaunchedEffect(Unit) {
-        if (lastOpened == null && home.hero.isNotEmpty()) heroFocus.focusWhenReady()
+        if (lastOpened == null && home.hero.isNotEmpty()) {
+            heroFocus.focusWhenReady()
+            listState.scrollToItem(0)
+        }
+    }
+    // The banner usually arrives AFTER Home has laid out — the update check and
+    // the catalog load race — and its arrival shrinks this list from the top. The
+    // TV pivot scroll then keeps the focused Play at its line by pushing the hero's
+    // title out of view (seen on the emulator). So when the banner comes or goes,
+    // let that resize and its scroll settle, then return to the top — but only if
+    // the person is still on the hero, never yanking them out of a row.
+    LaunchedEffect(focusHero) {
+        if (focusHero && home.hero.isNotEmpty()) heroFocus.focusWhenReady()
+    }
+    LaunchedEffect(compactHero) {
+        repeat(2) { withFrameNanos { } }
+        snapshotFlow { listState.isScrollInProgress }.first { !it }
+        if (listState.firstVisibleItemIndex == 0) listState.animateScrollToItem(0)
     }
 }
 
@@ -161,6 +223,7 @@ private fun HomeContent(home: Home, onOpenTitle: (Long) -> Unit, onPlayMovie: (L
  */
 @Composable
 private fun Hero(
+    height: Dp,
     titles: List<Title>,
     playFocus: FocusRequester,
     onPlay: (Title) -> Unit,
@@ -181,7 +244,7 @@ private fun Hero(
     Box(
         Modifier
             .fillMaxWidth()
-            .height(420.dp)
+            .height(height)
             .onFocusChanged { focused = it.hasFocus },
     ) {
         if (title.backdrop.isNotEmpty()) {

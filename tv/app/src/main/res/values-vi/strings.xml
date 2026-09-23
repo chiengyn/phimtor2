@@ -54,6 +54,7 @@
     <string name="search_all_genres">Tất cả thể loại</string>
     <string name="search_empty">Không tìm thấy phim nào.</string>
     <string name="search_hint">Tìm phim, chương trình…</string>
+    <string name="settings_app">Ứng dụng</string>
     <string name="settings_language">Ngôn ngữ nội dung</string>
     <string name="settings_language_auto">Theo ngôn ngữ của TV</string>
     <string name="settings_server">Máy chủ</string>
@@ -64,4 +65,19 @@
     <string name="settings_signed_in_as">Đã đăng nhập: %1$s</string>
     <string name="settings_version">Phiên bản %1$s</string>
     <string name="state_loading">Đang tải thông tin…</string>
+    <string name="update_available">Có bản cập nhật: %1$s</string>
+    <string name="update_check">Kiểm tra cập nhật</string>
+    <string name="update_check_failed">Không kiểm tra được bản cập nhật.</string>
+    <string name="update_checking">Đang kiểm tra…</string>
+    <string name="update_continue">Tiếp tục</string>
+    <string name="update_corrupt">Bản tải về bị lỗi. Vui lòng thử lại.</string>
+    <string name="update_downloading">Đang tải bản cập nhật… %1$d%%</string>
+    <string name="update_install_failed">Không cài được bản cập nhật.</string>
+    <string name="update_installing">Đang cài đặt bản cập nhật… phimnet sẽ đóng lại — hãy mở lại từ màn hình chính.</string>
+    <string name="update_later">Để sau</string>
+    <string name="update_no_settings">Không mở được cài đặt. Bạn có thể cập nhật bằng Downloader tại %1$s</string>
+    <string name="update_now">Cập nhật</string>
+    <string name="update_open_settings">Mở cài đặt</string>
+    <string name="update_permission">Hãy cho phép phimnet cài đặt ứng dụng trong phần cài đặt của TV, rồi quay lại để tiếp tục.</string>
+    <string name="update_up_to_date">Bạn đang dùng bản mới nhất.</string>
 </resources>
