@@ -9,8 +9,8 @@ Guidance for the **public viewer** service
 
 The **read side** of the shared catalog: a public, server-rendered browse /
 discovery / watch UI over the movie/TV metadata that [`admin/`](../admin/CLAUDE.md)
-imports. It renders localized Go `html/template` pages under explicit `/vi/...`
-and `/en/...` routes. `i18n.go` embeds `locales/*.json`; its
+imports. It renders localized Go `html/template` pages under explicit `/vi/...`,
+`/en/...`, `/zh-cn/...`, `/zh-tw/...`, `/ko/...`, and `/ja/...` routes. `i18n.go` embeds `locales/*.json`; its
 `localeDefinitions` registry drives supported routes, catalog loading, template
 parsing, SEO locale metadata, and the header language dropdown. The dropdown
 uses native `<details>` links and preserves the current page/query.
@@ -126,10 +126,11 @@ Flat single `main` package.
   (one decimal). `tmdbImageBase` builds poster/backdrop URLs client-unaware of
   TMDB. `detail.html` uses native `<details>` for season collapse (no JS).
 
-- **Routes** (`server.go` `setupRouter`): every human page exists under both
-  `/vi/...` and `/en/...`; `/` negotiates from the locale cookie / browser
+- **Routes** (`server.go` `setupRouter`): every human page exists under every
+  registered locale prefix; `/` negotiates from the locale cookie / browser
   language, while old unprefixed page routes permanently redirect to Vietnamese.
-  - `GET /{locale}/` — home, fully server-rendered. With an active filter
+  - `GET /{locale}/` — home, fully server-rendered. Supported locales are `vi`,
+    `en`, `zh-cn`, `zh-tw`, `ko`, and `ja`. With an active filter
     (`q`/`genre`/`type`) it renders a paginated **grid** (`?page=N`, 1-based,
     clamped server-side); otherwise Netflix-style **rows**. `handleHome` first
     **redirects to the canonical URL** (`homeURL`): it drops empty/odd query

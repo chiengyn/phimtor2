@@ -35,6 +35,9 @@ func TestLocalizedRouter(t *testing.T) {
 	if got := request("/", "en-US").Header().Get("Location"); got != "/en/" {
 		t.Fatalf("root location = %q, want /en/", got)
 	}
+	if got := request("/", "zh-TW,zh;q=0.9").Header().Get("Location"); got != "/zh-tw/" {
+		t.Fatalf("Traditional Chinese root location = %q, want /zh-tw/", got)
+	}
 	if got := request("/?q=dune", "en-US").Header().Get("Location"); got != "/vi/?q=dune" {
 		t.Fatalf("legacy query location = %q, want Vietnamese compatibility URL", got)
 	}
@@ -107,6 +110,24 @@ func TestPreferredLocale(t *testing.T) {
 	r.Header.Set("Accept-Language", "vi;q=0.2,en-AU;q=0.9")
 	if got := preferredLocale(r); got != LocaleEN {
 		t.Fatalf("quality weights should win: preferredLocale = %q, want en", got)
+	}
+	r = httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Accept-Language", "zh-Hant-HK,zh-Hans;q=0.8,en;q=0.7")
+	if got := preferredLocale(r); got != LocaleZHTW {
+		t.Fatalf("Chinese script should be preserved: preferredLocale = %q, want zh-tw", got)
+	}
+}
+
+func TestParseLocale(t *testing.T) {
+	tests := map[string]Locale{
+		"zh": LocaleZHCN, "zh-CN": LocaleZHCN, "zh-Hans": LocaleZHCN,
+		"zh-SG": LocaleZHCN, "zh-TW": LocaleZHTW, "zh-Hant": LocaleZHTW,
+		"zh-HK": LocaleZHTW, "ko-KR": LocaleKO, "ja-JP": LocaleJA,
+	}
+	for input, want := range tests {
+		if got, ok := parseLocale(input); !ok || got != want {
+			t.Errorf("parseLocale(%q) = %q, %v; want %q, true", input, got, ok, want)
+		}
 	}
 }
 

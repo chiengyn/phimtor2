@@ -358,6 +358,10 @@
 				<select id="sbs-lang" {{if not .SignedIn}}disabled{{end}}>
 					<option value="vi">{{t "watch.lang_vi"}}</option>
 					<option value="en">{{t "watch.lang_en"}}</option>
+					<option value="zh-cn">{{t "watch.lang_zh_cn"}}</option>
+					<option value="zh-tw">{{t "watch.lang_zh_tw"}}</option>
+					<option value="ko">{{t "watch.lang_ko"}}</option>
+					<option value="ja">{{t "watch.lang_ja"}}</option>
 				</select>
 				<select id="sbs-provider" hidden {{if not .SignedIn}}disabled{{end}}></select>
 				{{if .SearchEpisode}}

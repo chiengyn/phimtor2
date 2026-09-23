@@ -17,8 +17,12 @@ import (
 type Locale string
 
 const (
-	LocaleVI Locale = "vi"
-	LocaleEN Locale = "en"
+	LocaleVI   Locale = "vi"
+	LocaleEN   Locale = "en"
+	LocaleZHCN Locale = "zh-cn"
+	LocaleZHTW Locale = "zh-tw"
+	LocaleKO   Locale = "ko"
+	LocaleJA   Locale = "ja"
 )
 
 type localeDefinition struct {
@@ -33,6 +37,10 @@ type localeDefinition struct {
 var localeDefinitions = []localeDefinition{
 	{Locale: LocaleVI, NativeName: "Tiếng Việt", OpenGraphLocale: "vi_VN"},
 	{Locale: LocaleEN, NativeName: "English", OpenGraphLocale: "en_US"},
+	{Locale: LocaleZHCN, NativeName: "简体中文", OpenGraphLocale: "zh_CN"},
+	{Locale: LocaleZHTW, NativeName: "繁體中文", OpenGraphLocale: "zh_TW"},
+	{Locale: LocaleKO, NativeName: "한국어", OpenGraphLocale: "ko_KR"},
+	{Locale: LocaleJA, NativeName: "日本語", OpenGraphLocale: "ja_JP"},
 }
 
 var supportedLocales = func() []Locale {
@@ -77,6 +85,19 @@ func parseLocale(raw string) (Locale, bool) {
 		return LocaleVI, true
 	case normalized == "en" || strings.HasPrefix(normalized, "en-"):
 		return LocaleEN, true
+	case normalized == "zh-tw" || strings.HasPrefix(normalized, "zh-tw-") ||
+		normalized == "zh-hant" || strings.HasPrefix(normalized, "zh-hant-") ||
+		normalized == "zh-hk" || strings.HasPrefix(normalized, "zh-hk-") ||
+		normalized == "zh-mo" || strings.HasPrefix(normalized, "zh-mo-"):
+		return LocaleZHTW, true
+	case normalized == "zh" || normalized == "zh-cn" || strings.HasPrefix(normalized, "zh-cn-") ||
+		normalized == "zh-hans" || strings.HasPrefix(normalized, "zh-hans-") ||
+		normalized == "zh-sg" || strings.HasPrefix(normalized, "zh-sg-"):
+		return LocaleZHCN, true
+	case normalized == "ko" || strings.HasPrefix(normalized, "ko-"):
+		return LocaleKO, true
+	case normalized == "ja" || strings.HasPrefix(normalized, "ja-"):
+		return LocaleJA, true
 	default:
 		return "", false
 	}
@@ -93,6 +114,8 @@ func fallbackLocale(locale Locale) Locale {
 	if locale == LocaleEN {
 		return LocaleVI
 	}
+	// The catalog currently stores Vietnamese and English metadata. New UI
+	// locales use English metadata until matching TMDB translations are present.
 	return LocaleEN
 }
 
@@ -151,8 +174,7 @@ func preferredLocale(r *http.Request) Locale {
 	tags, _, err := language.ParseAcceptLanguage(r.Header.Get("Accept-Language"))
 	if err == nil {
 		for _, tag := range tags {
-			base, _ := tag.Base()
-			locale, ok := parseLocale(base.String())
+			locale, ok := parseLocale(tag.String())
 			if ok {
 				return locale
 			}
@@ -207,10 +229,16 @@ func localeQueryURL(locale Locale, path string, values url.Values) string {
 }
 
 func formatDate(locale Locale, value time.Time) string {
-	if locale == LocaleEN {
+	switch locale {
+	case LocaleEN:
 		return value.Format("Jan 2, 2006")
+	case LocaleZHCN, LocaleZHTW, LocaleJA:
+		return value.Format("2006年1月2日")
+	case LocaleKO:
+		return value.Format("2006년 1월 2일")
+	default:
+		return value.Format("02/01/2006")
 	}
-	return value.Format("02/01/2006")
 }
 
 // localeCatalogs packages translation files into the viewer binary while keeping
