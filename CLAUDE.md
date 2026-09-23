@@ -5,8 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 **phimtor2** is a self-hosted movie/TV platform built from **four independent Go
-services**, each its own module with its own `CLAUDE.md`. Two of them (admin,
-viewer) share a single MySQL database; the streamer(s) and manager stand alone.
+services**, each its own module with its own `CLAUDE.md`, plus an **Android TV
+client** (`tv/`). Two of the services (admin, viewer) share a single MySQL
+database; the streamer(s) and manager stand alone.
 
 | Module | Purpose | Default port | Storage | Detail |
 |--------|---------|--------------|---------|--------|
@@ -14,9 +15,14 @@ viewer) share a single MySQL database; the streamer(s) and manager stand alone.
 | **`viewer/`** | Public browse/discovery + watch UI + Google sign-in | `8082` | MySQL (read-only catalog, except contributed `subtitles`; writes `users`/`user_bookmarks`) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
 | **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage); **N interchangeable instances** | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
 | **`manager/`** | Control plane that load-balances torrents across streamers (token-gated; public host + internal alias) | `8083` | enrollment JSON file | [`manager/CLAUDE.md`](manager/CLAUDE.md) |
+| **`tv/`** | Android TV / Google TV app (Kotlin, Compose for TV, Media3). A second **client** of the viewer's `/api/tv/v1`; distributed as an APK, not deployed | — | on-device DataStore | [`tv/CLAUDE.md`](tv/CLAUDE.md) |
 
-The production front-end is the admin's watch page (`/watch`) and the public
-viewer's watch page. **Control plane vs data plane:** the browser asks its own app
+The production front-ends are the admin's watch page (`/watch`), the public
+viewer's watch page, and the TV app — which calls the viewer exactly as the watch
+page does (same prepare endpoint, same heartbeat), authenticated by a paired
+device's bearer token instead of a cookie.
+
+**Control plane vs data plane:** the browser asks its own app
 server (admin/viewer) to add/prepare a torrent; that server calls the **manager**
 server-side (`MANAGER_INTERNAL_URL` + bearer token), which picks a streamer, adds
 the torrent there, and returns the owning streamer's **public URL**. The browser
@@ -41,7 +47,8 @@ When working inside a module, read **that module's `CLAUDE.md`** — file paths 
 each are relative to the module directory. The viewer has focused localization,
 routing, and TV-client tests, plus a database integration suite that is skipped
 unless `PHIMTOR_TEST_DSN` is set (see [`viewer/CLAUDE.md`](viewer/CLAUDE.md));
-the other modules currently have no tests.
+`tv/` has JVM unit tests and an emulator end-to-end harness (`tv/e2e/`); the
+other modules currently have no tests.
 
 ## The shared MySQL catalog (admin ⇄ viewer)
 

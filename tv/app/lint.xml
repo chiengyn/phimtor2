@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- targetSdk 36 is deliberate: the app compiles against 37 (its dependencies
+         demand it) but has only been exercised on Android 16. Raise it after
+         testing Android 17's behaviour changes, not to quiet a warning. -->
+    <issue id="OldTargetApi" severity="ignore" />
+    <!-- The TV banner is authored at 320x180 in drawable-xhdpi, which is what
+         Android TV's launcher specifies; other densities are scaled from it. -->
+    <issue id="IconMissingDensityFolder" severity="ignore" />
+</lint>

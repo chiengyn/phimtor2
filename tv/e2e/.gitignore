@@ -1,0 +1,5 @@
+media/*.mkv
+media/*.mp4
+media/.clock.filter
+seed/seed
+fake/fake
