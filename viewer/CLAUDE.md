@@ -621,6 +621,27 @@ Flat single `main` package.
     because a TV is paired once — the row, not the expiry, is the lever.
   - Abandoned pending pairings are swept every 10 minutes by
     `reapDevicePairings`, started from `main.go` and a no-op without accounts.
+  - **`verification_uri_complete`** (RFC 8628) is the link with `?code=` in it;
+    the TV renders it as a QR code, and `/link` pre-fills the box from it — the
+    person still presses Connect, which is §3.3.1's confirmation step. The code
+    from the query string is normalised and re-formatted before it reaches the
+    template, so only code-alphabet characters can ever render there.
+  - **Both pairing links are always absolute** (`absoluteFor`). `s.abs` returns
+    a bare path when `VIEWER_PUBLIC_URL` is unset — right for SEO tags, useless
+    in a QR code a phone scans — so without a configured origin the link is built
+    from the host the television itself reached. Found on the emulator, where the
+    TV showed `/en/link`.
+  - **`POST /api/tv/v1/device/logout`** lets a television revoke its OWN pairing,
+    so "sign out" on the TV kills the token instead of merely forgetting it.
+    `currentUser` puts the pairing id on the context (`deviceFrom`) only for a
+    bearer request; a browser session calling this gets a 400 rather than a
+    silent no-op.
+  - The `/link` page's fetch sends `X-Phimnet-Locale` from `<body data-locale>`,
+    so the server's refusals come back in the page's language.
+  - The TV API's JSON is **snake_case throughout** (`page_size`, not `pageSize`)
+    — fixed before any client shipped, since this is the one API that cannot be
+    changed later. The two camelCase shapes a TV sees are the web page's own
+    existing contracts: `prepare`'s answer and the heartbeat body.
 
 - **Subtitle blob store** (`blobstore.go`): a full port of admin's store
   (`Put`/`Get`/`Delete`, `local` + `s3`); `handleSubtitleFile` routes a subtitle

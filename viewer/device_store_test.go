@@ -293,9 +293,11 @@ func TestDevicePairingOverHTTPIntegration(t *testing.T) {
 		t.Fatalf("device/code: %d %s", w.Code, w.Body)
 	}
 	var codes struct {
-		DeviceCode string `json:"device_code"`
-		UserCode   string `json:"user_code"`
-		Interval   int    `json:"interval"`
+		DeviceCode       string `json:"device_code"`
+		UserCode         string `json:"user_code"`
+		VerificationURI  string `json:"verification_uri"`
+		VerificationFull string `json:"verification_uri_complete"`
+		Interval         int    `json:"interval"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &codes); err != nil {
 		t.Fatal(err)
@@ -306,6 +308,10 @@ func TestDevicePairingOverHTTPIntegration(t *testing.T) {
 	// The displayed code is grouped for reading across a room.
 	if len(codes.UserCode) != userCodeLen+1 || codes.UserCode[4] != '-' {
 		t.Fatalf("user_code %q is not in XXXX-XXXX form", codes.UserCode)
+	}
+	// The QR-code link is the plain link with the code already in it.
+	if want := codes.VerificationURI + "?code=" + codes.UserCode; codes.VerificationFull != want {
+		t.Fatalf("verification_uri_complete = %q, want %q", codes.VerificationFull, want)
 	}
 
 	// 2. The TV polls before anyone has approved it.
@@ -369,18 +375,24 @@ func TestDevicePairingOverHTTPIntegration(t *testing.T) {
 		t.Fatalf("anonymous /me should be 200 signed_in=false, got %d %s", w.Code, w.Body)
 	}
 
-	// 7. Sign the television out. The token still verifies its MAC, so the
-	//    device row is the only thing revoking it — which is why it exists.
-	var deviceID int64
-	if err := s.store.db.QueryRow(
-		`SELECT id FROM tv_devices WHERE device_code = ?`, codes.DeviceCode).Scan(&deviceID); err != nil {
-		t.Fatal(err)
+	// 7. A BROWSER session calling the TV's self-logout must be refused, not
+	//    treated as "revoke nothing, 204": only a bearer request names a device.
+	w = postJSON(t, s, "/api/tv/v1/device/logout", `{}`, cookie)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cookie-session device logout should be 400, got %d %s", w.Code, w.Body)
 	}
-	if err := s.store.RevokeDevice(context.Background(), deviceID, userID); err != nil {
-		t.Fatal(err)
+
+	// 8. The television signs ITSELF out. The token still verifies its MAC, so
+	//    the device row is the only thing revoking it — which is why it exists.
+	logout := httptest.NewRequest(http.MethodPost, "/api/tv/v1/device/logout", nil)
+	logout.Header.Set("Authorization", "Bearer "+issued.AccessToken)
+	lw := httptest.NewRecorder()
+	s.ServeHTTP(lw, logout)
+	if lw.Code != http.StatusNoContent {
+		t.Fatalf("device logout: %d %s", lw.Code, lw.Body)
 	}
 	if w := get(issued.AccessToken); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"signed_in":false`) {
-		t.Fatalf("a revoked device was still authenticated: %d %s", w.Code, w.Body)
+		t.Fatalf("a signed-out device was still authenticated: %d %s", w.Code, w.Body)
 	}
 }
 
