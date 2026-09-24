@@ -126,9 +126,24 @@ jobs:
           echo "$KEYSTORE_B64" | base64 -d > "$keystore"
           PHIMNET_TV_KEYSTORE="$keystore" ./gradlew --no-configuration-cache :app:assembleRelease
 
+          # Prove the APK is signed with THIS release key, not just "signed": the
+          # expected certificate digest comes from the keystore itself, and is
+          # looked for in apksigner's full output (printed, so a failure here is
+          # never silent). Matching apksigner's wording instead broke the first
+          # release: with no matching line, grep's exit status failed the step
+          # without a word, on a runner whose build-tools differed from local.
           apk=app/build/outputs/apk/release/app-release.apk
           apksigner="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)/apksigner"
-          "$apksigner" verify --print-certs "$apk" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+          echo "apksigner: $apksigner"
+          signers="$("$apksigner" verify --verbose --print-certs "$apk")"
+          echo "$signers"
+          expected="$(keytool -list -v -keystore "$keystore" -storepass "$PHIMNET_TV_KEYSTORE_PASSWORD" \
+            -alias "$PHIMNET_TV_KEY_ALIAS" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | tr -d ':' | tr 'A-F' 'a-f')"
+          if [ -z "$expected" ] || ! grep -qi -- "$expected" <<<"$signers"; then
+            echo "::error::The APK is not signed with the release key (expected certificate SHA-256 ${expected:-<unreadable keystore>})."
+            exit 1
+          fi
+          echo "Signed with the release key: $expected"
 
           # Name, hash and manifest — what the host will serve.
           file="phimnet-tv-$PHIMNET_TV_VERSION_NAME.apk"
