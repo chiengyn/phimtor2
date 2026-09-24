@@ -86,6 +86,9 @@ jobs:
           # to keep billing off.
           BILLING_EVM_ADDRESS: ${{ vars.BILLING_EVM_ADDRESS }}
           BILLING_EVM_CHAINS: ${{ vars.BILLING_EVM_CHAINS }}
+          # The aftv.news Downloader code for <VIEWER_HOST>/tv, shown on the TV app
+          # install guide. Public (it is printed on that page); unset hides it.
+          TV_DOWNLOADER_CODE: ${{ vars.TV_DOWNLOADER_CODE }}
           # Secrets.
           # The host's `docker login ghcr.io` credential. This is the built-in
           # GITHUB_TOKEN, minted fresh for this run and expiring with it, NOT a

@@ -206,7 +206,8 @@ it; there is nothing to `kamal deploy` for a new app version.
 Send people to **`<VIEWER_HOST>/vi/tv-app`** (or any locale), the step-by-step
 install guide linked from the site header. Registering a Downloader short code
 for `https://<VIEWER_HOST>/tv` at aftv.news and setting it as
-`TV_DOWNLOADER_CODE` in `config/deploy.viewer.yml` makes the guide show it too.
+`TV_DOWNLOADER_CODE` (a repo **variable** for CI, and in `.env` for a local
+deploy) makes the guide show it too. The current code is `8676098`.
 
 **One-time setup:**
 
