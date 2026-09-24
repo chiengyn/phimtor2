@@ -150,7 +150,7 @@ func TestTVApkRejectsABadManifest(t *testing.T) {
 
 // Unconfigured is off, the same rollback convention as accounts and billing.
 func TestTVApkRoutesNeedAConfiguredDirectory(t *testing.T) {
-	routes := []string{"GET /tv", "HEAD /tv", "GET /download/phimnet-tv.apk", "HEAD /download/phimnet-tv.apk", "GET /api/tv/v1/app"}
+	routes := []string{"GET /tv", "HEAD /tv", "GET /download/phimnet-tv.apk", "HEAD /download/phimnet-tv.apk", "GET /api/tv/v1/app", "GET /{locale}/tv-app"}
 	found := routesOf(t, &Server{})
 	for _, route := range routes {
 		if found[route] {
@@ -190,5 +190,67 @@ func TestTVApkShortURLAndHead(t *testing.T) {
 	}
 	if cl := hw.Header().Get("Content-Length"); cl != strconv.Itoa(len(body)) {
 		t.Fatalf("HEAD Content-Length = %q, want %d", cl, len(body))
+	}
+}
+
+// The install guide tells people what to type into Downloader, so it must show
+// the absolute short URL, the release it will fetch, and the optional
+// Downloader code — and the header links to it from every page.
+func TestTVAppGuidePage(t *testing.T) {
+	dir := t.TempDir()
+	publishTVRelease(t, dir, "phimnet-tv-0.1.2.apk", []byte("PK\x03\x04 signed apk"), nil)
+	s := tvApkServer(t, dir)
+	s.tvDownloaderCode = "1234567"
+
+	w := get(s, "/en/tv-app")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/en/tv-app: %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"http://viewer.example/tv",
+		"Version 0.1.2",
+		"1234567",
+		`href="/download/phimnet-tv.apk"`,
+		`href="/en/tv-app"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("guide page is missing %q", want)
+		}
+	}
+
+	// Every page links the guide, not only the guide itself — from the header
+	// and from the footer, since the header nav is hidden on phones.
+	if page := get(s, "/en/bookmarks").Body.String(); strings.Count(page, `href="/en/tv-app"`) != 2 {
+		t.Errorf("want the guide linked from header and footer, got %d links", strings.Count(page, `href="/en/tv-app"`))
+	}
+}
+
+// Before the first release the guide still renders, but says so instead of
+// walking someone through a download that would 404.
+func TestTVAppGuideBeforeFirstRelease(t *testing.T) {
+	s := tvApkServer(t, t.TempDir())
+	w := get(s, "/en/tv-app")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/en/tv-app: %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "available for download yet") {
+		t.Error("guide does not say the app is unpublished")
+	}
+	if strings.Contains(body, "Version ") || strings.Contains(body, `href="/download/phimnet-tv.apk"`) {
+		t.Error("guide offers a download that does not exist")
+	}
+}
+
+// Without TV_APK_DIR there is nothing to install: no guide, no header link.
+func TestTVAppGuideNeedsAConfiguredDirectory(t *testing.T) {
+	s := &Server{}
+	if err := s.parseTemplates(); err != nil {
+		t.Fatal(err)
+	}
+	s.setupRouter()
+	if w := get(s, "/en/tv-app"); w.Code != http.StatusNotFound {
+		t.Fatalf("/en/tv-app without TV_APK_DIR: %d, want 404", w.Code)
 	}
 }

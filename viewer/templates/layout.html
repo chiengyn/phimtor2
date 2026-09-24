@@ -45,6 +45,7 @@
 			<a href="{{.HomeURL}}?type=movie">{{t "nav.movies"}}</a>
 			<a href="{{.HomeURL}}?type=tv">{{t "nav.tv"}}</a>
 			<a href="{{pagePath "/bookmarks"}}">{{t "nav.saved"}}</a>
+			{{if tvAppOn}}<a href="{{pagePath "/tv-app"}}">{{t "nav.tv_app"}}</a>{{end}}
 		</nav>
 		<!-- Kept outside .site-nav so both survive the mobile breakpoint that hides
 		     the nav; the wrapper owns the margin-left:auto that pins them right. -->
@@ -113,6 +114,11 @@
 		<div class="wrap">
 			<span class="footer-brand">phimnet</span>
 			<p>{{t "footer.tagline"}}</p>
+			{{/* The header nav is hidden on phones, where most people read the
+			     install guide, so the footer links it too. */}}
+			{{if tvAppOn}}
+			<p>{{t "footer.tv_prompt"}} <a href="{{pagePath "/tv-app"}}">{{t "footer.tv_link"}}</a>.</p>
+			{{end}}
 			{{with discordURL}}
 			<p>{{t "footer.support"}} <a href="{{.}}" target="_blank" rel="noopener">{{t "footer.join_discord"}}</a>.</p>
 			{{end}}

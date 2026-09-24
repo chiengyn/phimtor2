@@ -104,6 +104,8 @@ service).
   publishes signed APKs and `latest.json` into (`/tv` in production, a read-only
   mount of the host's `/srv/phimnet-tv`). **Empty ⇒ the routes are not
   registered**, the usual rollback. See *Serving the TV app* below.
+  `TV_DOWNLOADER_CODE` (optional) is an aftv.news short code pointing at
+  `<host>/tv`; the install guide shows it next to the URL. Empty ⇒ URL only.
 - Google sign-in (`googleauth.go`): `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`
   (env-only secrets). **Both empty ⇒ accounts are off**: the `/auth/google/*`
   routes are not registered and the header shows no login button, so the site is
@@ -199,6 +201,10 @@ Flat single `main` package.
   - `GET|HEAD /tv`, `GET|HEAD /download/phimnet-tv.apk`, `GET /api/tv/v1/app` —
     the sideloaded Android TV app and its update manifest, registered only with
     `TV_APK_DIR` (see *Serving the TV app*).
+  - `GET /{locale}/tv-app` — the human guide to installing that app with
+    Downloader (`templates/tv_app.html`), linked from the header nav and
+    the footer (the nav is hidden on phones). Gated on
+    `TV_APK_DIR` like the APK routes, and listed in `sitemap.xml`.
   - `/static/*` — static assets (`style.css`, `bookmarks.js`).
   Unknown / bad ids render the `404.html` page (not a bare error).
 
@@ -657,6 +663,11 @@ Flat single `main` package.
   does not depend on a sideloader's redirect handling), both also answering
   `HEAD` (chi does not, for a GET route, and download managers HEAD first for
   the size); and `GET /api/tv/v1/app`, the update manifest.
+  - `/{locale}/tv-app` is the install guide people are sent to. It reads the
+    same `latest.json` for the version and size, and when nothing valid is
+    published it still renders (200) but says so instead of offering a
+    download that would 404. Its header link (`tvAppOn`) and route share the
+    `TV_APK_DIR` gate, so the guide can never point at a missing APK route.
   - **The viewer never writes any of it.** `.github/workflows/android.yml` signs
     the APK, scp's it in under a dot-name, checks its hash, renames it into place
     and only then replaces `latest.json` by rename — so the manifest, the single

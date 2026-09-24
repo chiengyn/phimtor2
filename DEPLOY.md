@@ -203,6 +203,11 @@ there (and at `/download/phimnet-tv.apk`, plus a version manifest at
 `/api/tv/v1/app`). `.github/workflows/android.yml` builds, signs and publishes
 it; there is nothing to `kamal deploy` for a new app version.
 
+Send people to **`<VIEWER_HOST>/vi/tv-app`** (or any locale), the step-by-step
+install guide linked from the site header. Registering a Downloader short code
+for `https://<VIEWER_HOST>/tv` at aftv.news and setting it as
+`TV_DOWNLOADER_CODE` in `config/deploy.viewer.yml` makes the guide show it too.
+
 **One-time setup:**
 
 1. **Create the release signing key — once, ever.** Every future update must be

@@ -49,6 +49,9 @@ env:
     # the host directory mounted at /tv below, and served at /tv and
     # /download/phimnet-tv.apk (viewer/tvapk.go). Unset → those routes are off.
     TV_APK_DIR: /tv
+    # Optional Downloader short code (registered by hand at aftv.news, pointing
+    # at https://<VIEWER_HOST>/tv), shown on the /{locale}/tv-app install guide.
+    # TV_DOWNLOADER_CODE: "1234567"
     # Streamer manager (control plane), server-to-server over the kamal network.
     # The viewer adds torrents via the manager, which returns the owning streamer's
     # public URL per prepare for the browser to stream from directly — so there is

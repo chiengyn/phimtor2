@@ -1,0 +1,76 @@
+{{define "head_title"}}{{t "tv_app.title"}} – phimnet{{end}}
+{{define "head_extra"}}
+<meta name="description" content="{{t "tv_app.description"}}">
+<meta name="robots" content="index, follow">
+{{end}}
+{{define "content"}}
+<section class="billing wrap tv-guide">
+	<h1>{{t "tv_app.heading"}}</h1>
+	<p class="billing-note">{{t "tv_app.intro"}}</p>
+
+	{{if .Unavailable}}
+	<p class="billing-note warn">{{t "tv_app.not_published"}}</p>
+	{{else}}
+	{{/* The one thing people copy off this page onto a television, so it is
+	     the largest thing on it. */}}
+	<div class="tv-guide-type">
+		<span class="pay-label">{{t "tv_app.type_this"}}</span>
+		<code class="tv-guide-url">{{.InstallURL}}</code>
+		{{with .DownloaderCode}}<span class="tv-guide-or">{{t "tv_app.or_code"}} <code>{{.}}</code></span>{{end}}
+		<span class="pay-hint">{{t "tv_app.version" $.Version $.Size}}</span>
+	</div>
+	{{end}}
+
+	<ol class="tv-guide-steps">
+		<li>
+			<h2>{{t "tv_app.step1_title"}}</h2>
+			<p>{{t "tv_app.step1_body"}}</p>
+			<a class="tv-guide-ext" href="https://play.google.com/store/apps/details?id=com.esaba.downloader" target="_blank" rel="noopener">{{t "tv_app.step1_link"}}</a>
+		</li>
+		<li>
+			<h2>{{t "tv_app.step2_title"}}</h2>
+			<p>{{if .DownloaderCode}}{{t "tv_app.step2_body_code"}}{{else}}{{t "tv_app.step2_body"}}{{end}}</p>
+		</li>
+		<li>
+			<h2>{{t "tv_app.step3_title"}}</h2>
+			<p>{{t "tv_app.step3_body"}}</p>
+			{{/* Some TVs never show the prompt, and then the setting has to be
+			     found by hand — its place differs between Google TV and the
+			     older Android TV home screen. */}}
+			<div class="billing-note warn">
+				<p>{{t "tv_app.step3_manual"}}</p>
+				<ul>
+					<li><strong>Google TV:</strong> {{t "tv_app.step3_google_tv"}}</li>
+					<li><strong>Android TV:</strong> {{t "tv_app.step3_android_tv"}}</li>
+				</ul>
+			</div>
+		</li>
+		<li>
+			<h2>{{t "tv_app.step4_title"}}</h2>
+			<p>{{t "tv_app.step4_body"}}</p>
+		</li>
+	</ol>
+
+	<h2 class="billing-sub">{{t "tv_app.after_title"}}</h2>
+	{{with .LinkURL}}
+	<p class="billing-note">{{t "tv_app.after_sign_in"}} <a href="{{.}}">{{t "tv_app.after_sign_in_link"}}</a></p>
+	{{end}}
+	<p class="billing-note">{{t "tv_app.after_updates"}}</p>
+
+	{{if not .Unavailable}}
+	<h2 class="billing-sub">{{t "tv_app.other_title"}}</h2>
+	<p class="billing-note">{{t "tv_app.other_body"}}</p>
+	<a class="plan-buy tv-guide-download" href="{{.DownloadURL}}" download>{{t "tv_app.other_download"}}</a>
+	{{end}}
+
+	<h2 class="billing-sub">{{t "tv_app.help_title"}}</h2>
+	<dl class="tv-guide-help">
+		<dt>{{t "tv_app.help_not_installed_q"}}</dt>
+		<dd>{{t "tv_app.help_not_installed_a"}}</dd>
+		<dt>{{t "tv_app.help_download_q"}}</dt>
+		<dd>{{t "tv_app.help_download_a"}}</dd>
+		<dt>{{t "tv_app.help_no_downloader_q"}}</dt>
+		<dd>{{t "tv_app.help_no_downloader_a"}}</dd>
+	</dl>
+</section>
+{{end}}

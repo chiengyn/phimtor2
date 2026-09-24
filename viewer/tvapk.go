@@ -140,3 +140,47 @@ func (s *Server) handleTVAppRelease(w http.ResponseWriter, r *http.Request) {
 		"download_url": s.absoluteFor(r, "/download/phimnet-tv.apk"),
 	})
 }
+
+// tvAppData is the install guide's view model (templates/tv_app.html).
+type tvAppData struct {
+	// InstallURL is what gets typed into Downloader on the television: the
+	// short /tv, absolute because it is read off this page and typed elsewhere.
+	InstallURL string
+	// DownloaderCode is the optional aftv.news short code for InstallURL.
+	DownloaderCode string
+	// DownloadURL is the same APK for a phone or computer, to copy over by hand.
+	DownloadURL string
+	// Version and Size describe the current release; Unavailable is set
+	// instead when nothing (valid) is published, so the guide can say so rather
+	// than walk someone through a download that will fail.
+	Version     string
+	Size        string
+	Unavailable bool
+	// LinkURL is the pairing page, empty when accounts are off and there is
+	// nothing to sign in to.
+	LinkURL string
+}
+
+// handleTVAppPage is the guide to installing the TV app with Downloader.
+func (s *Server) handleTVAppPage(w http.ResponseWriter, r *http.Request) {
+	data := tvAppData{
+		InstallURL:     s.absoluteFor(r, "/tv"),
+		DownloaderCode: s.tvDownloaderCode,
+		DownloadURL:    "/download/phimnet-tv.apk",
+	}
+	rel, err := loadTVRelease(s.tvApkDir)
+	switch {
+	case err == nil:
+		data.Version = rel.VersionName
+		data.Size = fmt.Sprintf("%.1f MB", float64(rel.Size)/(1<<20))
+	case errors.Is(err, errNoTVRelease):
+		data.Unavailable = true
+	default:
+		log.Printf("tv app page: %v", err)
+		data.Unavailable = true
+	}
+	if s.google.enabled() {
+		data.LinkURL = localeURL(localeFromContext(r.Context()), "/link")
+	}
+	s.render(w, r, s.tvApp, data)
+}

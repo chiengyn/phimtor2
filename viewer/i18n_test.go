@@ -72,6 +72,7 @@ func TestLocalizedTemplatesParse(t *testing.T) {
 		// its translated JS string literals — the anonymous branch is only the
 		// sign-in prompt and would exercise almost none of the template.
 		{"link", s.link, linkData{SignedIn: true}},
+		{"tv-app", s.tvApp, tvAppData{InstallURL: "https://phimnet.example/tv", DownloaderCode: "1234567", Version: "0.1.1", Size: "2.7 MB", LinkURL: "/en/link"}},
 	}
 	for _, locale := range supportedLocales {
 		for _, page := range pages {

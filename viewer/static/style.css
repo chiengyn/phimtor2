@@ -797,6 +797,42 @@ a.language-option:hover, a.language-option:focus-visible { background: rgba(255,
 	background: rgba(111,207,127,0.15); color: #6fcf7f; font-size: 1.6rem;
 }
 
+/* --- TV app install guide ---------------------------------------------- */
+.tv-guide-steps h2 { margin: 0 0 6px; font-size: 1.05rem; font-weight: 700; }
+.tv-guide-type {
+	display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+	background: var(--surface); border: 1px solid #3a3a3a; border-radius: var(--radius);
+	padding: 18px 20px; margin: 8px 0 28px;
+}
+.tv-guide-url {
+	font-size: clamp(1.2rem, 4.5vw, 1.9rem); font-weight: 800; color: var(--text);
+	word-break: break-all;
+}
+.tv-guide-or { color: var(--muted); font-size: 0.95rem; }
+.tv-guide-or code { color: var(--text); font-size: 1.2rem; font-weight: 800; letter-spacing: 0.08em; }
+.tv-guide-steps { list-style: none; counter-reset: step; padding: 0; margin: 0; display: grid; gap: 12px; }
+.tv-guide-steps > li {
+	counter-increment: step; position: relative;
+	background: var(--surface); border-radius: var(--radius);
+	padding: 16px 18px 16px 64px;
+}
+.tv-guide-steps > li::before {
+	content: counter(step); position: absolute; left: 18px; top: 14px;
+	width: 32px; height: 32px; border-radius: 999px;
+	display: inline-flex; align-items: center; justify-content: center;
+	background: var(--accent); color: #fff; font-weight: 800;
+}
+.tv-guide-steps p { color: var(--muted); font-size: 0.92rem; margin: 0 0 10px; max-width: 70ch; }
+.tv-guide-steps p:last-child { margin-bottom: 0; }
+.tv-guide-steps .billing-note.warn { margin: 12px 0 0; font-size: 0.88rem; }
+.tv-guide-steps .billing-note.warn p { color: var(--text); margin: 0 0 6px; }
+.tv-guide-steps .billing-note.warn ul { margin: 0; padding-left: 18px; }
+.tv-guide-ext { color: var(--text); font-size: 0.9rem; }
+.tv-guide-download { display: inline-block; text-decoration: none; }
+.tv-guide-help { margin: 0; max-width: 70ch; }
+.tv-guide-help dt { font-weight: 600; margin-top: 14px; }
+.tv-guide-help dd { color: var(--muted); font-size: 0.92rem; margin: 4px 0 0; }
+
 /* --- Responsive --------------------------------------------------------- */
 
 /* On touch devices the hover-zoom can clip a card against the screen edge and

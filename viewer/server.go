@@ -61,8 +61,10 @@ type Server struct {
 	discordURL string
 
 	// tvApkDir is where the published Android TV app lives; "" turns the
-	// download routes off (see tvapk.go).
-	tvApkDir string
+	// download routes and the install guide off (see tvapk.go).
+	// tvDownloaderCode is the optional aftv.news short code the guide shows.
+	tvApkDir         string
+	tvDownloaderCode string
 
 	// google and sess implement accounts. google is nil-safe and reports
 	// enabled() == false when GOOGLE_CLIENT_ID is unset, in which case the
@@ -91,6 +93,10 @@ type Server struct {
 	// unconditionally so a misconfiguration cannot produce a nil deref.
 	link            localizedTemplate
 	deviceApprovals *rateLimiter
+
+	// tvApp is the guide to installing the TV app with Downloader. Parsed
+	// unconditionally, like link; routed only with TV_APK_DIR.
+	tvApp localizedTemplate
 }
 
 type localizedTemplate map[Locale]*template.Template
@@ -120,6 +126,8 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		discordURL:  cfg.DiscordURL,
 		tvApkDir:    cfg.TVApkDir,
 		sess:        sess,
+
+		tvDownloaderCode: strings.TrimSpace(cfg.TVDownloaderCode),
 	}
 	if cfg.accountsEnabled() {
 		s.google = newGoogleClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.oauthRedirectURL())
@@ -216,6 +224,9 @@ func (s *Server) funcMap(locale Locale) template.FuncMap {
 		// discordURL is one: it is request-independent chrome, so making it a
 		// field would mean every handler had to remember to populate it.
 		"billingOn": func() bool { return s.billing.enabled() },
+		// tvAppOn tells the header whether to link the TV app install guide,
+		// which exists only when there is an APK to install.
+		"tvAppOn": func() bool { return s.tvApkDir != "" },
 	}
 	for k, v := range baseFuncMap {
 		fm[k] = v
@@ -354,7 +365,7 @@ func (s *Server) parseTemplates() error {
 	s.home, s.detail, s.watch = localizedTemplate{}, localizedTemplate{}, localizedTemplate{}
 	s.bookmarks, s.notFound = localizedTemplate{}, localizedTemplate{}
 	s.plans, s.invoice = localizedTemplate{}, localizedTemplate{}
-	s.link = localizedTemplate{}
+	s.link, s.tvApp = localizedTemplate{}, localizedTemplate{}
 	for _, locale := range supportedLocales {
 		var err error
 		if s.home[locale], err = parse(locale, "layout.html", "home.html", "rows.html", "grid.html"); err != nil {
@@ -380,6 +391,9 @@ func (s *Server) parseTemplates() error {
 		}
 		if s.link[locale], err = parse(locale, "layout.html", "link.html"); err != nil {
 			return fmt.Errorf("parse %s link templates: %w", locale, err)
+		}
+		if s.tvApp[locale], err = parse(locale, "layout.html", "tv_app.html"); err != nil {
+			return fmt.Errorf("parse %s tv app templates: %w", locale, err)
 		}
 	}
 	return nil
@@ -425,6 +439,11 @@ func (s *Server) setupRouter() {
 		// to a user, so without sign-in the page could only ever fail.
 		if s.google.enabled() {
 			r.Get("/link", s.handleLinkPage)
+		}
+		// How to install the TV app. Only with TV_APK_DIR, like /tv itself:
+		// without an APK to serve, every step of the guide would end in a 404.
+		if s.tvApkDir != "" {
+			r.Get("/tv-app", s.handleTVAppPage)
 		}
 	})
 	for _, pattern := range []string{"/titles/{id}", "/bookmarks", "/watch/movie/{id}", "/watch/episode/{id}"} {
@@ -1749,6 +1768,13 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 			b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, localeHome(alternate)))
 		}
 		b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="x-default" href="%s/"/><changefreq>daily</changefreq><priority>1.0</priority></url>`+"\n", base))
+		if s.tvApkDir != "" {
+			b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, localeURL(locale, "/tv-app")))
+			for _, alternate := range supportedLocales {
+				b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, localeURL(alternate, "/tv-app")))
+			}
+			b.WriteString("<changefreq>monthly</changefreq></url>\n")
+		}
 		for _, entry := range localized[locale] {
 			b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, titlePath(locale, entry.ID, entry.Title, entry.OriginalTitle)))
 			for _, alternate := range supportedLocales {
