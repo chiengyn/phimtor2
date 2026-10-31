@@ -1,14 +1,14 @@
 # CLAUDE.md — viewer/
 
-Guidance for the **public viewer** service
+Guidance for the **viewer** service
 (`module github.com/chiengyn/phimtor2/viewer`). File paths below are relative to
 `viewer/`. For the repo-wide picture and the other two services, see the root
 [`../CLAUDE.md`](../CLAUDE.md).
 
 ## What this is
 
-The **read side** of the shared catalog: a public, server-rendered browse /
-discovery / watch UI over the movie/TV metadata that [`admin/`](../admin/CLAUDE.md)
+The **read side** of the shared catalog: a **members-only**, server-rendered
+browse / discovery / watch UI over the movie/TV metadata that [`admin/`](../admin/CLAUDE.md)
 imports. It renders localized Go `html/template` pages under explicit `/vi/...`,
 `/en/...`, `/zh-cn/...`, `/zh-tw/...`, `/ko/...`, and `/ja/...` routes. `i18n.go` embeds `locales/*.json`; its
 `localeDefinitions` registry drives supported routes, catalog loading, template
@@ -86,8 +86,7 @@ Templates (`templates/`) and `static/` are loaded via **cwd-relative paths**
 
 ## Configuration (`config.go`)
 
-Env vars with matching CLI flags. No secrets — there is no auth (it's a public
-service).
+Env vars with matching CLI flags; secrets are env-only.
 
 - HTTP: `VIEWER_PORT` (8082).
 - MySQL: `MYSQL_DSN` (overrides the rest) or `DB_HOST`/`DB_PORT`/`DB_USER`/
@@ -107,10 +106,12 @@ service).
   `TV_DOWNLOADER_CODE` (optional) is an aftv.news short code pointing at
   `<host>/tv`; the install guide shows it next to the URL. Empty ⇒ URL only.
 - Google sign-in (`googleauth.go`): `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`
-  (env-only secrets). **Both empty ⇒ accounts are off**: the `/auth/google/*`
-  routes are not registered and the header shows no login button, so the site is
-  exactly the anonymous-only one it was before accounts existed. That is also the
-  safe rollback. The OAuth `redirect_uri` is *derived* from `VIEWER_PUBLIC_URL`
+  (env-only secrets). **Required once `VIEWER_PUBLIC_URL` is set** — the site is
+  members-only (see *Members-only gate* below), and `NewServer` refuses to start
+  rather than run a gate nobody can pass, which would have to stand down and
+  publish everything. Locally, both empty ⇒ accounts **and the gate** are off:
+  no `/auth/google/*` or `/{locale}/login` routes, no login button, every page
+  open — a zero-setup laptop, and **no longer a production rollback**. The OAuth `redirect_uri` is *derived* from `VIEWER_PUBLIC_URL`
   (`<origin>/auth/google/callback`, falling back to `http://localhost:<port>/…`),
   so there is no separate env var to keep in sync — but it must match an
   "Authorized redirect URI" in the Google Cloud Console **byte for byte**.
@@ -154,6 +155,31 @@ Flat single `main` package.
   (one decimal). `tmdbImageBase` builds poster/backdrop URLs client-unaware of
   TMDB. `detail.html` uses native `<details>` for season collapse (no JS).
 
+- **Members-only gate** (`auth.go` `requireLogin`). Every catalog page — home,
+  detail, bookmarks, watch, plans, payment, `/link` — sits in a `requireLogin`
+  group: a signed-out visitor is `302`ed (`Cache-Control: no-store`) to
+  `/{locale}/login?next=<where they were headed>`, and `/api/catalog/cards`
+  answers `401` JSON instead. There is **no separate registration**: a first
+  Google sign-in creates the account (`UpsertGoogleUser`), and the login page
+  says so. What stays public, and why:
+  - `/{locale}/login` (the front door, indexable, canonical without `?next=`),
+    `/{locale}/tv-app` + `/tv` + the APK (no catalog; the TV pairs after
+    install), `/auth/*`, `/static/*`, `/up`, `robots.txt`/`sitemap.xml` (which
+    now list only those pages — titles are deliberately absent), and the 404.
+  - `POST /api/sources/{id}/prepare` — the TV calls it too, and
+    `resolutionLock` already answers **401 for every quality** to an anonymous
+    caller, which both clients render as their sign-in gate. That, not a route
+    gate, is what actually stops a signed-out caller playing anything.
+  - `GET /api/subtitles/{id}/file` — the TV's player fetches it **without** its
+    bearer token, so gating it would silently drop subtitles on paired TVs.
+  - `/api/tv/v1/*` read routes — an unpaired TV still **browses** (product
+    decision, pending a "pair first" screen in the app) but cannot play.
+  - Failed sign-ins (`authErrorURL`) land back on `/login?login=error|unverified`
+    with `next` intact; before the gate they went to the home page, which would
+    now redirect and lose both.
+  `pageData.Locked` (signed out, accounts on) hides the header's catalog nav on
+  the few pages a signed-out visitor can see, since every link would bounce.
+
 - **Routes** (`server.go` `setupRouter`): every human page exists under every
   registered locale prefix; `/` negotiates from the locale cookie / browser
   language, while old unprefixed page routes permanently redirect to Vietnamese.
@@ -186,8 +212,10 @@ Flat single `main` package.
   - `GET /api/subtitles/search`, `GET /api/subtitles/download`,
     `POST /api/subtitles` — the contributed-subtitle API, behind `requireUser`
     and registered only when a provider key is configured.
-  - `GET /api/catalog/cards` — localized public card metadata used to refresh
-    anonymous localStorage bookmarks after a language switch.
+  - `GET /api/catalog/cards` — localized card metadata used to refresh
+    localStorage bookmarks after a language switch. Behind `requireLogin`.
+  - `GET /{locale}/login` — the members-only front door (`templates/login.html`),
+    registered only with accounts.
   - `GET /auth/google/start` and `GET /auth/google/callback` — sign-in
     (registered only when accounts are configured); `POST /auth/logout` —
     always registered, and POST-only so no prefetch can sign anyone out.
@@ -281,20 +309,24 @@ Flat single `main` package.
   — seeing that a better quality exists is the whole point — but not always
   playable. Three tiers, from one predicate:
 
-  | | anonymous | signed in, unpaid | entitled |
+  | | anonymous (TV only) | signed in, unpaid | entitled |
   |---|---|---|---|
-  | 720p | plays | plays | plays |
-  | 1080p (`memberResolutions`) | 🔒 sign-in chip | plays | plays |
-  | 2160p (`lockedResolutions`) | 🔒 sign-in chip | 🔒 "Nâng cấp" | plays |
-  | **auto-plays** | 720p | 1080p | 1080p |
+  | 720p | 🔒 sign-in | plays | plays |
+  | 1080p | 🔒 sign-in | plays | plays |
+  | 2160p (`lockedResolutions`) | 🔒 sign-in | 🔒 "Nâng cấp" | plays |
+  | **auto-plays** | — | 1080p | 1080p |
+
+  Since the site went members-only, a browser never reaches the watch page
+  signed out, so the "anonymous" column is what an **unpaired TV** and a raw
+  call to prepare see. The old 1080p registration nudge (`memberResolutions`)
+  is gone — every quality is now behind sign-in. With accounts off (local dev)
+  the column reads 720p/1080p playable, 4K "sắp ra mắt".
 
   "Entitled" is any of three: a paid **time pass** (`users.plan_expires_at`), an
   **admin-granted comp** (`users.comp_expires_at`, set from the admin's `/users`
   page), or a **permanent per-title unlock** (`user_title_unlocks`).
 
-  1080p is gated to push registration; 4K is the **paid** tier. 4K shows a
-  sign-in chip rather than an upgrade chip to an anonymous visitor because
-  entitlements hang off an account — signing in is step one of paying.
+  4K is the **paid** tier.
   `resolutionLock` returns `lockNone`/`lockMember`/`lockUpgrade`/`lockPaid` and
   is the **single source of truth** for the chip copy, for which sources are
   eligible to auto-play, and for the enforcement. Which *eligible* source
@@ -419,11 +451,10 @@ Flat single `main` package.
     accepts any enabled chain and any listed token, so baking one chain+token into
     the QR would contradict that, and a wallet mis-parsing the amount is
     unrecoverable when the amount is the identity.
-  - `resolutionLock` is a **method on `*Server`** because the member tier must be
-    inert when accounts are disabled (`s.google.enabled()`). Without that clause
-    a `GOOGLE_CLIENT_ID=""` deploy — the documented rollback — would strand every
-    visitor at 720p with no login button to escape it. **Test that config
-    whenever you touch this.**
+  - `resolutionLock` is a **method on `*Server`** because the members-only lock
+    must be inert when accounts are disabled (`s.google.enabled()`) — otherwise
+    a local run with no Google creds could play nothing at all. **Test that
+    config whenever you touch this** (`TestResolutionLockIsMembersOnly`).
   - `watchData` carries `LoginURL` because `layout.html` invokes the page body as
     `{{block "content" .Data}}`: inside `watch.html` neither `.User` nor
     `$.LoginURL` is in scope. `s.loginURL(r)` builds it for both the envelope and
@@ -502,8 +533,9 @@ Flat single `main` package.
   - `currentUser` is applied **globally** so every page renders its own header
     state; it returns before touching the DB when there is no cookie, so
     anonymous traffic (and every crawler) pays nothing. A cookie that no longer
-    resolves to a row is cleared. `requireUser` gates the write API only — read
-    pages degrade to the anonymous rendering rather than redirecting.
+    resolves to a row is cleared. `requireUser` gates the write APIs (401);
+    `requireLogin` gates the pages (redirect to `/login`) — see *Members-only
+    gate*.
   - Templates get the user through the `pageData` envelope (`server.go`):
     `render` executes `layout` with `{Data, User, LoginURL, SavedIDsJSON, Path}`,
     and `layout.html` re-scopes its three override blocks with
@@ -514,7 +546,10 @@ Flat single `main` package.
 - **Bookmarks / "xem sau"** (`static/bookmarks.js`, `templates/bookmarks.html`).
   The watch-later list runs in one of **two modes**, chosen from
   `<body data-bm-mode>` which `layout.html` renders per request:
-  - **`local`** (anonymous) — unchanged from before accounts existed. The list
+  - **`local`** (anonymous) — unchanged from before accounts existed. Since the
+    site went members-only this is only reachable with accounts off (local
+    dev); in production it survives as the source `mergeLocal` folds into a
+    newly signed-in account. The list
     lives entirely in `localStorage` under `phimnet.bookmarks` (same convention as
     the watch page's `phimnet.subStyle`): a newest-first JSON array, capped at
     500, of **full card snapshots** (`id`, `href`, `title`, `original`, `poster`
@@ -595,10 +630,12 @@ Flat single `main` package.
   - Locale rides in `X-Phimnet-Locale` (the existing JSON convention) or
     `?locale=`. Row labels are **resolved server-side**, so a locale the app
     ships no strings for still reads correctly.
-  - **Read routes are always registered; pairing routes need accounts.** With
-    `GOOGLE_CLIENT_ID=""` the app browses anonymously at 720p and offers no
-    sign-in, which is the documented rollback — pinned by
-    `TestTVRouteRegistration`.
+  - **Read routes are always registered and not behind `requireLogin`;
+    pairing routes need accounts.** An unpaired TV browses the catalog but every
+    source is sign-in locked, so it plays nothing until it pairs (its existing
+    `401 → Lock.Member` gate handles that). Gating the read routes too needs a
+    "pair first" screen in the app, because installed APKs show a generic error
+    on a 401 from them. Pinned by `TestTVRouteRegistration`.
   - **Pairing is device-code (RFC 8628 shapes), not OAuth.** The TV shows a
     short code, the user approves it at `/{locale}/link` on a phone that is
     already signed in, and the TV trades its long `device_code` for a bearer

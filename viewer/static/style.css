@@ -119,6 +119,51 @@ main { width: 100%; }
 .login-link:hover { filter: brightness(1.12); }
 .google-icon { flex: none; background: #fff; border-radius: 50%; padding: 2px; box-sizing: content-box; }
 
+/* The members-only front door (templates/login.html): one centred card over a
+   dimmed red glow, so the page reads as the site's entrance rather than an
+   error. */
+.login-page {
+	min-height: calc(100vh - var(--header-h) - 160px);
+	display: grid;
+	place-items: center;
+	padding: 48px 4%;
+	background: radial-gradient(ellipse at 50% 0%, rgba(229,9,20,0.22), transparent 60%);
+}
+.login-card {
+	width: 100%;
+	max-width: 420px;
+	padding: 40px 32px;
+	background: rgba(20,20,20,0.88);
+	border: 1px solid #2f2f2f;
+	border-radius: 10px;
+	text-align: center;
+	box-shadow: 0 24px 60px rgba(0,0,0,0.55);
+}
+.login-brand { color: var(--accent); font-size: 1.6rem; font-weight: 900; letter-spacing: -0.03em; }
+.login-card h1 { margin: 14px 0 10px; font-size: clamp(1.4rem, 3vw, 1.8rem); font-weight: 800; letter-spacing: -0.02em; }
+.login-intro { color: var(--muted); font-size: 0.95rem; margin: 0 0 26px; }
+.login-error {
+	color: var(--text); background: rgba(229,9,20,0.12);
+	border-left: 3px solid var(--accent); border-radius: var(--radius);
+	padding: 10px 12px; margin: 0 0 18px; font-size: 0.9rem; text-align: left;
+}
+.login-google {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	width: 100%;
+	padding: 13px 18px;
+	border-radius: 999px;
+	background: #fff;
+	color: #1f1f1f;
+	font-size: 1rem;
+	font-weight: 600;
+	transition: filter 0.2s var(--ease);
+}
+.login-google:hover { filter: brightness(0.92); }
+.login-note { color: var(--faint); font-size: 0.82rem; margin: 18px 0 0; }
+
 /* Account menu. A native <details> so it needs no JS, matching the rest of the
    site's no-framework markup. */
 .user-menu { position: relative; }

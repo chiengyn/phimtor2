@@ -41,20 +41,26 @@
 	<header class="site-header">
 		<a href="{{.HomeURL}}" class="brand">phimnet</a>
 		<nav class="site-nav">
+			{{/* A signed-out visitor on the members-only site sees only the TV
+			     guide: every catalog link would just bounce back to /login. */}}
+			{{if not .Locked}}
 			<a href="{{.HomeURL}}">{{t "nav.home"}}</a>
 			<a href="{{.HomeURL}}?type=movie">{{t "nav.movies"}}</a>
 			<a href="{{.HomeURL}}?type=tv">{{t "nav.tv"}}</a>
 			<a href="{{pagePath "/bookmarks"}}">{{t "nav.saved"}}</a>
+			{{end}}
 			{{if tvAppOn}}<a href="{{pagePath "/tv-app"}}">{{t "nav.tv_app"}}</a>{{end}}
 		</nav>
 		<!-- Kept outside .site-nav so both survive the mobile breakpoint that hides
 		     the nav; the wrapper owns the margin-left:auto that pins them right. -->
 		<div class="header-actions">
+		{{if not .Locked}}
 		<a class="saved-link" href="{{pagePath "/bookmarks"}}" aria-label="{{t "bookmarks.title"}}">
 			<span class="bm-icon" aria-hidden="true"></span>
 			<span class="saved-label">{{t "nav.saved"}}</span>
 			<span class="saved-count" hidden>0</span>
 		</a>
+		{{end}}
 		{{if .User}}
 		{{/* A native <details> menu — no framework, no build step, matching the
 		     rest of the site's vanilla JS. */}}

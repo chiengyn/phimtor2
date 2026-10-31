@@ -211,46 +211,6 @@ func (s *Store) TitleCardsByIDs(ctx context.Context, locale Locale, ids []int64)
 	return out, rows.Err()
 }
 
-// SitemapEntry is one indexable title for the XML sitemap. Title/OriginalTitle
-// feed the SEO slug in the emitted <loc>.
-type SitemapEntry struct {
-	ID            int64
-	Title         string
-	OriginalTitle string
-	UpdatedAt     time.Time
-}
-
-// SitemapTitles lists every title with its last-modified time, newest first,
-// for sitemap.xml. Missing timestamps fall back to "now" so the entry is still
-// emitted with a valid <lastmod>.
-func (s *Store) SitemapTitles(ctx context.Context, locale Locale) ([]SitemapEntry, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT t.id, `+localizedTitleExpr+`, t.original_title, t.updated_at
-		 FROM titles t `+titleLocaleJoins+` ORDER BY t.updated_at DESC`, catalogLocaleArgs(locale)...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []SitemapEntry
-	for rows.Next() {
-		var e SitemapEntry
-		var origTitle sql.NullString
-		var updated sql.NullTime
-		if err := rows.Scan(&e.ID, &e.Title, &origTitle, &updated); err != nil {
-			return nil, err
-		}
-		e.OriginalTitle = origTitle.String
-		if updated.Valid {
-			e.UpdatedAt = updated.Time
-		} else {
-			e.UpdatedAt = time.Now()
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
 // rowLimit caps how many titles each browse row carries. Rows are horizontal
 // carousels, so there is no point loading the whole catalog into one; the row
 // heading links to the filtered grid (which paginates) for the full list.

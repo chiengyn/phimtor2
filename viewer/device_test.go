@@ -217,12 +217,13 @@ func routesOf(t *testing.T, s *Server) map[string]bool {
 	return found
 }
 
-// The TV read API is always registered — browsing without an account is
-// supported and the app degrades to 720p exactly as an anonymous browser does.
+// The TV read API is always registered — an unpaired TV may still browse the
+// catalog, though resolutionLock lets it play nothing until it pairs.
 // The PAIRING routes follow /auth/google/*: without accounts there is nothing to
 // pair to, and registering them would dangle a flow that could only ever fail.
 //
-// This is the documented rollback (GOOGLE_CLIENT_ID=""), so pin it.
+// Accounts off is local-dev only now (NewServer refuses it in production), but
+// the registration rule still holds, so pin it.
 func TestTVRouteRegistration(t *testing.T) {
 	readRoutes := []string{
 		"GET /api/tv/v1/home",

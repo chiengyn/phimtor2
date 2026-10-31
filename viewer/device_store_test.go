@@ -485,11 +485,14 @@ func TestTVWatchLocksMatchResolutionLockIntegration(t *testing.T) {
 		return locks
 	}
 
-	// Anonymous: 720p free, 1080p is the registration nudge, 2160p asks for
-	// sign-in first because entitlements hang off an account.
+	// Anonymous: the site is members-only, so an unpaired TV still sees every
+	// source but may play none of them — each one asks it to sign in.
 	anon := get(nil)
-	if anon["720p"] != lockNone || anon["1080p"] != lockMember {
-		t.Errorf("anonymous locks wrong: %v", anon)
+	for _, res := range []string{"720p", "1080p", "2160p"} {
+		if anon[res] != lockMember {
+			t.Errorf("anonymous locks wrong: %v", anon)
+			break
+		}
 	}
 
 	// Signed in but unentitled: 1080p opens, 4K still does not.

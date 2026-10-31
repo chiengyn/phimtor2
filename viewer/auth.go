@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // ctxKey is a private type so nothing outside this file can collide with our
@@ -125,8 +126,78 @@ func (s *Server) deviceUser(r *http.Request) (userID, deviceID int64, ok bool) {
 	return userID, deviceID, true
 }
 
-// requireUser gates the write APIs. Read pages never use it — they degrade to
-// the anonymous rendering instead of redirecting.
+// requireLogin is the members-only gate in front of every catalog page and the
+// browser APIs that read the catalog. A page redirects to the localized /login,
+// carrying where the visitor was headed; an API answers 401 JSON, exactly as
+// requireUser does.
+//
+// With accounts off it stands down: there would be no way through it. NewServer
+// refuses that config in production, so this only ever opens a laptop.
+func (s *Server) requireLogin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if userFrom(r.Context()) != nil || !s.google.enabled() {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		// The redirect depends on the cookie, so no cache may replay it to a
+		// visitor who has since signed in.
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, loginPageURL(localeFromContext(r.Context()), r.URL.RequestURI(), ""), http.StatusFound)
+	})
+}
+
+// loginPageURL is the localized front door, remembering where to go afterwards
+// and, after a failed attempt, why it failed. A next of the locale's own home
+// is left off, so the plain front door keeps a clean URL.
+func loginPageURL(locale Locale, next, reason string) string {
+	values := url.Values{}
+	if next = safeNext(next); next != "/" && next != localeHome(locale) {
+		values.Set("next", next)
+	}
+	if reason != "" {
+		values.Set("login", reason)
+	}
+	return localeQueryURL(locale, "/login", values)
+}
+
+// loginData is the view model for templates/login.html.
+type loginData struct {
+	// GoogleURL starts the OAuth flow and returns to Next afterwards.
+	GoogleURL string
+	// Error is the localized reason the last attempt failed, or "".
+	Error string
+}
+
+// handleLoginPage is the front door of the members-only site. There is no
+// separate registration: a first Google sign-in creates the account
+// (UpsertGoogleUser), so the one button serves both.
+func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	locale := localeFromContext(r.Context())
+	next := safeNext(r.URL.Query().Get("next"))
+	if next == "/" {
+		next = localeHome(locale)
+	}
+	if userFrom(r.Context()) != nil {
+		http.Redirect(w, r, next, http.StatusFound)
+		return
+	}
+	data := loginData{GoogleURL: "/auth/google/start?next=" + url.QueryEscape(next)}
+	switch r.URL.Query().Get("login") {
+	case "error":
+		data.Error = tr(locale, "login.error")
+	case "unverified":
+		data.Error = tr(locale, "login.unverified")
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.render(w, r, s.login, data)
+}
+
+// requireUser gates the write APIs. Read pages use requireLogin instead, which
+// redirects a signed-out visitor to /login rather than answering 401.
 func (s *Server) requireUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if userFrom(r.Context()) == nil {
@@ -157,7 +228,7 @@ func (s *Server) handleGoogleStart(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGoogleCallback completes the flow. Every failure path lands the visitor
-// back on the site with ?login=error rather than on an error page — a failed
+// back on /login with ?login=error rather than on an error page — a failed
 // login should never be a dead end — and never echoes anything Google returned.
 func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	nonce, next, ok := s.sess.readState(r)
@@ -209,8 +280,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 
 func authErrorURL(next, reason string) string {
 	next = safeNext(next)
-	locale := localeFromRequestPath(next)
-	return localeHome(locale) + "?login=" + url.QueryEscape(reason)
+	return loginPageURL(localeFromRequestPath(next), next, reason)
 }
 
 // handleLogout clears the session. POST-only (the header renders it as a form)

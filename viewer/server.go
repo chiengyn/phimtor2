@@ -97,6 +97,10 @@ type Server struct {
 	// tvApp is the guide to installing the TV app with Downloader. Parsed
 	// unconditionally, like link; routed only with TV_APK_DIR.
 	tvApp localizedTemplate
+
+	// login is the members-only front door. Parsed unconditionally, like link;
+	// routed only with accounts.
+	login localizedTemplate
 }
 
 type localizedTemplate map[Locale]*template.Template
@@ -116,6 +120,13 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 	if ephemeral {
 		log.Printf("SESSION_SECRET unset — using an ephemeral key, so sessions will not survive a restart (set one with: openssl rand -hex 32)")
 	}
+	// The catalog is members-only (requireLogin), and a gate nobody can sign in
+	// through is no gate: without accounts it stands down and the whole site is
+	// open. Fine for a laptop, never for production — so refuse, exactly as
+	// SESSION_SECRET does, rather than silently publish everything.
+	if cfg.PublicURL != "" && !cfg.accountsEnabled() {
+		return nil, errors.New("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required when VIEWER_PUBLIC_URL is set: the site is members-only")
+	}
 
 	s := &Server{
 		store:       store,
@@ -133,7 +144,7 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		s.google = newGoogleClient(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.oauthRedirectURL())
 		log.Printf("Google sign-in enabled (redirect URI %s)", cfg.oauthRedirectURL())
 	} else {
-		log.Printf("Google sign-in disabled (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET unset)")
+		log.Printf("Google sign-in disabled (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET unset) — the members-only gate is OFF and every page is public")
 	}
 	// Left nil when unconfigured (billingService is nil-safe), which is what makes
 	// resolutionLock fall back to the pre-billing "sắp ra mắt" 4K tier.
@@ -365,7 +376,7 @@ func (s *Server) parseTemplates() error {
 	s.home, s.detail, s.watch = localizedTemplate{}, localizedTemplate{}, localizedTemplate{}
 	s.bookmarks, s.notFound = localizedTemplate{}, localizedTemplate{}
 	s.plans, s.invoice = localizedTemplate{}, localizedTemplate{}
-	s.link, s.tvApp = localizedTemplate{}, localizedTemplate{}
+	s.link, s.tvApp, s.login = localizedTemplate{}, localizedTemplate{}, localizedTemplate{}
 	for _, locale := range supportedLocales {
 		var err error
 		if s.home[locale], err = parse(locale, "layout.html", "home.html", "rows.html", "grid.html"); err != nil {
@@ -394,6 +405,9 @@ func (s *Server) parseTemplates() error {
 		}
 		if s.tvApp[locale], err = parse(locale, "layout.html", "tv_app.html"); err != nil {
 			return fmt.Errorf("parse %s tv app templates: %w", locale, err)
+		}
+		if s.login[locale], err = parse(locale, "layout.html", "login.html"); err != nil {
+			return fmt.Errorf("parse %s login templates: %w", locale, err)
 		}
 	}
 	return nil
@@ -425,23 +439,35 @@ func (s *Server) setupRouter() {
 	r.Get("/{locale}", s.handleLocaleSlash)
 	r.Route("/{locale}", func(r chi.Router) {
 		r.Use(s.requireLocale)
-		r.Get("/", s.handleHome)
-		r.Get("/titles/{id}", s.handleDetail)
-		r.Get("/bookmarks", s.handleBookmarks)
-		r.Get("/watch/movie/{id}", s.handleWatchMovie)
-		r.Get("/watch/episode/{id}", s.handleWatchEpisode)
-		if s.billing.enabled() {
-			r.Get("/plans", s.handlePlansPage)
-			r.Get("/payment/{ref}", s.handleInvoicePage)
-		}
-		// Where someone types the code their television is showing. Registered
-		// only with accounts, like /auth/google/*: approving a pairing binds it
-		// to a user, so without sign-in the page could only ever fail.
+		// The site is members-only: every catalog page sits behind requireLogin,
+		// which sends a signed-out visitor to /login and back again afterwards.
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireLogin)
+			r.Get("/", s.handleHome)
+			r.Get("/titles/{id}", s.handleDetail)
+			r.Get("/bookmarks", s.handleBookmarks)
+			r.Get("/watch/movie/{id}", s.handleWatchMovie)
+			r.Get("/watch/episode/{id}", s.handleWatchEpisode)
+			if s.billing.enabled() {
+				r.Get("/plans", s.handlePlansPage)
+				r.Get("/payment/{ref}", s.handleInvoicePage)
+			}
+			// Where someone types the code their television is showing. Registered
+			// only with accounts, like /auth/google/*: approving a pairing binds it
+			// to a user, so without sign-in the page could only ever fail.
+			if s.google.enabled() {
+				r.Get("/link", s.handleLinkPage)
+			}
+		})
+		// The front door, and the one page besides the TV guide a signed-out
+		// visitor can see. Only with accounts — without them the gate is down.
 		if s.google.enabled() {
-			r.Get("/link", s.handleLinkPage)
+			r.Get("/login", s.handleLoginPage)
 		}
 		// How to install the TV app. Only with TV_APK_DIR, like /tv itself:
 		// without an APK to serve, every step of the guide would end in a 404.
+		// Public on purpose: it carries no catalog, and the TV signs in by
+		// pairing once installed.
 		if s.tvApkDir != "" {
 			r.Get("/tv-app", s.handleTVAppPage)
 		}
@@ -455,9 +481,14 @@ func (s *Server) setupRouter() {
 	}
 
 	// Viewer-mediated playback API (same-origin, called by the watch page JS).
+	// Deliberately NOT behind requireLogin: the TV app calls it too, and
+	// resolutionLock already answers 401 to an anonymous caller for every
+	// quality, which both clients turn into their sign-in gate.
 	r.Post("/api/sources/{videoID}/prepare", s.handlePrepareSource)
+	// Also left open: the TV's player fetches subtitle files without its bearer
+	// token, and a subtitle file is useless without the video it belongs to.
 	r.Get("/api/subtitles/{id}/file", s.handleSubtitleFile)
-	r.Get("/api/catalog/cards", s.handleCatalogCards)
+	r.With(s.requireLogin).Get("/api/catalog/cards", s.handleCatalogCards)
 	// Watch-session liveness: the watch page heartbeats while playing and beacons
 	// a leave on page hide, so the torrent is dropped the instant its last viewer
 	// goes away (see watchtracker.go).
@@ -502,9 +533,10 @@ func (s *Server) setupRouter() {
 	r.Post("/api/watch/heartbeat", s.handleWatchHeartbeat)
 	r.Post("/api/watch/leave", s.handleWatchLeave)
 
-	// The Android TV client. Read routes are always registered — browsing
-	// without an account is supported, and the app degrades to 720p exactly as
-	// an anonymous browser does. The PAIRING routes follow the same rule as
+	// The Android TV client. Read routes are always registered and NOT behind
+	// requireLogin yet — an unpaired TV still browses the catalog, but every
+	// source is sign-in locked (resolutionLock), so it cannot play anything
+	// until it pairs. The PAIRING routes follow the same rule as
 	// /auth/google/*: without accounts there is nothing to pair to.
 	//
 	// The path is versioned because this is the one client that cannot be
@@ -1175,12 +1207,6 @@ func (s *Server) fillSubtitleSearch(d *watchData, r *http.Request, titleID int64
 // unconfigured nobody can play them at all, which is the pre-billing behaviour.
 var lockedResolutions = map[string]bool{"2160p": true}
 
-// memberResolutions are qualities reserved for signed-in ACCOUNTS. Anonymous
-// visitors see the chip and are offered sign-in instead — this is the
-// registration nudge, not a paywall. Everything not listed here (720p) stays
-// freely playable, so the site is still usable without an account.
-var memberResolutions = map[string]bool{"1080p": true}
-
 // Why a source is not playable for this visitor. The empty string means it is.
 // lockPaid and lockUpgrade are deliberately distinct: lockPaid is "nobody can
 // play this yet" (billing unconfigured) and lockUpgrade is "you, specifically,
@@ -1209,13 +1235,16 @@ type titleAccess struct {
 //
 // It is a method on *Server, not a bare function, because two tiers must switch
 // OFF entirely when their feature is unconfigured:
-//   - With no GOOGLE_CLIENT_ID there are no /auth/google/* routes and no login
-//     button, so gating 1080p would strand every visitor at 720p with no way to
-//     unlock it.
+//   - The site is members-only (requireLogin), so with accounts on an anonymous
+//     caller can play NOTHING. The pages never reach here anonymously; this is
+//     what holds the line for the prepare endpoint and for the TV app, which
+//     still browses without pairing. With no GOOGLE_CLIENT_ID (local dev only —
+//     NewServer refuses it in production) there is no way to sign in, so the
+//     gate stands down rather than strand everyone.
 //   - With no crypto rail there is nothing to SELL, so 4K falls back to
 //     "sắp ra mắt" rather than dangling an upgrade nobody can buy.
 //
-// Turning either feature's env vars off stays the clean rollback (see
+// Unsetting the billing env vars stays the clean rollback for 4K (see
 // CLAUDE.md). Test both configs whenever you touch this.
 //
 // Note the order: an EXISTING entitlement is honoured before the billing-off
@@ -1225,20 +1254,17 @@ type titleAccess struct {
 // the operator unsets the wallet env vars. Billing-off means "you cannot buy",
 // never "what you hold is void".
 func (s *Server) resolutionLock(res string, a titleAccess) string {
-	switch {
-	case lockedResolutions[res]:
+	if !a.signedIn && s.google.enabled() {
+		return lockMember
+	}
+	if lockedResolutions[res] {
 		switch {
 		case a.unlimited || a.unlocked:
 			return lockNone // entitled, by whatever route
 		case !s.billing.enabled():
 			return lockPaid
-		case !a.signedIn:
-			// Entitlements hang off an account, so sign-in is step one of paying.
-			return lockMember
 		}
 		return lockUpgrade
-	case memberResolutions[res] && !a.signedIn && s.google.enabled():
-		return lockMember
 	}
 	return lockNone
 }
@@ -1735,37 +1761,35 @@ func (s *Server) siteJSONLD(locale Locale) template.JS {
 	return template.JS(b)
 }
 
+// handleRobots keeps crawlers to the only pages a signed-out visitor can see —
+// the login front door and the TV install guide (plus the CSS they render
+// with). Everything else answers a crawler with a redirect to /login anyway.
 func (s *Server) handleRobots(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: %s/sitemap.xml\n", s.baseURL(r))
+	fmt.Fprintf(w, "User-agent: *\nAllow: /$\nAllow: /*/login$\nAllow: /*/tv-app$\nAllow: /static/\nDisallow: /\n\nSitemap: %s/sitemap.xml\n", s.baseURL(r))
 }
 
-// handleSitemap emits an XML sitemap of the home page plus every title detail
-// page, with each title's last-modified date so crawlers can prioritise updates.
+// frontDoor is the page a signed-out visitor lands on: /login on a
+// members-only site, the home page when accounts are off and the gate is down.
+func (s *Server) frontDoor(locale Locale) string {
+	if s.google.enabled() {
+		return localeURL(locale, "/login")
+	}
+	return localeHome(locale)
+}
+
+// handleSitemap lists the public pages: each locale's front door and, when the
+// TV app is published, its install guide. Titles are members-only, so they are
+// deliberately absent — a crawler would only be redirected to /login.
 func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	base := s.baseURL(r)
-	localized := make(map[Locale][]SitemapEntry, len(supportedLocales))
-	byID := make(map[Locale]map[int64]SitemapEntry, len(supportedLocales))
-	for _, locale := range supportedLocales {
-		entries, err := s.store.SitemapTitles(r.Context(), locale)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		localized[locale] = entries
-		byID[locale] = make(map[int64]SitemapEntry, len(entries))
-		for _, entry := range entries {
-			byID[locale][entry.ID] = entry
-		}
-	}
-
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">` + "\n")
 	for _, locale := range supportedLocales {
-		b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, localeHome(locale)))
+		b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, s.frontDoor(locale)))
 		for _, alternate := range supportedLocales {
-			b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, localeHome(alternate)))
+			b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, s.frontDoor(alternate)))
 		}
 		b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="x-default" href="%s/"/><changefreq>daily</changefreq><priority>1.0</priority></url>`+"\n", base))
 		if s.tvApkDir != "" {
@@ -1774,16 +1798,6 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 				b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, localeURL(alternate, "/tv-app")))
 			}
 			b.WriteString("<changefreq>monthly</changefreq></url>\n")
-		}
-		for _, entry := range localized[locale] {
-			b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, titlePath(locale, entry.ID, entry.Title, entry.OriginalTitle)))
-			for _, alternate := range supportedLocales {
-				other, ok := byID[alternate][entry.ID]
-				if ok {
-					b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, titlePath(alternate, other.ID, other.Title, other.OriginalTitle)))
-				}
-			}
-			b.WriteString(fmt.Sprintf("<lastmod>%s</lastmod><changefreq>weekly</changefreq></url>\n", entry.UpdatedAt.Format("2006-01-02")))
 		}
 	}
 	b.WriteString("</urlset>\n")
@@ -1803,7 +1817,8 @@ type pageData struct {
 	HomeURL            string
 	Languages          []languageOption
 	ClientMessagesJSON string
-	// User is nil for an anonymous visitor, which is the common case.
+	// User is nil for a signed-out visitor — on a members-only site, only ever
+	// on the login page, the TV guide or a 404.
 	User *User
 	// LoginURL is the sign-in link for THIS page, so a visitor comes back to
 	// where they were. Empty when accounts are disabled, which hides the button.
@@ -1814,6 +1829,10 @@ type pageData struct {
 	// Path is the current request's path+query, so the logout form returns the
 	// visitor to where they were.
 	Path string
+	// Locked is true for a signed-out visitor on a members-only site — on the
+	// few pages they can reach (login, TV guide, 404). The header then hides
+	// the catalog nav, every link of which would only bounce back to /login.
+	Locked bool
 }
 
 // newPageData wraps a handler's view model with the shared per-request chrome.
@@ -1861,6 +1880,7 @@ func (s *Server) newPageData(r *http.Request, data any) pageData {
 		pd.SavedIDsJSON = jsonOrEmpty(ids)
 	}
 	pd.LoginURL = s.loginURL(r)
+	pd.Locked = pd.User == nil && s.google.enabled()
 	return pd
 }
 

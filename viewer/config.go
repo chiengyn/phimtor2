@@ -47,10 +47,11 @@ type Config struct {
 	ManagerInternalURL   string
 	ManagerInternalToken string
 
-	// Google sign-in (OAuth2 / OIDC). An empty GoogleClientID disables accounts
-	// entirely: the /auth routes are not registered and the header shows no login
-	// button, so an unconfigured deploy degrades to exactly the anonymous-only
-	// site this was before accounts existed. Secrets, so env-only (no flags).
+	// Google sign-in (OAuth2 / OIDC). The site is members-only, so these are
+	// REQUIRED once PublicURL is set (NewServer refuses to start otherwise).
+	// Empty locally disables accounts AND the members-only gate: no /auth or
+	// /login routes, no login button, every page open — a zero-setup laptop.
+	// Secrets, so env-only (no flags).
 	GoogleClientID     string
 	GoogleClientSecret string
 
