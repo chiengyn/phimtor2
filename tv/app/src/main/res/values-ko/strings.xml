@@ -6,6 +6,7 @@
     <string name="action_play">재생</string>
     <string name="action_retry">다시 시도</string>
     <string name="action_save">저장</string>
+    <string name="action_settings">설정</string>
     <string name="action_sign_in">로그인</string>
     <string name="action_sign_out">로그아웃</string>
     <string name="action_watch_movie">영화 보기</string>
@@ -33,7 +34,7 @@
     <string name="player_connecting">준비 중…</string>
     <string name="player_crypto_hint">암호화폐로 결제하세요. 낮은 화질은 기존처럼 계속 이용할 수 있습니다.</string>
     <string name="player_ended">재생 완료</string>
-    <string name="player_free_hint">계정은 무료입니다. 로그인 없이 바로 720p로 시청할 수 있습니다.</string>
+    <string name="player_free_hint">계정은 무료입니다. 한 번 로그인하면 바로 시청할 수 있습니다.</string>
     <string name="player_next_episode">다음 화</string>
     <string name="player_no_peers">이 소스는 불러오는 속도가 느리거나 시더가 없습니다. 다시 시도하거나 다른 소스를 선택하세요.</string>
     <string name="player_no_source">이 작품에는 이용 가능한 소스가 없습니다.</string>
@@ -80,4 +81,6 @@
     <string name="update_open_settings">설정 열기</string>
     <string name="update_permission">TV 설정에서 phimnet의 앱 설치를 허용한 뒤 돌아와서 계속하세요.</string>
     <string name="update_up_to_date">최신 버전을 사용 중입니다.</string>
+    <string name="welcome_heading">회원 전용</string>
+    <string name="welcome_intro">로그인하면 phimnet에서 영화와 TV 프로그램을 둘러보고 시청할 수 있습니다.</string>
 </resources>

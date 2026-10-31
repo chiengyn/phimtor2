@@ -82,8 +82,9 @@ matching the repo's preference for small explicit clients).
 - `update/` — the in-app updater (see *In-app updates*): `UpdatePolicy` and
   `ApkDownloader` are JVM-tested; `Updater` and `InstallStatusReceiver` drive
   Android's `PackageInstaller`.
-- `ui/` — one package per screen (home, browse, detail, player, link, settings)
-  and `ui/common/` (cards, top bar, QR, `Load`, focus helper, `ChoiceChip`).
+- `ui/` — one package per screen (welcome, home, browse, detail, player, link,
+  settings) and `ui/common/` (cards, top bar, QR, `Load`, focus helper,
+  `ChoiceChip`).
 
 ## Invariants — each of these has broken, or would silently
 
@@ -159,6 +160,30 @@ matching the repo's preference for small explicit clients).
   Controls auto-hide after 5 s while playing, never while paused. `PlayerView`
   must stay non-focusable or it steals the remote.
 - Returning from a title restores focus to the card that was opened.
+
+### Pair first (`ui/welcome/`, `ui/Nav.kt`)
+
+The viewer is members-only, so an unpaired TV starts on **`WelcomeRoute`**, not
+Home. The **server** decides whether that matters — the app has no rule of its
+own: `/me` carries `sign_in_required` (true whenever the viewer has accounts).
+- **Required** → the welcome screen *is* the pairing screen (`LinkScreen` in
+  front-door mode: "Members only" heading, code + QR, and **Settings** where Back
+  would be — there is nothing behind it). Nothing from the catalog is requested
+  until pairing completes; then it replaces itself with Home, so Back from Home
+  leaves the app.
+- **Not required** (no accounts, or a viewer older than the field — the DTO
+  defaults it to `false`) → it steps aside to Home at once, as before.
+- **Unreachable** → `ErrorBox` with **Try again *and* Settings**: a wrong server
+  address must not be a dead end.
+- Settings opened from there (`SettingsRoute(frontDoor = true)`) shows **no tab
+  bar**, whose tabs would lead past pairing, and its Sign in goes back to the
+  pairing screen.
+- An unpaired TV never sees Home, where the update offer waits, so the welcome
+  screen shows the `UpdatePanel` too — an app too old to pair must still update.
+- **Losing the pairing returns to the front door from anywhere** (`AppNav`):
+  sign-out, changing the server, or a token `/me` no longer honours (checked on
+  every launch and token/server change; offline says nothing). It clears the
+  back stack. On an open server the welcome screen then steps aside again.
 
 ### Pairing (`auth/Pairing.kt`, `ui/link/`)
 
@@ -256,7 +281,7 @@ viewer's `/api/tv/v1/app` manifest (version, SHA-256, size, absolute download UR
 
 ## Testing
 
-- **Unit tests** (`app/src/test`, 64): stream URLs, quality ladder, readiness,
+- **Unit tests** (`app/src/test`, 65): stream URLs, quality ladder, readiness,
   heartbeat timing, recovery classification, pairing flow (virtual time), server
   URL and locale parsing, the update policy and the verifying APK download, and
   the API client against MockWebServer.
@@ -296,6 +321,16 @@ open-ended ranges at the right clusters** — the shape the streamer's
 `PrioritizeSeek` keys on; heartbeat every 10 s, leave → `DROP` on end and on
 Home, re-prepare and resume on return; embedded audio/subtitle tracks; the saved
 Vietnamese `.srt`; sign-out revoking the pairing; and the R8 (`minified`) build.
+
+Pair first, on the debug **and** `minified` builds, against a stand-in viewer
+serving `/me`, `device/*` and `home`: a fresh install opens on the pairing
+screen with Settings focused and requests no catalog; front-door Settings has no
+tabs and its Sign in returns to pairing; approval lands on Home, and Back from
+Home exits; relaunch while paired goes straight to Home; sign-out revokes and
+returns to pairing with an empty back stack; a token revoked while the app was
+closed returns to pairing on next launch; `sign_in_required: false` goes
+straight to Home unpaired; an unreachable server offers Try again + Settings.
+Not yet run against the real viewer (its `/me` field ships with this change).
 
 The in-app update, on the `minified` build against a local viewer serving a
 published `latest.json`: banner on Home with the hero intact; Update → the

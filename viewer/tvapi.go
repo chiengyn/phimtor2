@@ -426,21 +426,29 @@ func (s *Server) handleTVWatchEpisode(w http.ResponseWriter, r *http.Request) {
 
 // handleTVMe reports who the caller is, so the app can render its account
 // screen and decide whether to offer pairing. Anonymous is a 200 with
-// signed_in false, not a 401 — browsing without an account is supported, and a
-// 401 here would make the app treat it as an error state.
+// signed_in false, not a 401 — a 401 here would make the app treat it as an
+// error state.
+//
+// sign_in_required is the members-only gate, stated by the server rather than
+// assumed by the app: true whenever accounts are on (requireLogin). An unpaired
+// TV that reads it opens on its pair-first screen instead of Home; a server
+// without accounts, or one older than the field (decoded as false), keeps the
+// app browsing as before.
 func (s *Server) handleTVMe(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
+	required := s.google.enabled()
 	if u == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"signed_in": false})
+		writeJSON(w, http.StatusOK, map[string]any{"signed_in": false, "sign_in_required": required})
 		return
 	}
 	now := time.Now()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"signed_in":    true,
-		"name":         u.DisplayName(),
-		"email":        u.Email,
-		"avatar":       u.AvatarURL,
-		"entitled":     u.HasPass(now) || u.HasComp(now),
-		"entitled_til": u.EntitledUntil(now),
+		"signed_in":        true,
+		"sign_in_required": required,
+		"name":             u.DisplayName(),
+		"email":            u.Email,
+		"avatar":           u.AvatarURL,
+		"entitled":         u.HasPass(now) || u.HasComp(now),
+		"entitled_til":     u.EntitledUntil(now),
 	})
 }

@@ -631,11 +631,15 @@ Flat single `main` package.
     `?locale=`. Row labels are **resolved server-side**, so a locale the app
     ships no strings for still reads correctly.
   - **Read routes are always registered and not behind `requireLogin`;
-    pairing routes need accounts.** An unpaired TV browses the catalog but every
-    source is sign-in locked, so it plays nothing until it pairs (its existing
-    `401 → Lock.Member` gate handles that). Gating the read routes too needs a
-    "pair first" screen in the app, because installed APKs show a generic error
-    on a 401 from them. Pinned by `TestTVRouteRegistration`.
+    pairing routes need accounts.** An unpaired TV can still call them, but
+    every source is sign-in locked, so it plays nothing until it pairs. Pinned
+    by `TestTVRouteRegistration`.
+  - **`/me` states `sign_in_required`** (true whenever accounts are on), and the
+    app opens unpaired TVs on its pair-first screen when it reads true — so the
+    rule lives here, not in the app (`TestTVMeStatesWhetherSignInIsRequired`).
+    APKs from before that screen still browse unpaired, which is why the read
+    routes are not gated yet: a 401 from them is a generic error in those
+    builds. Gate them once those TVs have updated.
   - **Pairing is device-code (RFC 8628 shapes), not OAuth.** The TV shows a
     short code, the user approves it at `/{locale}/link` on a phone that is
     already signed in, and the TV trades its long `device_code` for a bearer

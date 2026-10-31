@@ -6,6 +6,7 @@
     <string name="action_play">再生</string>
     <string name="action_retry">再試行</string>
     <string name="action_save">保存</string>
+    <string name="action_settings">設定</string>
     <string name="action_sign_in">ログイン</string>
     <string name="action_sign_out">ログアウト</string>
     <string name="action_watch_movie">映画を見る</string>
@@ -33,7 +34,7 @@
     <string name="player_connecting">準備中…</string>
     <string name="player_crypto_hint">暗号資産で支払えます。低い画質はこれまでどおり視聴できます。</string>
     <string name="player_ended">再生終了</string>
-    <string name="player_free_hint">アカウントは無料です。ログインせずにすぐ 720p で視聴できます。</string>
+    <string name="player_free_hint">アカウントは無料です。一度ログインすれば視聴を始められます。</string>
     <string name="player_next_episode">次のエピソード</string>
     <string name="player_no_peers">このソースは読み込みが遅いか、シーダーがいません。再試行するか、別のソースを選択してください。</string>
     <string name="player_no_source">この作品には利用できるソースがありません。</string>
@@ -80,4 +81,6 @@
     <string name="update_open_settings">設定を開く</string>
     <string name="update_permission">テレビの設定で phimnet によるアプリのインストールを許可してから、戻って続けてください。</string>
     <string name="update_up_to_date">最新バージョンです。</string>
+    <string name="welcome_heading">会員限定</string>
+    <string name="welcome_intro">ログインすると、phimnet で映画やドラマを探して視聴できます。</string>
 </resources>

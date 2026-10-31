@@ -41,6 +41,7 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.OutlinedButton
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.google.zxing.BarcodeFormat
@@ -73,9 +74,16 @@ fun LoadingBox(modifier: Modifier = Modifier, label: String? = null) {
 /**
  * An error with a way out. The retry button takes focus at once: on a TV a
  * failure screen without a focused action is a dead end the remote cannot leave.
+ * [secondary] adds a second way out beside it (label to action) — the pair-first
+ * screen's Settings, where a wrong server address is fixed.
  */
 @Composable
-fun ErrorBox(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+fun ErrorBox(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    secondary: Pair<String, () -> Unit>? = null,
+) {
     val focus = remember { FocusRequester() }
     Column(
         modifier.fillMaxSize().padding(48.dp),
@@ -84,8 +92,13 @@ fun ErrorBox(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier
     ) {
         Text(message, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
-        Button(onClick = onRetry, modifier = Modifier.focusRequester(focus)) {
-            Text(stringResource(R.string.action_retry))
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Button(onClick = onRetry, modifier = Modifier.focusRequester(focus)) {
+                Text(stringResource(R.string.action_retry))
+            }
+            if (secondary != null) {
+                OutlinedButton(onClick = secondary.second) { Text(secondary.first) }
+            }
         }
     }
     LaunchedEffect(Unit) { focus.focusWhenReady() }

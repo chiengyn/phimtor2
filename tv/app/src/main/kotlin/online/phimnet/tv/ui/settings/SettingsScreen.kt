@@ -37,6 +37,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -62,8 +63,13 @@ import online.phimnet.tv.ui.theme.Accent
 import online.phimnet.tv.ui.theme.Surface2
 import online.phimnet.tv.ui.theme.TextMuted
 
+/**
+ * [onTab] null is the front-door variant, opened from the pair-first screen:
+ * no tab bar (its tabs would lead past pairing), so the account button takes
+ * the initial focus instead, and Back returns to pairing.
+ */
 @Composable
-fun SettingsScreen(onTab: (Tab) -> Unit, onSignIn: () -> Unit) {
+fun SettingsScreen(onTab: ((Tab) -> Unit)?, onSignIn: () -> Unit) {
     val graph = LocalGraph.current
     val prefs by graph.settings.prefs.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -82,18 +88,20 @@ fun SettingsScreen(onTab: (Tab) -> Unit, onSignIn: () -> Unit) {
             accountButton.focusWhenReady()
         }
     }
-
-    // A token the server no longer honours (revoked from the account page, or
-    // the server's secret rotated) reads as signed out on /me. Forget it here,
-    // so the screen never claims a sign-in the server has already ended.
-    LaunchedEffect(current.token, current.serverUrl) {
-        if (current.token == null) return@LaunchedEffect
-        val me = runCatching { graph.api.me() }.getOrNull() ?: return@LaunchedEffect
-        if (!me.signedIn) graph.settings.signOut()
-    }
+    // Without a tab bar there is nothing else to start on.
+    if (onTab == null) LaunchedEffect(Unit) { accountButton.focusWhenReady() }
 
     Column(Modifier.fillMaxSize()) {
-        TopBar(current = Tab.Account, onSelect = onTab, focusCurrent = true)
+        if (onTab != null) {
+            TopBar(current = Tab.Account, onSelect = onTab, focusCurrent = true)
+        } else {
+            Text(
+                "phimnet",
+                modifier = Modifier.padding(start = 48.dp, top = 24.dp, bottom = 8.dp),
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black),
+                color = Accent,
+            )
+        }
         Column(
             Modifier
                 .fillMaxSize()

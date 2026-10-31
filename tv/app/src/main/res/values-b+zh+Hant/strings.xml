@@ -6,6 +6,7 @@
     <string name="action_play">播放</string>
     <string name="action_retry">重試</string>
     <string name="action_save">儲存</string>
+    <string name="action_settings">設定</string>
     <string name="action_sign_in">登入</string>
     <string name="action_sign_out">登出</string>
     <string name="action_watch_movie">觀看電影</string>
@@ -33,7 +34,7 @@
     <string name="player_connecting">正在準備…</string>
     <string name="player_crypto_hint">使用加密貨幣付款。較低畫質仍可照常觀看。</string>
     <string name="player_ended">播放結束</string>
-    <string name="player_free_hint">帳戶可免費註冊。無需登入即可立即觀看 720p。</string>
+    <string name="player_free_hint">帳戶可免費註冊。登入一次即可開始觀看。</string>
     <string name="player_next_episode">下一集</string>
     <string name="player_no_peers">此來源載入緩慢或沒有種子。請重試或選擇其他來源。</string>
     <string name="player_no_source">此影片尚無可用來源。</string>
@@ -80,4 +81,6 @@
     <string name="update_open_settings">開啟設定</string>
     <string name="update_permission">請在電視設定中允許 phimnet 安裝應用程式，然後返回繼續。</string>
     <string name="update_up_to_date">已是最新版本。</string>
+    <string name="welcome_heading">僅限會員</string>
+    <string name="welcome_intro">登入後即可在 phimnet 瀏覽和觀看電影與影集。</string>
 </resources>

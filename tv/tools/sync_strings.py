@@ -64,10 +64,21 @@ REUSED = {
     "player_free_hint": "watch.free_hint",
     "player_crypto_hint": "watch.crypto_hint",
     "player_play_pause": "watch.play_pause",
+    # The pair-first screen says what the site's login page says.
+    "welcome_heading": "login.heading",
+    "welcome_intro": "login.intro",
 }
 
 # name -> {locale: text}; app-only copy.
 NEW = {
+    "action_settings": {
+        "vi": "Cài đặt",
+        "en": "Settings",
+        "zh-cn": "设置",
+        "zh-tw": "設定",
+        "ko": "설정",
+        "ja": "設定",
+    },
     "action_retry": {"vi": "Thử lại", "en": "Try again", "zh-cn": "重试", "zh-tw": "重試", "ko": "다시 시도", "ja": "再試行"},
     "action_save": {"vi": "Lưu", "en": "Save", "zh-cn": "保存", "zh-tw": "儲存", "ko": "저장", "ja": "保存"},
     "error_network": {

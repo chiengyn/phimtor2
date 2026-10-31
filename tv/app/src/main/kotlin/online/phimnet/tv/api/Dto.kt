@@ -153,6 +153,12 @@ data class Watch(
 @Serializable
 data class Me(
     @SerialName("signed_in") val signedIn: Boolean = false,
+    /**
+     * The server is members-only: an unpaired TV opens on the pair-first screen.
+     * Defaults to false, so a viewer older than the field — or one without
+     * accounts, which says false — keeps the app browsing as it always did.
+     */
+    @SerialName("sign_in_required") val signInRequired: Boolean = false,
     val name: String = "",
     val email: String = "",
     val avatar: String = "",

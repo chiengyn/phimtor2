@@ -46,9 +46,14 @@ import online.phimnet.tv.ui.theme.TextMuted
 /**
  * Sign-in for a television: show a code, let a phone that is already signed in
  * approve it. No keyboard, no password, and no Google token ever on the TV.
+ *
+ * Reached two ways. From a gate or Settings it is "Sign in", with Back. As the
+ * FRONT DOOR of a members-only server ([onSettings] set, see WelcomeScreen) it
+ * is the first thing an unpaired TV shows: there is no Back to go to, so the
+ * way out is Settings instead — where a wrong server address is fixed.
  */
 @Composable
-fun LinkScreen(onDone: () -> Unit) {
+fun LinkScreen(onDone: () -> Unit, onSettings: (() -> Unit)? = null) {
     val graph = LocalGraph.current
     val context = LocalContext.current
     var state by remember { mutableStateOf<PairingState>(PairingState.Requesting) }
@@ -74,26 +79,35 @@ fun LinkScreen(onDone: () -> Unit) {
     }
 
     val failure = error
+    val settings = onSettings?.let { stringResource(R.string.action_settings) to it }
     when {
-        failure != null -> ErrorBox(errorText(failure), onRetry = { attempt++ })
-        state is PairingState.Showing -> CodePanel(state as PairingState.Showing, onDone)
+        failure != null -> ErrorBox(errorText(failure), onRetry = { attempt++ }, secondary = settings)
+        state is PairingState.Showing -> CodePanel(state as PairingState.Showing, onDone, onSettings)
         // Left unattended for an hour: stop polling until someone asks again.
-        state is PairingState.Idle -> ErrorBox(stringResource(R.string.link_idle), onRetry = { attempt++ })
+        state is PairingState.Idle ->
+            ErrorBox(stringResource(R.string.link_idle), onRetry = { attempt++ }, secondary = settings)
         else -> LoadingBox()
     }
 }
 
 @Composable
-private fun CodePanel(showing: PairingState.Showing, onBack: () -> Unit) {
+private fun CodePanel(showing: PairingState.Showing, onBack: () -> Unit, onSettings: (() -> Unit)?) {
     val code = showing.code
     val back = remember { FocusRequester() }
+    val frontDoor = onSettings != null
     Row(
         Modifier.fillMaxSize().padding(horizontal = 96.dp, vertical = 64.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(72.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(stringResource(R.string.action_sign_in), style = MaterialTheme.typography.displaySmall)
+            if (frontDoor) {
+                Text(stringResource(R.string.welcome_heading), style = MaterialTheme.typography.displaySmall)
+                Spacer(Modifier.height(12.dp))
+                Text(stringResource(R.string.welcome_intro), color = TextMuted, style = MaterialTheme.typography.titleMedium)
+            } else {
+                Text(stringResource(R.string.action_sign_in), style = MaterialTheme.typography.displaySmall)
+            }
             Spacer(Modifier.height(32.dp))
             Text(stringResource(R.string.link_step_open), color = TextMuted, style = MaterialTheme.typography.titleMedium)
             Text(code.verificationUri, style = MaterialTheme.typography.headlineSmall)
@@ -112,8 +126,8 @@ private fun CodePanel(showing: PairingState.Showing, onBack: () -> Unit) {
             Text(stringResource(R.string.link_waiting), style = MaterialTheme.typography.bodyLarge)
             Text(stringResource(R.string.link_refresh_note), color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(28.dp))
-            OutlinedButton(onClick = onBack, modifier = Modifier.focusRequester(back)) {
-                Text(stringResource(R.string.action_back))
+            OutlinedButton(onClick = onSettings ?: onBack, modifier = Modifier.focusRequester(back)) {
+                Text(stringResource(if (frontDoor) R.string.action_settings else R.string.action_back))
             }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

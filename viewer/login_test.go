@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -197,5 +198,33 @@ func TestResolutionLockIsMembersOnly(t *testing.T) {
 	}
 	if got := open.resolutionLock("2160p", anon); got != lockPaid {
 		t.Errorf("accounts off, 2160p = %q, want %q", got, lockPaid)
+	}
+}
+
+// The TV app opens on its pair-first screen only when the server says sign-in
+// is required, so /me must state it — and must say false when accounts are off,
+// or a self-hosted server without Google sign-in would strand the app on a
+// pairing screen whose routes do not exist.
+func TestTVMeStatesWhetherSignInIsRequired(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    *Server
+		want bool
+	}{
+		{"accounts on", &Server{google: newGoogleClient("client-id", "secret", "http://localhost/cb")}, true},
+		{"accounts off", &Server{}, false},
+	} {
+		w := httptest.NewRecorder()
+		tc.s.handleTVMe(w, httptest.NewRequest(http.MethodGet, "/api/tv/v1/me", nil))
+		var me struct {
+			SignedIn       bool `json:"signed_in"`
+			SignInRequired bool `json:"sign_in_required"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &me); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if me.SignedIn || me.SignInRequired != tc.want {
+			t.Errorf("%s: /me = %+v, want signed_in false, sign_in_required %v", tc.name, me, tc.want)
+		}
 	}
 }

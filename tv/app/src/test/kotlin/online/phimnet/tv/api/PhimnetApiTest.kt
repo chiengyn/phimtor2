@@ -6,6 +6,7 @@ import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -53,6 +54,18 @@ class PhimnetApiTest {
         respond(200, """{"signed_in":false}""")
         api.me()
         assertNull(server.takeRequest().headers["Authorization"])
+    }
+
+    // The pair-first screen opens only on the server's say-so. A viewer older
+    // than the field must read as "not required", or every TV pointed at it
+    // would be stuck on a pairing screen it never used to need.
+    @Test
+    fun signInIsRequiredOnlyWhenTheServerSaysSo() = runTest {
+        respond(200, """{"signed_in":false,"sign_in_required":true}""")
+        assertTrue(api.me().signInRequired)
+
+        respond(200, """{"signed_in":false}""")
+        assertFalse(api.me().signInRequired)
     }
 
     // An installed APK cannot be updated in step with the server, so a field the

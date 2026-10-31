@@ -6,6 +6,7 @@
     <string name="action_play">Phát</string>
     <string name="action_retry">Thử lại</string>
     <string name="action_save">Lưu</string>
+    <string name="action_settings">Cài đặt</string>
     <string name="action_sign_in">Đăng nhập</string>
     <string name="action_sign_out">Đăng xuất</string>
     <string name="action_watch_movie">Xem phim</string>
@@ -33,7 +34,7 @@
     <string name="player_connecting">Đang chuẩn bị…</string>
     <string name="player_crypto_hint">Thanh toán bằng tiền mã hoá. Các chất lượng thấp hơn vẫn xem được bình thường.</string>
     <string name="player_ended">Đã xem xong</string>
-    <string name="player_free_hint">Tài khoản miễn phí. Chất lượng 720p xem được ngay không cần đăng nhập.</string>
+    <string name="player_free_hint">Tài khoản miễn phí. Đăng nhập một lần là xem được.</string>
     <string name="player_next_episode">Tập tiếp theo</string>
     <string name="player_no_peers">Nguồn phát đang tải chậm hoặc không có seeder. Vui lòng thử lại hoặc chọn nguồn khác.</string>
     <string name="player_no_source">Chưa có nguồn phát cho nội dung này.</string>
@@ -80,4 +81,6 @@
     <string name="update_open_settings">Mở cài đặt</string>
     <string name="update_permission">Hãy cho phép phimnet cài đặt ứng dụng trong phần cài đặt của TV, rồi quay lại để tiếp tục.</string>
     <string name="update_up_to_date">Bạn đang dùng bản mới nhất.</string>
+    <string name="welcome_heading">Dành cho thành viên</string>
+    <string name="welcome_intro">Đăng nhập để xem phim lẻ và phim bộ trên phimnet.</string>
 </resources>
