@@ -80,6 +80,7 @@
   "login.register_note": "New here? Signing in with Google creates your free account.",
   "login.title": "Sign in",
   "login.unverified": "Your Google account email is not verified. Verify it with Google, then try again.",
+  "login.blocked": "Your account has been suspended. If you think this is a mistake, contact the site administrator.",
   "nav.home": "Home",
   "nav.movies": "Movies",
   "nav.saved": "Saved",

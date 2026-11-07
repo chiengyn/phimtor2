@@ -80,6 +80,7 @@
   "login.register_note": "第一次来？使用 Google 登录即可自动创建免费账户。",
   "login.title": "登录",
   "login.unverified": "你的 Google 账户邮箱尚未验证。请先在 Google 完成验证后再试。",
+  "login.blocked": "你的账户已被停用。如果你认为这是误操作，请联系网站管理员。",
   "nav.home": "首页",
   "nav.movies": "电影",
   "nav.saved": "收藏",

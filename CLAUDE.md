@@ -56,9 +56,10 @@ other modules currently have no tests.
 
 - **`admin/` owns the schema.** It runs the embedded migrations in
   `admin/migrations/` on startup (`admin/store.go`) and is the only writer of the
-  catalog. It owns the account tables too and writes exactly **two columns**
+  catalog. It owns the account tables too and writes exactly **three columns**
   across them — `users.comp_expires_at` / `users.comp_granted_at`, the
-  admin-granted 4K unlock (`0009_comp_premium.sql`) — and nothing else there. It
+  admin-granted 4K unlock (`0009_comp_premium.sql`), and `users.is_blocked`
+  (`0007`), the account block set from `/users` — and nothing else there. It
   *reads* more than it writes: `GET /payments` reports on the billing ledger the
   viewer writes, with no write path of its own (a "mark as paid" button there
   would be a second writer of the settle path).
@@ -78,7 +79,8 @@ other modules currently have no tests.
 
   The one shared row is `users`, and the two services write **disjoint columns**
   of it: the viewer owns `plan` / `plan_expires_at` (the paid pass) and the admin
-  owns `comp_*` (the granted one). That is what makes "revoke comp" in the admin
+  owns `comp_*` (the granted one) plus `is_blocked` (enforced by the viewer's
+  `UserByID`, which never writes it). That is what makes "revoke comp" in the admin
   UI provably unable to cancel a subscription somebody paid for — the `UPDATE`
   never names those columns. Keep it that way.
 

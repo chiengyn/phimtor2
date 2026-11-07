@@ -146,6 +146,22 @@
           <button class="btn btn-revoke" type="submit">Thu hồi</button>
         </form>
         {{ end }}
+        {{ if .IsBlocked }}
+        <form class="inline" method="post" action="/users/{{ .ID }}/block">
+          <input type="hidden" name="q" value="{{ $.Query }}">
+          <input type="hidden" name="page" value="{{ $.Page }}">
+          <input type="hidden" name="blocked" value="0">
+          <button class="btn" type="submit">Mở khoá</button>
+        </form>
+        {{ else }}
+        <form class="inline" method="post" action="/users/{{ .ID }}/block"
+              onsubmit="return confirm('Khoá tài khoản {{ .DisplayName }}? Người này sẽ bị đăng xuất khỏi mọi thiết bị.')">
+          <input type="hidden" name="q" value="{{ $.Query }}">
+          <input type="hidden" name="page" value="{{ $.Page }}">
+          <input type="hidden" name="blocked" value="1">
+          <button class="btn btn-revoke" type="submit">Khoá</button>
+        </form>
+        {{ end }}
       </div>
     </div>
     {{- else }}

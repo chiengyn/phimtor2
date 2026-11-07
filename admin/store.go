@@ -1382,12 +1382,13 @@ func (s *Store) ListUsers(ctx context.Context, q string, limit, offset int) ([]U
 // SetUserComp grants or revokes the complimentary 4K unlock for one account.
 // until == nil revokes.
 //
-// This is the ONLY write this service makes to `users`, and it names ONLY the
-// comp_ columns. That restriction is the whole safety argument for letting two
-// services write this row: plan / plan_expires_at belong to the viewer's billing
-// path, so revoking a comp provably cannot cancel a subscription the user paid
-// for. Do not be tempted to "tidy up" plan here — setting it to 'free' would
-// silently cancel a paying customer.
+// This and SetUserBlocked are the ONLY writes this service makes to `users`,
+// and between them they name ONLY the comp_ columns and is_blocked. That
+// restriction is the whole safety argument for letting two services write this
+// row: plan / plan_expires_at belong to the viewer's billing path, so revoking a
+// comp provably cannot cancel a subscription the user paid for. Do not be
+// tempted to "tidy up" plan here — setting it to 'free' would silently cancel a
+// paying customer.
 func (s *Store) SetUserComp(ctx context.Context, userID int64, until *time.Time) error {
 	if until == nil {
 		_, err := s.db.ExecContext(ctx,
@@ -1396,6 +1397,22 @@ func (s *Store) SetUserComp(ctx context.Context, userID int64, until *time.Time)
 	}
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE users SET comp_expires_at = ?, comp_granted_at = NOW() WHERE id = ?`, *until, userID)
+	return err
+}
+
+// SetUserBlocked blocks or unblocks one viewer account.
+//
+// The viewer enforces it on every request: its UserByID filters is_blocked = 0,
+// so a blocked account's session cookie and TV bearer tokens all resolve to
+// nobody, and Google sign-in is refused with an explicit "blocked" message.
+// Nothing else is touched — bookmarks, paired TVs, a paid pass and contributed
+// subtitles all survive — so unblocking restores the account exactly as it was.
+//
+// Like SetUserComp, this names ONLY its own column. The viewer never writes
+// is_blocked (its sign-in upsert leaves it out of ON DUPLICATE KEY UPDATE), so
+// the two services' writes to `users` stay disjoint.
+func (s *Store) SetUserBlocked(ctx context.Context, userID int64, blocked bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET is_blocked = ? WHERE id = ?`, blocked, userID)
 	return err
 }
 

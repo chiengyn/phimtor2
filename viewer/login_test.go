@@ -132,6 +132,21 @@ func TestAuthErrorReturnsToLogin(t *testing.T) {
 	if got, want := authErrorURL("/vi/", "unverified"), "/vi/login?login=unverified"; got != want {
 		t.Fatalf("authErrorURL = %q, want %q", got, want)
 	}
+	if got, want := authErrorURL("/vi/", "blocked"), "/vi/login?login=blocked"; got != want {
+		t.Fatalf("authErrorURL = %q, want %q", got, want)
+	}
+}
+
+// An account the admin has blocked is told so on the front door, in the page's
+// language, rather than shown the generic failure.
+func TestLoginPageExplainsBlockedAccount(t *testing.T) {
+	s := gatedServer(t)
+	if body := get(s, "/en/login?login=blocked").Body.String(); !strings.Contains(body, "suspended") {
+		t.Error("/en: a blocked account is not explained")
+	}
+	if body := get(s, "/vi/login?login=blocked").Body.String(); !strings.Contains(body, "bị khoá") {
+		t.Error("/vi: a blocked account is not explained")
+	}
 }
 
 // Without accounts there is no way through the gate, so it stands down (local

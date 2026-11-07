@@ -80,6 +80,7 @@
   "login.register_note": "はじめての方へ：Google でログインすると無料アカウントが自動で作成されます。",
   "login.title": "ログイン",
   "login.unverified": "Google アカウントのメールアドレスが未確認です。Google で確認してから、もう一度お試しください。",
+  "login.blocked": "このアカウントは停止されています。誤りだと思われる場合は、サイト管理者にお問い合わせください。",
   "nav.home": "ホーム",
   "nav.movies": "映画",
   "nav.saved": "保存済み",

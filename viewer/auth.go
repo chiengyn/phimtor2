@@ -191,6 +191,8 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		data.Error = tr(locale, "login.error")
 	case "unverified":
 		data.Error = tr(locale, "login.unverified")
+	case "blocked":
+		data.Error = tr(locale, "login.blocked")
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	s.render(w, r, s.login, data)
@@ -272,6 +274,14 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("auth: upsert: %v", err)
 		http.Redirect(w, r, authErrorURL(next, "error"), http.StatusFound)
+		return
+	}
+	// The upsert reads the row back through UserByID, which hides a blocked
+	// account (is_blocked, set by the admin on /users). Say so plainly rather
+	// than issuing a session that the very next request would discard.
+	if user == nil {
+		log.Printf("auth: blocked account signed in (sub %s)", id.Sub)
+		http.Redirect(w, r, authErrorURL(next, "blocked"), http.StatusFound)
 		return
 	}
 	s.sess.setSession(w, user.ID)

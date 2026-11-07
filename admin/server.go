@@ -189,6 +189,7 @@ func (s *Server) setupRouter() {
 	r.Get("/featured", s.handleFeaturedPage)
 	r.Get("/users", s.handleUsersPage)
 	r.Post("/users/{id}/comp", s.handleSetUserComp)
+	r.Post("/users/{id}/block", s.handleSetUserBlocked)
 	r.Get("/payments", s.handlePaymentsPage)
 	r.Get("/sql", s.handleSQLPage)
 	r.Post("/sql", s.handleSQLQuery)
@@ -557,10 +558,9 @@ func (s *Server) handleFeaturedPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // usersPage is one page of registered viewer accounts plus its pagination
-// controls. Read-only: the admin has no user-management actions, this is just
-// "who signed up", plus the one action the admin has here: granting or revoking
-// the complimentary 4K unlock (the comp_* columns only — the paid pass belongs
-// to the viewer).
+// controls: "who signed up", plus the two actions the admin has here — granting
+// or revoking the complimentary 4K unlock (the comp_* columns), and blocking or
+// unblocking the account (is_blocked). The paid pass belongs to the viewer.
 type usersPage struct {
 	Users []User
 	Query string
@@ -599,7 +599,7 @@ func (s *Server) loadUsersPage(ctx context.Context, q string, page int) (usersPa
 	}, nil
 }
 
-// handleUsersPage renders the read-only list of registered viewer accounts.
+// handleUsersPage renders the list of registered viewer accounts.
 func (s *Server) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 	page, err := s.loadUsersPage(r.Context(), r.URL.Query().Get("q"), pageFromQuery(r))
 	if err != nil {
@@ -614,8 +614,7 @@ func (s *Server) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 // a 303, because users.html carries no htmx and one action does not justify
 // introducing it there.
 //
-// This is the admin's only write to `users`, and it reaches only the comp_
-// columns (see store.SetUserComp).
+// It reaches only the comp_ columns (see store.SetUserComp).
 func (s *Server) handleSetUserComp(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -628,6 +627,32 @@ func (s *Server) handleSetUserComp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.SetUserComp(r.Context(), id, until); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	http.Redirect(w, r, usersListURL(r.FormValue("q"), r.FormValue("page")), http.StatusSeeOther)
+}
+
+// handleSetUserBlocked blocks (blocked=1) or unblocks (blocked=0) an account,
+// then returns to the same view of the list. Same shape as handleSetUserComp,
+// and it reaches only is_blocked (see store.SetUserBlocked).
+func (s *Server) handleSetUserBlocked(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	var blocked bool
+	switch r.FormValue("blocked") {
+	case "1":
+		blocked = true
+	case "0":
+		blocked = false
+	default:
+		writeError(w, http.StatusBadRequest, "invalid blocked value")
+		return
+	}
+	if err := s.store.SetUserBlocked(r.Context(), id, blocked); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

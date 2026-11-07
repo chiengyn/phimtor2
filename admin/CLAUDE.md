@@ -148,15 +148,23 @@ Flat single `main` package. Layers, in request order:
     `HX-Trigger: featuredChanged` so the list re-fetches. The viewer reads this same
     table (`viewer/store.go` `FeaturedTitleIDs`) for its hero, falling back to a
     score-based pick when nothing is featured.
-  - `GET /users` (`users.html`) — a **read-only** list of registered viewer
+  - `GET /users` (`users.html`) — the list of registered viewer
     accounts (avatar, name, email, provider, plan, saved-title count, signup and
     last-login dates), searchable by name/email and paginated with plain `<a>`
-    links rather than the htmx `pager` fragment. It has exactly **one action**:
-    granting or revoking the complimentary 4K unlock
-    (`POST /users/{id}/comp`, `duration` = `30d|1y|forever|revoke`). That write
-    touches only `users.comp_*` — never `plan`/`plan_expires_at`, which are the
-    viewer's paid pass — so revoking a comp cannot cancel a paid subscription.
-    Because this page carries no htmx, the action is a plain form POST + `303`
+    links rather than the htmx `pager` fragment. It has exactly **two actions**:
+    - granting or revoking the complimentary 4K unlock
+      (`POST /users/{id}/comp`, `duration` = `30d|1y|forever|revoke`). That
+      write touches only `users.comp_*` — never `plan`/`plan_expires_at`, which
+      are the viewer's paid pass — so revoking a comp cannot cancel a paid
+      subscription.
+    - blocking or unblocking the account (`POST /users/{id}/block`,
+      `blocked` = `1|0`), which writes only `users.is_blocked`. The viewer
+      enforces it: its `UserByID` filters `is_blocked = 0`, so the account's
+      cookie and TV tokens resolve to nobody and Google sign-in shows a
+      "blocked" message. Nothing else is touched (bookmarks, paired TVs, a paid
+      pass, contributed subtitles), so unblocking restores the account as it was.
+
+    Because this page carries no htmx, each action is a plain form POST + `303`
     modelled on the streamers dashboard, and each form posts `q`/`page` back so
     the redirect returns to the same list view rather than page 1.
   - `GET /payments` (`payments.html`) — the **crypto-payment monitor**, and the
@@ -339,7 +347,9 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
 `0007_users.sql` is the one place this rule bends: the admin **owns** `users` and
 `user_bookmarks` (they are declared here, and only migrations here can change
 them) but writes only the **two `comp_*` columns** `0009` adds — the
-admin-granted 4K unlock, from `GET /users`. Everything else there is the public
+admin-granted 4K unlock — and `is_blocked`, both from `GET /users`. (The
+header comments of `0007` and `0009` predate the block action and still say
+otherwise. Applied migrations cannot be edited.) Everything else there is the public
 viewer's: rows on login, `user_bookmarks` on save/unsave, and `plan` /
 `plan_expires_at` when an invoice settles. The split into separate columns is
 deliberate and load-bearing: two services write this row, never the same data. Identity

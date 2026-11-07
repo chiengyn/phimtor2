@@ -174,9 +174,13 @@ Flat single `main` package.
     bearer token, so gating it would silently drop subtitles on paired TVs.
   - `/api/tv/v1/*` read routes — an unpaired TV still **browses** (product
     decision, pending a "pair first" screen in the app) but cannot play.
-  - Failed sign-ins (`authErrorURL`) land back on `/login?login=error|unverified`
-    with `next` intact; before the gate they went to the home page, which would
-    now redirect and lose both.
+  - Failed sign-ins (`authErrorURL`) land back on
+    `/login?login=error|unverified|blocked` with `next` intact; before the gate
+    they went to the home page, which would now redirect and lose both.
+    `blocked` is an account the admin blocked on its `/users` page
+    (`users.is_blocked`, written by the admin only): `UpsertGoogleUser` reads
+    the row back through `UserByID`, which hides blocked rows, so the callback
+    sees a nil user and must redirect rather than set a session.
   `pageData.Locked` (signed out, accounts on) hides the header's catalog nav on
   the few pages a signed-out visitor can see, since every link would bounce.
 
