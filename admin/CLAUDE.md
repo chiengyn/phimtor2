@@ -167,6 +167,12 @@ Flat single `main` package. Layers, in request order:
     Because this page carries no htmx, each action is a plain form POST + `303`
     modelled on the streamers dashboard, and each form posts `q`/`page` back so
     the redirect returns to the same list view rather than page 1.
+  - `GET /watch-history` (`watch_history.html`) — **who watched what**: one row
+    per watch session (user, title + `S01E02`, web/TV, resolution, start, how
+    long the player was open, last seen), newest first, 50 per page,
+    `?user=<id>` to filter (linked from each `/users` row). Read-only: the
+    viewer writes `watch_sessions` (`0013`) from its in-memory heartbeat
+    aggregation, so the newest sessions show up to one flush (~1 min) late.
   - `GET /payments` (`payments.html`) — the **crypto-payment monitor**, and the
     one admin page that reports on data the admin does not own: the viewer writes
     `payment_invoices` (`0008`), this only SELECTs it. Read-only deliberately —
@@ -333,7 +339,9 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
   rows leave it `NULL`. So `subtitles` now has two writers separated by *rows*
   (unlike `users`, separated by *columns*). Reading it is how a contributed row
   is told from a curated one; `DELETE /api/subtitles/{id}` here is the
-  moderation path, and it already works on contributed rows unchanged. `featured_titles` is the
+  moderation path, and it already works on contributed rows unchanged. `0012`
+  adds `tv_devices` and `0013` adds `watch_sessions` (watch history); both are
+  declared here and written only by the viewer. `featured_titles` is the
   manual browse-hero curation list — `(title_id PK, position, created_at)` with a
   cascading FK to `titles`, ordered by `position` ascending; the catalog `titles`
   table stays untouched (deliberately a separate table, not a `titles` column).

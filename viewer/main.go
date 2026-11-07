@@ -41,6 +41,15 @@ func main() {
 	// Reap watch sessions whose heartbeats stopped, dropping their torrents.
 	go server.watcher.run(ctx)
 
+	// Flush watch history on an interval. run does a final flush when ctx is
+	// cancelled and only then returns; the wait after Shutdown below makes sure
+	// that flush lands before the process exits, so a deploy loses nothing.
+	watchLogDone := make(chan struct{})
+	go func() {
+		server.watchLog.run(ctx)
+		close(watchLogDone)
+	}()
+
 	// Delete pairing codes nobody ever approved. A no-op without accounts.
 	go server.reapDevicePairings(ctx)
 
@@ -63,6 +72,11 @@ func main() {
 
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown error: %v", err)
+	}
+	select {
+	case <-watchLogDone:
+	case <-time.After(watchLogFinalTimeout + time.Second):
+		log.Println("shutdown: watch history final flush did not finish")
 	}
 	_ = os.Stdout.Sync()
 }

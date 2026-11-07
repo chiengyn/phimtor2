@@ -71,7 +71,9 @@ other modules currently have no tests.
   `0008_billing.sql` (`payment_invoices`, `user_title_unlocks`,
   `billing_chain_cursors`) behind the paid 4K tier, plus `tv_devices` from
   `0012_tv_devices.sql` (paired televisions — see the TV client API in
-  [`viewer/CLAUDE.md`](viewer/CLAUDE.md)). Of the **catalog** it is a
+  [`viewer/CLAUDE.md`](viewer/CLAUDE.md)), plus `watch_sessions` from
+  `0013_watch_sessions.sql` (watch history, flushed from memory on an interval
+  and read by the admin at `/watch-history`). Of the **catalog** it is a
   reader, with exactly one exception — contributed `subtitles` rows, insert-only,
   and the `titles.has_vietsub` recompute that follows one (see below). It writes
   nothing else, ever.

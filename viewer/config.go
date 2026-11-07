@@ -99,6 +99,11 @@ type Config struct {
 	// case instantly; this TTL is the backstop for crashed tabs / dead networks.
 	WatchHeartbeatTTL int
 
+	// WatchLogFlushSec is how often (seconds) the in-memory watch history
+	// (watchlog.go) is flushed to watch_sessions. 0 disables watch history
+	// entirely — nothing is recorded — which is the rollback.
+	WatchLogFlushSec int
+
 	// Subtitle providers, for the watch page's "find subtitles" panel. A
 	// signed-in visitor searches these and may save a result to the shared
 	// catalog. Secrets, so env-only (no flags). These are the SAME keys the admin
@@ -155,6 +160,7 @@ func loadConfig() Config {
 		ManagerInternalURL:   envStr("MANAGER_INTERNAL_URL", "http://localhost:8083"),
 		ManagerInternalToken: envStr("MANAGER_INTERNAL_TOKEN", ""),
 		WatchHeartbeatTTL:    envInt("WATCH_HEARTBEAT_TTL", 30),
+		WatchLogFlushSec:     envInt("WATCH_LOG_FLUSH_SEC", 60),
 
 		BillingEVMAddress:  envStr("BILLING_EVM_ADDRESS", ""),
 		BillingEVMChains:   envStr("BILLING_EVM_CHAINS", ""),

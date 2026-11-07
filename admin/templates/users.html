@@ -86,7 +86,7 @@
 <body>
   <header>
     <h1>👤 phimtor2 — Người dùng</h1>
-    <span><a href="/payments">Thanh toán</a> · <a href="/">Danh sách phim</a></span>
+    <span><a href="/watch-history">Lịch sử xem</a> · <a href="/payments">Thanh toán</a> · <a href="/">Danh sách phim</a></span>
   </header>
   <main>
     <p class="muted">Tài khoản người xem đã đăng ký bằng Google trên trang công khai. Bạn có thể tặng quyền xem 4K tại đây; mọi thay đổi khác đều do chính người dùng thực hiện khi đăng nhập.</p>
@@ -124,6 +124,7 @@
         <div><b>{{ .BookmarkCount }}</b> phim đã lưu</div>
         <div>Đăng ký {{ .CreatedAt.Format "02/01/2006" }}</div>
         <div>{{ with .LastLoginAt }}Đăng nhập {{ .Format "02/01/2006 15:04" }}{{ else }}Chưa đăng nhập lại{{ end }}</div>
+        <div><a href="/watch-history?user={{ .ID }}">Lịch sử xem</a></div>
       </div>
       <div class="user-actions">
         {{/* $ is the usersPage envelope: inside this range, . is the User. */}}

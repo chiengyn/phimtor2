@@ -28,7 +28,7 @@ It **owns no schema and never runs migrations** —
 tables already exist. It is **read-only for the catalog** (`titles`, `videos`,
 `featured_titles`, …) with exactly one exception, noted below.
 
-The viewer writes **four** things, and nothing else, ever:
+The viewer writes **five** things, and nothing else, ever:
 
 1. `users` (created/refreshed on login) and 2. `user_bookmarks` (the saved
 list) — both declared by `admin/migrations/0007_users.sql`, both tables the
@@ -42,6 +42,10 @@ two writers separated by **columns**.
 `admin/migrations/0012_tv_devices.sql` — the same arrangement as `0007`: the
 admin declares it and never writes it, because pairing is an account action and
 accounts live entirely on this side. See *The TV client API* below.
+5. `watch_sessions` (watch history), declared by
+`admin/migrations/0013_watch_sessions.sql`, same arrangement again — the admin
+only reads it, at `/watch-history`. Written **only** by `watchLog`'s periodic
+flush, never on a request path. See *Watch history* below.
 
 > That third one is a deliberate hole in an otherwise airtight invariant, so do
 > not "restore" it by accident. The reasoning is in
@@ -99,6 +103,9 @@ Env vars with matching CLI flags; secrets are env-only.
 - Watch-session reaping: `WATCH_HEARTBEAT_TTL` (30s) — how long a watch session
   may go silent before the viewer drops its torrent (via the manager) to free
   streamer resources. Keep it well above the watch page's 10s heartbeat interval.
+- Watch history: `WATCH_LOG_FLUSH_SEC` (60) — how often the in-memory watch
+  history is flushed to `watch_sessions`. `0` turns recording off entirely (the
+  rollback). Also off without accounts, since a session needs a user.
 - Android TV app downloads (`tvapk.go`): `TV_APK_DIR` — the directory CI
   publishes signed APKs and `latest.json` into (`/tv` in production, a read-only
   mount of the host's `/srv/phimnet-tv`). **Empty ⇒ the routes are not
@@ -599,6 +606,33 @@ Flat single `main` package.
   while others keep watching the same torrent; a source switch re-points the
   session's heartbeat, dropping the previously-watched torrent. The sweep loop is
   started from `main.go` (`server.watcher.run`) and stops on shutdown.
+
+- **Watch history** (`watchlog.go`, `Store.UpsertWatchSessions`). Who watched
+  what, for the admin's `/watch-history`. Built from the **same** heartbeat as
+  the reaping above, so no client changed — web, TV, and APKs already installed.
+  - The heartbeat carries only `{sessionID, infoHash}`, and an infohash does not
+    name an episode (one torrent can be a season pack). So `handlePrepareSource`
+    calls `watchLog.prepared`, remembering `(user, infohash) → video, title,
+    episode, resolution, web|tv` (`deviceFrom`); each heartbeat then resolves
+    through that map. A beat with no matching prepare is **ignored**, never
+    guessed at. Only signed-in users are recorded (`userFrom` on both calls).
+  - One row per `(user, sessionID, video)`: switching source on the page starts
+    a new row. `watched_seconds` is how long the **player was open** — the
+    heartbeat beats while paused — with each gap capped at 30s so a laptop
+    asleep on the page does not count hours.
+  - **Aggregated in memory, flushed every `WATCH_LOG_FLUSH_SEC`.** Entries hold
+    **cumulative** totals and the flush is an upsert (`GREATEST` on both
+    columns), so a failed flush is retried next tick with the same numbers and
+    cannot double-count. Do not turn it into deltas. A row whose video, title
+    or user was deleted meanwhile breaks a foreign key, which would fail the
+    whole multi-row INSERT — so a 1452 falls back to row-by-row and skips only
+    the orphans.
+  - Loss budget: a crash loses at most one interval. A normal stop (every
+    deploy) does not: `run` flushes once more after `ctx` is cancelled, and
+    `main.go` waits for it after `httpServer.Shutdown`. A session the DB keeps
+    refusing is dropped after an hour idle, which bounds memory if the table
+    is missing (viewer deployed before admin).
+  - Single-instance in-memory state, exactly like `watchTracker`.
 
 - **Manager client** (`manager.go`): a tiny server-side HTTP client against the
   manager (with the internal bearer token): `addTorrent(magnet, torrentFile) →

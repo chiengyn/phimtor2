@@ -592,3 +592,54 @@ func shortDuration(d time.Duration) string {
 	}
 	return fmt.Sprintf("%d ngày trước", int(d.Hours()/24))
 }
+
+// WatchSession is one row of the watch history (migrations/0013), joined to
+// the user and the title for display. The VIEWER writes these; the admin only
+// reads them at GET /watch-history.
+type WatchSession struct {
+	ID         int64
+	UserID     int64
+	UserName   string
+	UserEmail  string
+	TitleID    int64
+	TitleName  string
+	TitleType  string // "movie" | "tv"
+	Season     int    // 0 for a movie
+	Episode    int    // 0 for a movie
+	Resolution string
+	Client     string // "web" | "tv"
+	StartedAt  time.Time
+	LastSeenAt time.Time
+	// Seconds is how long the player was OPEN, not how long it played: the
+	// heartbeat it is built from keeps beating while paused.
+	Seconds int
+}
+
+// Who is the viewer's display name, falling back to the email.
+func (w WatchSession) Who() string {
+	if w.UserName != "" {
+		return w.UserName
+	}
+	return w.UserEmail
+}
+
+// EpisodeLabel is "S01E02" for an episode, "" for a movie.
+func (w WatchSession) EpisodeLabel() string {
+	if w.Season == 0 && w.Episode == 0 {
+		return ""
+	}
+	return fmt.Sprintf("S%02dE%02d", w.Season, w.Episode)
+}
+
+// Duration renders Seconds as "1h05m", "12m" or "40s".
+func (w WatchSession) Duration() string {
+	d := time.Duration(w.Seconds) * time.Second
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%ds", w.Seconds)
+	}
+}

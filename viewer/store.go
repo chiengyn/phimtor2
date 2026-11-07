@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -22,6 +23,13 @@ import (
 func isDuplicateKey(err error) bool {
 	var me *mysqldrv.MySQLError
 	return errors.As(err, &me) && me.Number == 1062
+}
+
+// isForeignKeyViolation reports MySQL's "cannot add or update a child row"
+// (1452): the parent row (a video or title) is gone.
+func isForeignKeyViolation(err error) bool {
+	var me *mysqldrv.MySQLError
+	return errors.As(err, &me) && me.Number == 1452
 }
 
 type Store struct {
@@ -1494,5 +1502,76 @@ func (s *Store) RevokeDevice(ctx context.Context, deviceID, userID int64) error 
 func (s *Store) ReapDevicePairings(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM tv_devices WHERE status = 'pending' AND expires_at <= NOW()`)
+	return err
+}
+
+// --- Watch history -------------------------------------------------------------
+//
+// watch_sessions (admin/migrations/0013) is written only from here, and only by
+// watchLog's periodic flush — never on a request path.
+
+// watchUpsertChunk bounds one multi-row INSERT, keeping each statement well
+// under max_allowed_packet however many sessions a flush carries.
+const watchUpsertChunk = 200
+
+// UpsertWatchSessions writes watchLog's running totals. The rows carry
+// CUMULATIVE values, so the update branch overwrites rather than adds: a flush
+// retried after a failure lands the same numbers twice and counts nothing twice.
+// GREATEST keeps a late or reordered retry from moving a session backwards.
+//
+// One orphan must not poison the batch. If the admin deletes a video, title or
+// user while its session is still in watchLog's memory, that row violates a
+// foreign key and MySQL rejects the WHOLE multi-row statement — which would
+// keep every other session in it unwritten until watchLog gives up. So a
+// foreign-key failure falls back to row-by-row and skips only the orphans:
+// there is nothing left to attribute that watch to anyway.
+func (s *Store) UpsertWatchSessions(ctx context.Context, rows []watchSessionRow) error {
+	for len(rows) > 0 {
+		n := min(len(rows), watchUpsertChunk)
+		chunk := rows[:n]
+		rows = rows[n:]
+
+		err := s.upsertWatchChunk(ctx, chunk)
+		if err == nil {
+			continue
+		}
+		if !isForeignKeyViolation(err) {
+			return err
+		}
+		for _, r := range chunk {
+			if err := s.upsertWatchChunk(ctx, []watchSessionRow{r}); err != nil {
+				if !isForeignKeyViolation(err) {
+					return err
+				}
+				log.Printf("watchlog: skipping session for deleted row (user %d, video %d, title %d)",
+					r.UserID, r.VideoID, r.TitleID)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) upsertWatchChunk(ctx context.Context, chunk []watchSessionRow) error {
+	var b strings.Builder
+	b.WriteString(`INSERT INTO watch_sessions
+		(user_id, session_id, video_id, title_id, episode_id, resolution, client,
+		 started_at, last_seen_at, watched_seconds) VALUES `)
+	args := make([]any, 0, len(chunk)*10)
+	for i, r := range chunk {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		var episode any
+		if r.EpisodeID != 0 {
+			episode = r.EpisodeID
+		}
+		args = append(args, r.UserID, r.SessionID, r.VideoID, r.TitleID, episode,
+			r.Resolution, r.Client, r.StartedAt, r.LastSeen, r.Seconds)
+	}
+	b.WriteString(` ON DUPLICATE KEY UPDATE
+		last_seen_at    = GREATEST(last_seen_at, VALUES(last_seen_at)),
+		watched_seconds = GREATEST(watched_seconds, VALUES(watched_seconds))`)
+	_, err := s.db.ExecContext(ctx, b.String(), args...)
 	return err
 }

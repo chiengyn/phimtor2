@@ -1583,3 +1583,80 @@ func (s *Store) ListPayToAddresses(ctx context.Context, limit int) ([]PayToUse, 
 	}
 	return out, rows.Err()
 }
+
+// --- Watch history, read-only -------------------------------------------------
+//
+// watch_sessions (migrations/0013) is written only by the viewer, from its
+// in-memory heartbeat aggregation. Like the billing ledger, the admin reports
+// on it and never writes it.
+
+// watchSessionWhere filters to one user when userID > 0, else matches all.
+func watchSessionWhere(userID int64) (string, []any) {
+	if userID > 0 {
+		return ` WHERE w.user_id = ?`, []any{userID}
+	}
+	return "", nil
+}
+
+// CountWatchSessions counts the history rows for one user (or everyone).
+func (s *Store) CountWatchSessions(ctx context.Context, userID int64) (int, error) {
+	where, args := watchSessionWhere(userID)
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM watch_sessions w`+where, args...).Scan(&n)
+	return n, err
+}
+
+// ListWatchSessions returns one page of watch history, newest first. The users
+// and titles joins are INNER on purpose: both FKs cascade, so a row can never
+// outlive either. The episode joins are LEFT because a movie has none and an
+// episode's FK is SET NULL.
+func (s *Store) ListWatchSessions(ctx context.Context, userID int64, limit, offset int) ([]WatchSession, error) {
+	where, args := watchSessionWhere(userID)
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT w.id, w.user_id, u.name, u.email, w.title_id, t.title, t.type,
+		       COALESCE(se.season_number, 0), COALESCE(e.episode_number, 0),
+		       w.resolution, w.client, w.started_at, w.last_seen_at, w.watched_seconds
+		FROM watch_sessions w
+		JOIN users  u ON u.id = w.user_id
+		JOIN titles t ON t.id = w.title_id
+		LEFT JOIN episodes e  ON e.id = w.episode_id
+		LEFT JOIN seasons  se ON se.id = e.season_id`+where+`
+		ORDER BY w.started_at DESC, w.id DESC
+		LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []WatchSession
+	for rows.Next() {
+		var ws WatchSession
+		if err := rows.Scan(&ws.ID, &ws.UserID, &ws.UserName, &ws.UserEmail,
+			&ws.TitleID, &ws.TitleName, &ws.TitleType, &ws.Season, &ws.Episode,
+			&ws.Resolution, &ws.Client, &ws.StartedAt, &ws.LastSeenAt, &ws.Seconds); err != nil {
+			return nil, err
+		}
+		out = append(out, ws)
+	}
+	return out, rows.Err()
+}
+
+// UserLabel returns a user's display name (or email) for a page heading, ""
+// when the id matches nobody.
+func (s *Store) UserLabel(ctx context.Context, userID int64) (string, error) {
+	var name, email string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT name, email FROM users WHERE id = ?`, userID).Scan(&name, &email)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if name != "" {
+		return name, nil
+	}
+	return email, nil
+}

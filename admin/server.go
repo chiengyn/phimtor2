@@ -191,6 +191,7 @@ func (s *Server) setupRouter() {
 	r.Post("/users/{id}/comp", s.handleSetUserComp)
 	r.Post("/users/{id}/block", s.handleSetUserBlocked)
 	r.Get("/payments", s.handlePaymentsPage)
+	r.Get("/watch-history", s.handleWatchHistoryPage)
 	r.Get("/sql", s.handleSQLPage)
 	r.Post("/sql", s.handleSQLQuery)
 	r.Get("/sql/dump", s.handleSQLDump)
@@ -790,6 +791,62 @@ func (s *Server) loadPaymentsPage(ctx context.Context, status string, page int) 
 			return template.URL(fmt.Sprintf("/payments?page=%d&status=%s", n, url.QueryEscape(status)))
 		}),
 	}, nil
+}
+
+// watchHistoryPageSize matches the payments ledger: table rows, not cards.
+const watchHistoryPageSize = 50
+
+// watchHistoryPage is one page of who-watched-what, optionally for one user.
+type watchHistoryPage struct {
+	Sessions []WatchSession
+	// UserID / UserLabel are the active filter; 0 / "" means everyone.
+	UserID    int64
+	UserLabel string
+	Total     int
+	Pager     pager
+}
+
+// handleWatchHistoryPage renders GET /watch-history[?user=<id>][&page=N]. The
+// rows are written by the viewer (migrations/0013); this only reads them. A
+// malformed ?user= degrades to "everyone" rather than an error, as the
+// payments status filter does.
+func (s *Server) handleWatchHistoryPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID, _ := strconv.ParseInt(r.URL.Query().Get("user"), 10, 64)
+	userID = max(userID, 0)
+
+	var label string
+	if userID > 0 {
+		var err error
+		if label, err = s.store.UserLabel(ctx, userID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	total, err := s.store.CountWatchSessions(ctx, userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	pages := totalPages(total, watchHistoryPageSize)
+	page := clampPage(pageFromQuery(r), pages)
+	sessions, err := s.store.ListWatchSessions(ctx, userID, watchHistoryPageSize, (page-1)*watchHistoryPageSize)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	render(w, "watch_history.html", watchHistoryPage{
+		Sessions:  sessions,
+		UserID:    userID,
+		UserLabel: label,
+		Total:     total,
+		Pager: buildPager(page, pages, func(n int) template.URL {
+			if userID > 0 {
+				return template.URL(fmt.Sprintf("/watch-history?page=%d&user=%d", n, userID))
+			}
+			return template.URL(fmt.Sprintf("/watch-history?page=%d", n))
+		}),
+	})
 }
 
 // handlePaymentsPage renders the crypto-payment monitor.

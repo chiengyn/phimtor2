@@ -1,0 +1,132 @@
+{{/* Watch history: which signed-in user watched which title, and for how long.
+
+     READ-ONLY. Every row is written by the public VIEWER, which builds each
+     watch session in memory from the player's 10-second heartbeat and flushes
+     the totals to watch_sessions every minute or so (migrations/0013). So the
+     newest sessions appear here up to one flush interval late.
+
+     "Thời lượng" is how long the PLAYER WAS OPEN, not how long it played: the
+     heartbeat keeps beating while paused.
+
+     Plain <a> links and no htmx, like users.html and payments.html. */}}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phimtor2 — Lịch sử xem</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0e1116; color: #e6edf3; line-height: 1.5;
+    }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 1180px; margin: 0 auto; padding: 1.5rem; }
+    a { color: #79c0ff; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+
+    .filter { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: .6rem; }
+    .filter .chip {
+      padding: .3rem .7rem; border-radius: 999px; background: #2563eb; color: #fff; font-size: .82rem;
+    }
+
+    .tablewrap { overflow-x: auto; border: 1px solid #222b36; border-radius: 10px; background: #11161d; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th, td { text-align: left; padding: .55rem .7rem; white-space: nowrap; }
+    th { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: #8b98a5; border-bottom: 1px solid #222b36; font-weight: 600; }
+    tbody tr + tr td { border-top: 1px solid #1a212b; }
+    tbody tr:hover td { background: #151b24; }
+    td.wrap { white-space: normal; min-width: 14rem; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    .badge { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px; background: #1f6feb33; color: #79c0ff; }
+    .badge.tv { background: #2b1f3a; color: #d0b3ff; }
+    .badge.res { background: #21262d; color: #c9d1d9; }
+
+    .empty { padding: 1.5rem; text-align: center; color: #8b98a5; font-size: .9rem; }
+
+    .pager { display: flex; gap: .3rem; align-items: center; justify-content: center; margin-top: 1.25rem; flex-wrap: wrap; }
+    .pager a, .pager span {
+      padding: .35rem .6rem; border-radius: 8px; border: 1px solid #303b48;
+      color: #c9d1d9; text-decoration: none; font-size: .85rem;
+    }
+    .pager a:hover { background: #1f2733; }
+    .pager .current { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .pager .disabled { opacity: .4; }
+    .pager .gap { border: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📺 phimtor2 — Lịch sử xem</h1>
+    <span><a href="/users">Người dùng</a> · <a href="/payments">Thanh toán</a> · <a href="/">Danh sách phim</a></span>
+  </header>
+  <main>
+    <p class="muted">
+      Ai đã xem phim gì, trên web hay TV. Mỗi dòng là một lần mở trình phát với một nguồn.
+      “Thời lượng” là thời gian trình phát được mở (kể cả lúc tạm dừng), không phải thời gian phát thực.
+      Dữ liệu được ghi theo chu kỳ nên phiên mới nhất có thể xuất hiện chậm khoảng một phút.
+    </p>
+
+    {{ if .UserID }}
+    <div class="filter">
+      <span class="chip">{{ with .UserLabel }}{{ . }}{{ else }}#{{ $.UserID }}{{ end }}</span>
+      <a href="/watch-history">Bỏ lọc</a>
+    </div>
+    {{ end }}
+
+    {{ if .Sessions }}
+    <p class="muted">{{ .Total }} phiên xem.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Bắt đầu</th>
+            <th>Người xem</th>
+            <th>Phim</th>
+            <th>Thiết bị</th>
+            <th>Chất lượng</th>
+            <th class="num">Thời lượng</th>
+            <th>Lần cuối</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{- range .Sessions }}
+          <tr>
+            <td>{{ .StartedAt.Format "02/01 15:04" }}</td>
+            <td class="wrap">
+              {{ if $.UserID }}{{ .Who }}{{ else }}<a href="/watch-history?user={{ .UserID }}">{{ .Who }}</a>{{ end }}
+              {{ if .UserName }}<div class="muted">{{ .UserEmail }}</div>{{ end }}
+            </td>
+            <td class="wrap">
+              <a href="/titles/{{ .TitleID }}">{{ .TitleName }}</a>
+              {{ with .EpisodeLabel }}<span class="muted">· {{ . }}</span>{{ end }}
+            </td>
+            <td>{{ if eq .Client "tv" }}<span class="badge tv">TV</span>{{ else }}<span class="badge">Web</span>{{ end }}</td>
+            <td>{{ with .Resolution }}<span class="badge res">{{ . }}</span>{{ else }}<span class="muted">—</span>{{ end }}</td>
+            <td class="num">{{ .Duration }}</td>
+            <td>{{ .LastSeenAt.Format "02/01 15:04" }}</td>
+          </tr>
+          {{- end }}
+        </tbody>
+      </table>
+    </div>
+    {{ else }}
+    <div class="tablewrap"><div class="empty">
+      {{ if .UserID }}Người dùng này chưa xem phim nào.{{ else }}Chưa có lượt xem nào được ghi lại.{{ end }}
+    </div></div>
+    {{ end }}
+
+    {{ with .Pager }}{{ if .Show }}
+    <nav class="pager" aria-label="Phân trang">
+      {{ if .PrevURL }}<a href="{{ .PrevURL }}" rel="prev">‹ Trước</a>{{ else }}<span class="disabled">‹ Trước</span>{{ end }}
+      {{ range .Links }}{{ if .Gap }}<span class="gap">…</span>{{ else if .Current }}<span class="current" aria-current="page">{{ .Num }}</span>{{ else }}<a href="{{ .URL }}">{{ .Num }}</a>{{ end }}{{ end }}
+      {{ if .NextURL }}<a href="{{ .NextURL }}" rel="next">Sau ›</a>{{ else }}<span class="disabled">Sau ›</span>{{ end }}
+    </nav>
+    {{ end }}{{ end }}
+  </main>
+</body>
+</html>

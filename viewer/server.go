@@ -51,6 +51,11 @@ type Server struct {
 	// beacon; its sweeper runs from main via watcher.run.
 	watcher *watchTracker
 
+	// watchLog aggregates who-watched-what from the same heartbeat and flushes
+	// it to watch_sessions on an interval (run from main). Nil — every method a
+	// no-op — without accounts or with WATCH_LOG_FLUSH_SEC=0.
+	watchLog *watchLog
+
 	// publicURL is the viewer's own browser-facing origin (no trailing slash),
 	// used to build absolute canonical / Open Graph / sitemap URLs. Empty in
 	// local dev, where SEO URLs fall back to site-relative.
@@ -163,6 +168,13 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		log.Printf("Subtitle search disabled (needs accounts plus OPENSUBTITLES_API_KEY or SUBSOURCE_API_KEY)")
 	}
 	s.watcher = newWatchTracker(time.Duration(cfg.WatchHeartbeatTTL)*time.Second, s.manager.deleteTorrent)
+	// Watch history needs a user to attribute a session to, hence accounts.
+	if cfg.accountsEnabled() && cfg.WatchLogFlushSec > 0 && store != nil {
+		s.watchLog = newWatchLog(time.Duration(cfg.WatchLogFlushSec)*time.Second, store.UpsertWatchSessions)
+		log.Printf("Watch history enabled (flush every %ds)", cfg.WatchLogFlushSec)
+	} else {
+		log.Printf("Watch history disabled (needs accounts and WATCH_LOG_FLUSH_SEC > 0)")
+	}
 	// Bounds guessing at a television's short pairing code. Keyed by account
 	// (rateKey), because approving requires being signed in.
 	s.deviceApprovals = newRateLimiter(deviceApprovalsPerHour, time.Hour)
@@ -1542,6 +1554,13 @@ func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	if u := userFrom(r.Context()); u != nil {
+		client := "web"
+		if deviceFrom(r.Context()) != 0 {
+			client = "tv"
+		}
+		s.watchLog.prepared(u.ID, infoHash, video, titleID, client)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"infoHash":          infoHash,
 		"fileIndex":         video.FileIndex,
@@ -1562,6 +1581,9 @@ func (s *Server) handleWatchHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.watcher.beat(body.SessionID, body.InfoHash)
+	if u := userFrom(r.Context()); u != nil {
+		s.watchLog.beat(u.ID, body.SessionID, body.InfoHash)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
