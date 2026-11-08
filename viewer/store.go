@@ -636,6 +636,60 @@ func (s *Store) loadSeasons(ctx context.Context, locale Locale, titleID int64) (
 }
 
 // EpisodeContext identifies an episode and its parent title, for the watch page.
+// TitleNames is everything needed to name one title in any locale: the base
+// columns plus each stored translation. Resolve it with For, which applies the
+// same fallback as localizedTitleExpr, so a name built here matches the one
+// GetTitle / GetEpisodeContext would return for that locale.
+type TitleNames struct {
+	Title         string
+	OriginalTitle string
+	Translations  map[Locale]string
+}
+
+// For is the title's name in locale: its own translation, else the fallback
+// locale's, else the base column — localizedTitleExpr, in Go. Blank
+// translations are skipped exactly as NULLIF(…, '') skips them.
+func (n TitleNames) For(locale Locale) string {
+	if v := strings.TrimSpace(n.Translations[locale]); v != "" {
+		return n.Translations[locale]
+	}
+	if v := strings.TrimSpace(n.Translations[fallbackLocale(locale)]); v != "" {
+		return n.Translations[fallbackLocale(locale)]
+	}
+	return n.Title
+}
+
+// TitleNamesByID loads a title's names in every locale in one query, for the
+// watch page's language links. GetTitle per locale would also do it but loads
+// genres, seasons and episodes each time. Returns (nil, nil) for a missing id.
+func (s *Store) TitleNamesByID(ctx context.Context, titleID int64) (*TitleNames, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.title, t.original_title, tt.locale, tt.title
+		FROM titles t
+		LEFT JOIN title_translations tt ON tt.title_id = t.id
+		WHERE t.id = ?`, titleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names *TitleNames
+	for rows.Next() {
+		var title string
+		var original, locale, translated sql.NullString
+		if err := rows.Scan(&title, &original, &locale, &translated); err != nil {
+			return nil, err
+		}
+		if names == nil {
+			names = &TitleNames{Title: title, OriginalTitle: original.String, Translations: map[Locale]string{}}
+		}
+		if locale.Valid {
+			names.Translations[Locale(locale.String)] = translated.String
+		}
+	}
+	return names, rows.Err()
+}
+
 type EpisodeContext struct {
 	TitleID       int64
 	TitleName     string

@@ -819,6 +819,11 @@ Flat single `main` package.
     miss.
   - `GetEpisodeContext` — resolves an episode id to its parent title and
     season/episode numbers for the watch heading.
+  - `TitleNamesByID` — a title's base names plus every translation in one
+    query; `TitleNames.For(locale)` mirrors `localizedTitleExpr` in Go. Builds
+    the watch page's language menu / hreflang links (`watchLanguageURLs`), so
+    each locale links with its own slug rather than this page's slug under
+    another prefix. A lookup error only falls back to that prefix swap.
   - `VideosForTitle`/`VideosForEpisode` — playable videos for the owner (join
     `torrent_sources` for `info_hash`/`magnet`), newest first; `GetVideo` — one
     video for the prepare endpoint.

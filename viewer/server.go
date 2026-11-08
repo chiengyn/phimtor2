@@ -1179,6 +1179,12 @@ type watchData struct {
 	SearchQuery   string
 	SearchSeason  int
 	SearchEpisode int
+
+	// languageURLs is this page's own URL in every locale, read by
+	// newPageData for the language menu and hreflang links. Swapping only the
+	// locale prefix would keep this locale's slug ("/vi/…/euphoria-episode-1-…"
+	// instead of "/vi/…/lang-lang-tap-1-…"). Nil falls back to that swap.
+	languageURLs map[Locale]string
 }
 
 // firstNonEmpty returns the first non-blank argument, for picking an original
@@ -1453,6 +1459,9 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		UpgradeURL:    s.upgradeURL(locale, title.ID),
 	}
 	s.fillSubtitleSearch(&data, r, title.ID, firstNonEmpty(title.OriginalTitle, title.Title), 0, 0)
+	data.languageURLs = s.watchLanguageURLs(r, title.ID, func(l Locale, n TitleNames) string {
+		return watchMoviePath(l, title.ID, n.For(l), n.OriginalTitle)
+	})
 	s.render(w, r, s.watch, data)
 }
 
@@ -1507,7 +1516,30 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		Episodes:      eps,
 	}
 	s.fillSubtitleSearch(&data, r, ec.TitleID, ec.TitleName, ec.SeasonNumber, ec.EpisodeNumber)
+	data.languageURLs = s.watchLanguageURLs(r, ec.TitleID, func(l Locale, n TitleNames) string {
+		return watchEpisodePath(l, id, ec.EpisodeNumber, n.For(l))
+	})
 	s.render(w, r, s.watch, data)
+}
+
+// watchLanguageURLs builds a watch page's URL in every locale from the title's
+// names, so each language link carries that language's own slug. It is only
+// links: on a lookup error it logs and returns nil, and newPageData falls
+// back to swapping the locale prefix (which still resolves, by id).
+func (s *Server) watchLanguageURLs(r *http.Request, titleID int64, build func(Locale, TitleNames) string) map[Locale]string {
+	names, err := s.store.TitleNamesByID(r.Context(), titleID)
+	if err != nil {
+		log.Printf("watch language links for title %d: %v", titleID, err)
+		return nil
+	}
+	if names == nil {
+		return nil
+	}
+	urls := make(map[Locale]string, len(supportedLocales))
+	for _, locale := range supportedLocales {
+		urls[locale] = build(locale, *names)
+	}
+	return urls
 }
 
 // handlePrepareSource adds the chosen video's torrent to the streamer
@@ -1998,6 +2030,13 @@ func (s *Server) newPageData(r *http.Request, data any) pageData {
 			}
 			if translated, err := s.store.GetTitle(r.Context(), option.Locale, title.ID); err == nil && translated != nil {
 				option.URL = titlePath(option.Locale, translated.ID, translated.Title, translated.OriginalTitle)
+			}
+		}
+	}
+	if wd, ok := data.(watchData); ok {
+		for i := range pd.Languages {
+			if u, ok := wd.languageURLs[pd.Languages[i].Locale]; ok {
+				pd.Languages[i].URL = u
 			}
 		}
 	}
