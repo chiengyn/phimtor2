@@ -248,7 +248,9 @@ Flat single `main` package.
     **id order**, each dated by its newest title. Every title is listed once per
     locale with hreflang alternates, so a file holds `perFile × locales` entries
     — keep that under the protocol's 50,000 (`TestSitemapTitleFilesFitTheProtocol`).
-    The single flat file it replaced had reached 19 MB.
+    A full file is 12,000 entries and about 9 MB; at ~750 bytes an entry the
+    entry cap binds before the 50 MB one. The single flat file it replaced had
+    reached 19 MB.
   Unknown / bad ids render the `404.html` page (not a bare error).
 
 - **Watch page plays real torrents, viewer-mediated.** `handleWatchMovie`/

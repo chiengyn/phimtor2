@@ -1793,8 +1793,9 @@ func (s *Server) handleRobots(w http.ResponseWriter, r *http.Request) {
 // Every title is listed once per locale, so a file holds this many times
 // len(supportedLocales) <url> entries, and the protocol caps a file at 50,000
 // entries and 50 MB uncompressed. 2,000 × 6 locales is 12,000 entries and
-// about 5 MB with the hreflang alternates. Keep the product under 50,000 when
-// adding a locale.
+// about 9 MB with the hreflang alternates (measured in production, 2026-11-08).
+// At ~750 bytes an entry, the 50,000-entry cap binds before the 50 MB one, so
+// keep the product under 50,000 when adding a locale.
 const sitemapTitlesPerFile = 2000
 
 // sitemapIndexEntry is one <sitemap> in the index: a file and, when known, the
