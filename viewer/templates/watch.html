@@ -1674,8 +1674,8 @@ function resetSubStyle() {
 	if (D.subSearch === '1') initSubSearch();
 	console.info('phimnet: call streamDebug() to show download progress and diagnostics.');
 	// Default = the quality this visitor last picked, else 1080p, else 720p — so
-	// every member lands on 1080p (the page is members-only; a signed-out visitor
-	// never gets here while accounts are on). 4K never auto-starts: an entitled visitor reaches it
+	// every member lands on 1080p. A signed-out visitor may play nothing while
+	// accounts are on, so they land on the sign-in gate below. 4K never auto-starts: an entitled visitor reaches it
 	// by clicking its chip, or automatically only when it is the page's sole source.
 	const defaultVideo = pickDefaultVideo();
 	const memberVideo = VIDEOS.find(v => v.lock === 'member');

@@ -7,10 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
-// gatedServer is a members-only deploy: accounts on, and a published TV app so
-// the one public content-free page is routed too.
+// gatedServer is a production-shaped deploy: accounts on (so watching needs
+// sign-in), and a published TV app so the TV guide is routed too.
 func gatedServer(t *testing.T) *Server {
 	t.Helper()
 	s := &Server{
@@ -24,45 +26,83 @@ func gatedServer(t *testing.T) *Server {
 	return s
 }
 
-// A signed-out visitor reaches no catalog page: each one redirects to the
-// localized front door, remembering the page so sign-in can return there.
-func TestMembersOnlyPagesRedirectToLogin(t *testing.T) {
+// Browsing is public: a signed-out visitor reaches every catalog page, the
+// watch page included (resolutionLock is what stops them playing). Only /link,
+// which acts on an account, still redirects to /login.
+//
+// Most catalog handlers need the database, so the routing is checked by
+// middleware count: every catalog route must carry exactly the middleware the
+// public TV guide does, and /link one more (requireLogin).
+func TestCatalogIsPublicWhileSignedOut(t *testing.T) {
 	s := gatedServer(t)
-	cases := map[string]string{
-		"/en/":                    "/en/login",
-		"/vi/?type=movie":         "/vi/login?next=%2Fvi%2F%3Ftype%3Dmovie",
-		"/en/titles/dune-42":      "/en/login?next=%2Fen%2Ftitles%2Fdune-42",
-		"/ko/watch/movie/42":      "/ko/login?next=%2Fko%2Fwatch%2Fmovie%2F42",
-		"/ja/watch/episode/7":     "/ja/login?next=%2Fja%2Fwatch%2Fepisode%2F7",
-		"/en/bookmarks":           "/en/login?next=%2Fen%2Fbookmarks",
-		"/en/link?code=ACDE-FGHJ": "/en/login?next=%2Fen%2Flink%3Fcode%3DACDE-FGHJ",
+	middlewares := map[string]int{}
+	err := chi.Walk(s.router, func(method, route string, _ http.Handler, mws ...func(http.Handler) http.Handler) error {
+		middlewares[method+" "+route] = len(mws)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for path, want := range cases {
-		w := get(s, path)
-		if w.Code != http.StatusFound {
-			t.Errorf("%s: status %d, want 302", path, w.Code)
+	public, ok := middlewares["GET /{locale}/tv-app"]
+	if !ok {
+		t.Fatal("/{locale}/tv-app not routed")
+	}
+	for _, route := range []string{
+		"GET /{locale}/",
+		"GET /{locale}/titles/{id}",
+		"GET /{locale}/bookmarks",
+		"GET /{locale}/watch/movie/{id}",
+		"GET /{locale}/watch/episode/{id}",
+		"GET /api/catalog/cards",
+	} {
+		got, ok := middlewares[route]
+		if !ok {
+			t.Errorf("%s not routed", route)
 			continue
 		}
-		if got := w.Header().Get("Location"); got != want {
-			t.Errorf("%s: Location %q, want %q", path, got, want)
+		// /api/catalog/cards sits outside the /{locale} subrouter, so it lacks
+		// requireLocale; it must carry no extra gate either.
+		want := public
+		if route == "GET /api/catalog/cards" {
+			want = public - 1
 		}
-		if got := w.Header().Get("Cache-Control"); got != "no-store" {
-			t.Errorf("%s: Cache-Control %q, want no-store", path, got)
+		if got != want {
+			t.Errorf("%s carries %d middlewares, want %d (is it behind requireLogin?)", route, got, want)
 		}
+	}
+	if got := middlewares["GET /{locale}/link"]; got != public+1 {
+		t.Errorf("/{locale}/link carries %d middlewares, want %d (requireLogin)", got, public+1)
+	}
+
+	// The pages that need no database, end to end.
+	w := get(s, "/en/bookmarks")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/en/bookmarks signed out: %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `href="/en/?type=movie"`) {
+		t.Error("a signed-out visitor is not shown the catalog nav")
+	}
+	if w := get(s, "/api/catalog/cards?ids="); w.Code != http.StatusOK {
+		t.Errorf("/api/catalog/cards signed out: %d, want 200", w.Code)
 	}
 }
 
-// The browser API that reads the catalog answers 401 rather than redirecting —
-// a fetch() cannot follow a redirect to a login page usefully.
-func TestMembersOnlyCatalogAPIIsUnauthorized(t *testing.T) {
-	w := get(gatedServer(t), "/api/catalog/cards?ids=1")
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("/api/catalog/cards: %d, want 401", w.Code)
+// /link approves a TV pairing for an account, so a signed-out visitor is sent
+// through /login and back, never cached.
+func TestLinkPageRedirectsToLogin(t *testing.T) {
+	w := get(gatedServer(t), "/en/link?code=ACDE-FGHJ")
+	if w.Code != http.StatusFound {
+		t.Fatalf("/en/link: status %d, want 302", w.Code)
+	}
+	if got, want := w.Header().Get("Location"), "/en/login?next=%2Fen%2Flink%3Fcode%3DACDE-FGHJ"; got != want {
+		t.Errorf("/en/link: Location %q, want %q", got, want)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("/en/link: Cache-Control %q, want no-store", got)
 	}
 }
 
-// The front door and the TV guide are the pages a signed-out visitor can see,
-// and neither offers catalog nav that would only bounce back to /login.
+// The sign-in page and the TV guide render for a signed-out visitor.
 func TestLoginPageIsPublic(t *testing.T) {
 	s := gatedServer(t)
 
@@ -74,9 +114,6 @@ func TestLoginPageIsPublic(t *testing.T) {
 	if !strings.Contains(body, `href="/auth/google/start?next=%2fen%2ftitles%2fdune-42"`) &&
 		!strings.Contains(body, `href="/auth/google/start?next=%2Fen%2Ftitles%2Fdune-42"`) {
 		t.Error("the Google button does not carry the page the visitor was headed to")
-	}
-	if strings.Contains(body, `href="/en/bookmarks"`) || strings.Contains(body, `href="/en/?type=movie"`) {
-		t.Error("a signed-out visitor is shown catalog nav")
 	}
 
 	if w := get(s, "/en/tv-app"); w.Code != http.StatusOK {
@@ -122,9 +159,8 @@ func TestLoginPageRedirectsTheSignedIn(t *testing.T) {
 	}
 }
 
-// A failed Google round trip lands back on the front door, with the reason and
-// the original destination intact, rather than on a members-only page that
-// would redirect again and lose both.
+// A failed Google round trip lands back on the sign-in page, with the reason
+// and the original destination intact, so the visitor can simply try again.
 func TestAuthErrorReturnsToLogin(t *testing.T) {
 	if got, want := authErrorURL("/en/titles/dune-42", "error"), "/en/login?login=error&next=%2Fen%2Ftitles%2Fdune-42"; got != want {
 		t.Fatalf("authErrorURL = %q, want %q", got, want)
@@ -149,9 +185,8 @@ func TestLoginPageExplainsBlockedAccount(t *testing.T) {
 	}
 }
 
-// Without accounts there is no way through the gate, so it stands down (local
-// dev only — NewServer refuses this in production) and /login is not routed.
-func TestMembersOnlyGateNeedsAccounts(t *testing.T) {
+// Without accounts there is no way to sign in, so /login is not routed.
+func TestLoginPageNeedsAccounts(t *testing.T) {
 	s := &Server{}
 	if err := s.parseTemplates(); err != nil {
 		t.Fatal(err)
@@ -165,23 +200,24 @@ func TestMembersOnlyGateNeedsAccounts(t *testing.T) {
 	}
 }
 
-// Production without sign-in would publish the whole catalog to anyone, so it
-// is refused at boot rather than discovered later.
+// Production without sign-in would let anyone watch, so it is refused at boot
+// rather than discovered later.
 func TestProductionRequiresAccounts(t *testing.T) {
 	cfg := Config{
 		PublicURL:          "https://phimnet.example",
 		SessionSecret:      strings.Repeat("s", minSecretLen),
 		SubtitleStorageDir: t.TempDir(),
 	}
-	if _, err := NewServer(nil, cfg); err == nil || !strings.Contains(err.Error(), "members-only") {
-		t.Fatalf("NewServer without accounts in production: err = %v, want the members-only refusal", err)
+	if _, err := NewServer(nil, cfg); err == nil || !strings.Contains(err.Error(), "watching requires sign-in") {
+		t.Fatalf("NewServer without accounts in production: err = %v, want the sign-in refusal", err)
 	}
 }
 
 // resolutionLock is what the prepare endpoint enforces for both the web page
-// and the TV app, so with accounts on an anonymous caller plays NOTHING — not
-// even 720p — while a signed-in visitor keeps every tier they had.
-func TestResolutionLockIsMembersOnly(t *testing.T) {
+// and the TV app, and now that browsing is public it is the ONLY thing that
+// makes watching need an account: with accounts on an anonymous caller plays
+// NOTHING — not even 720p — while a signed-in visitor keeps every tier they had.
+func TestResolutionLockNeedsSignIn(t *testing.T) {
 	gated := &Server{google: newGoogleClient("client-id", "secret", "http://localhost/cb")}
 	anon := titleAccess{}
 	member := titleAccess{signedIn: true}
@@ -190,6 +226,13 @@ func TestResolutionLockIsMembersOnly(t *testing.T) {
 	for _, res := range []string{"720p", "1080p", "2160p", ""} {
 		if got := gated.resolutionLock(res, anon); got != lockMember {
 			t.Errorf("anonymous %q = %q, want %q", res, got, lockMember)
+		}
+	}
+	// What a signed-out watch page (and an unpaired TV) is handed: every source
+	// listed, none playable, each one asking for sign-in.
+	for _, v := range gated.toWatchVideos([]Video{{ID: 1, Resolution: "720p"}, {ID: 2, Resolution: "1080p"}}, anon) {
+		if v.Available || v.Lock != lockMember {
+			t.Errorf("anonymous watch video %+v, want unavailable with lock %q", v, lockMember)
 		}
 	}
 	for _, res := range []string{"720p", "1080p"} {
@@ -206,7 +249,7 @@ func TestResolutionLockIsMembersOnly(t *testing.T) {
 		t.Errorf("entitled 2160p = %q, want playable", got)
 	}
 
-	// Accounts off (local dev): the gate stands down, exactly as requireLogin does.
+	// Accounts off (local dev): there is no way to sign in, so the lock stands down.
 	open := &Server{}
 	if got := open.resolutionLock("1080p", anon); got != lockNone {
 		t.Errorf("accounts off, 1080p = %q, want playable", got)
@@ -217,16 +260,15 @@ func TestResolutionLockIsMembersOnly(t *testing.T) {
 }
 
 // The TV app opens on its pair-first screen only when the server says sign-in
-// is required, so /me must state it — and must say false when accounts are off,
-// or a self-hosted server without Google sign-in would strand the app on a
-// pairing screen whose routes do not exist.
+// is required to browse. Browsing is public, so /me says false in both configs
+// and an unpaired TV opens on Home; playing still asks it to pair.
 func TestTVMeStatesWhetherSignInIsRequired(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		s    *Server
 		want bool
 	}{
-		{"accounts on", &Server{google: newGoogleClient("client-id", "secret", "http://localhost/cb")}, true},
+		{"accounts on", &Server{google: newGoogleClient("client-id", "secret", "http://localhost/cb")}, false},
 		{"accounts off", &Server{}, false},
 	} {
 		w := httptest.NewRecorder()

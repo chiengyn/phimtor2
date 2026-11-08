@@ -163,16 +163,19 @@ matching the repo's preference for small explicit clients).
 
 ### Pair first (`ui/welcome/`, `ui/Nav.kt`)
 
-The viewer is members-only, so an unpaired TV starts on **`WelcomeRoute`**, not
-Home. The **server** decides whether that matters — the app has no rule of its
-own: `/me` carries `sign_in_required` (true whenever the viewer has accounts).
+An unpaired TV starts on **`WelcomeRoute`**, not Home. The **server** decides
+whether that matters — the app has no rule of its own: `/me` carries
+`sign_in_required`. **The current viewer always sends `false`** (browsing is
+public; only playing needs an account, shown by the player's `Lock.Member`
+gate), so today the welcome screen steps straight aside to Home. The
+pair-first path below stays for a server that sends `true`.
 - **Required** → the welcome screen *is* the pairing screen (`LinkScreen` in
   front-door mode: "Members only" heading, code + QR, and **Settings** where Back
   would be — there is nothing behind it). Nothing from the catalog is requested
   until pairing completes; then it replaces itself with Home, so Back from Home
   leaves the app.
-- **Not required** (no accounts, or a viewer older than the field — the DTO
-  defaults it to `false`) → it steps aside to Home at once, as before.
+- **Not required** (the current viewer, or one older than the field — the DTO
+  defaults it to `false`) → it steps aside to Home at once.
 - **Unreachable** → `ErrorBox` with **Try again *and* Settings**: a wrong server
   address must not be a dead end.
 - Settings opened from there (`SettingsRoute(frontDoor = true)`) shows **no tab

@@ -12,7 +12,7 @@ database; the streamer(s) and manager stand alone.
 | Module | Purpose | Default port | Storage | Detail |
 |--------|---------|--------------|---------|--------|
 | **`admin/`** | TMDB importer + admin UI (writes the catalog) + torrent watch page + streamers dashboard + featured-titles curation + payment monitor | `8081` | MySQL (owner) | [`admin/CLAUDE.md`](admin/CLAUDE.md) |
-| **`viewer/`** | Members-only browse/discovery + watch UI (Google sign-in required) | `8082` | MySQL (read-only catalog, except contributed `subtitles`; writes `users`/`user_bookmarks`) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
+| **`viewer/`** | Public browse/discovery + watch UI (Google sign-in required to play) | `8082` | MySQL (read-only catalog, except contributed `subtitles`; writes `users`/`user_bookmarks`) | [`viewer/CLAUDE.md`](viewer/CLAUDE.md) |
 | **`streamer/`** | Torrent video streaming **API** (backend-only, space-saving storage); **N interchangeable instances** | `8080` | local disk / bolt / sqlite | [`streamer/CLAUDE.md`](streamer/CLAUDE.md) |
 | **`manager/`** | Control plane that load-balances torrents across streamers (token-gated; public host + internal alias) | `8083` | enrollment JSON file | [`manager/CLAUDE.md`](manager/CLAUDE.md) |
 | **`tv/`** | Android TV / Google TV app (Kotlin, Compose for TV, Media3). A second **client** of the viewer's `/api/tv/v1`; distributed as an APK, not deployed | — | on-device DataStore | [`tv/CLAUDE.md`](tv/CLAUDE.md) |

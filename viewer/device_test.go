@@ -217,8 +217,9 @@ func routesOf(t *testing.T, s *Server) map[string]bool {
 	return found
 }
 
-// The TV read API is always registered — an unpaired TV may still browse the
-// catalog, though resolutionLock lets it play nothing until it pairs.
+// The TV read API is always registered and public — an unpaired TV browses the
+// catalog like a signed-out browser, though resolutionLock lets it play
+// nothing until it pairs.
 // The PAIRING routes follow /auth/google/*: without accounts there is nothing to
 // pair to, and registering them would dangle a flow that could only ever fail.
 //

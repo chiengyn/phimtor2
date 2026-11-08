@@ -1,9 +1,9 @@
 {{define "head_title"}}{{t "login.title"}} – phimnet{{end}}
 {{define "head_extra"}}
 <meta name="description" content="{{t "home.description"}}">
-{{/* The front door is the one page of a members-only site worth indexing. The
-     canonical drops ?next= and ?login=, which vary per visitor. */}}
-<meta name="robots" content="index, follow">
+{{/* A sign-in page carries no content worth indexing. The canonical drops
+     ?next= and ?login=, which vary per visitor. */}}
+<meta name="robots" content="noindex, follow">
 <link rel="canonical" href="{{abs (pagePath "/login")}}">
 {{end}}
 {{define "content"}}

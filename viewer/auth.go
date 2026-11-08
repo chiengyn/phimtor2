@@ -126,8 +126,9 @@ func (s *Server) deviceUser(r *http.Request) (userID, deviceID int64, ok bool) {
 	return userID, deviceID, true
 }
 
-// requireLogin is the members-only gate in front of every catalog page and the
-// browser APIs that read the catalog. A page redirects to the localized /login,
+// requireLogin guards the pages that only make sense for an account — today
+// just /link, where a TV pairing is approved. Browsing is public and watching
+// is gated by resolutionLock instead. A page redirects to the localized /login,
 // carrying where the visitor was headed; an API answers 401 JSON, exactly as
 // requireUser does.
 //
@@ -172,7 +173,7 @@ type loginData struct {
 	Error string
 }
 
-// handleLoginPage is the front door of the members-only site. There is no
+// handleLoginPage is the sign-in page. There is no
 // separate registration: a first Google sign-in creates the account
 // (UpsertGoogleUser), so the one button serves both.
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {

@@ -429,14 +429,15 @@ func (s *Server) handleTVWatchEpisode(w http.ResponseWriter, r *http.Request) {
 // signed_in false, not a 401 — a 401 here would make the app treat it as an
 // error state.
 //
-// sign_in_required is the members-only gate, stated by the server rather than
-// assumed by the app: true whenever accounts are on (requireLogin). An unpaired
-// TV that reads it opens on its pair-first screen instead of Home; a server
-// without accounts, or one older than the field (decoded as false), keeps the
-// app browsing as before.
+// sign_in_required says whether BROWSING needs an account, stated by the
+// server rather than assumed by the app. An unpaired TV that reads true opens
+// on its pair-first screen instead of Home. Browsing is public now, so it is
+// always false: the TV opens on Home, and playing a source shows the app's
+// sign-in gate (resolutionLock answers lockMember / 401 for every quality).
+// The field stays because installed apps decode it.
 func (s *Server) handleTVMe(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	required := s.google.enabled()
+	const required = false
 	if u == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"signed_in": false, "sign_in_required": required})
 		return

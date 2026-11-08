@@ -485,8 +485,9 @@ func TestTVWatchLocksMatchResolutionLockIntegration(t *testing.T) {
 		return locks
 	}
 
-	// Anonymous: the site is members-only, so an unpaired TV still sees every
-	// source but may play none of them — each one asks it to sign in.
+	// Anonymous: browsing is public but watching needs an account, so an
+	// unpaired TV sees every source but may play none of them — each one asks
+	// it to sign in.
 	anon := get(nil)
 	for _, res := range []string{"720p", "1080p", "2160p"} {
 		if anon[res] != lockMember {
