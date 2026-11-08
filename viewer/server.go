@@ -343,12 +343,16 @@ func watchMoviePath(locale Locale, id int64, name, original string) string {
 	return joinSlugID(localeURL(locale, "/watch/movie"), titleSlug(name, original), id)
 }
 
+// watchEpisodePath's slug word follows the page locale ("tap" on /vi,
+// "episode" elsewhere). Only the trailing id is ever parsed, so URLs minted
+// before the word was localized (every locale used "tap") still resolve.
 func watchEpisodePath(locale Locale, id int64, epNum int, titleName string) string {
+	word := episodeSlugWord(locale)
 	slug := titleSlug(titleName, "")
 	if slug != "" {
-		slug = fmt.Sprintf("%s-tap-%d", slug, epNum)
+		slug = fmt.Sprintf("%s-%s-%d", slug, word, epNum)
 	} else {
-		slug = fmt.Sprintf("tap-%d", epNum)
+		slug = fmt.Sprintf("%s-%d", word, epNum)
 	}
 	return joinSlugID(localeURL(locale, "/watch/episode"), slug, id)
 }

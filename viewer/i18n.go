@@ -29,18 +29,23 @@ type localeDefinition struct {
 	Locale          Locale
 	NativeName      string
 	OpenGraphLocale string
+	// EpisodeSlug is the word in an episode watch URL ("<title>-<word>-<n>-<id>").
+	// It must be ASCII lowercase: slugify would drop CJK to nothing, so the
+	// Chinese, Korean and Japanese trees use the English word, as their title
+	// slugs already fall back to the Latin original.
+	EpisodeSlug string
 }
 
 // localeDefinitions is the registry behind routing, template parsing, SEO, and
 // the language dropdown. Adding a locale here (plus its message catalog and
 // parser case) makes it appear in the menu without changing layout markup.
 var localeDefinitions = []localeDefinition{
-	{Locale: LocaleVI, NativeName: "Tiếng Việt", OpenGraphLocale: "vi_VN"},
-	{Locale: LocaleEN, NativeName: "English", OpenGraphLocale: "en_US"},
-	{Locale: LocaleZHCN, NativeName: "简体中文", OpenGraphLocale: "zh_CN"},
-	{Locale: LocaleZHTW, NativeName: "繁體中文", OpenGraphLocale: "zh_TW"},
-	{Locale: LocaleKO, NativeName: "한국어", OpenGraphLocale: "ko_KR"},
-	{Locale: LocaleJA, NativeName: "日本語", OpenGraphLocale: "ja_JP"},
+	{Locale: LocaleVI, NativeName: "Tiếng Việt", OpenGraphLocale: "vi_VN", EpisodeSlug: "tap"},
+	{Locale: LocaleEN, NativeName: "English", OpenGraphLocale: "en_US", EpisodeSlug: "episode"},
+	{Locale: LocaleZHCN, NativeName: "简体中文", OpenGraphLocale: "zh_CN", EpisodeSlug: "episode"},
+	{Locale: LocaleZHTW, NativeName: "繁體中文", OpenGraphLocale: "zh_TW", EpisodeSlug: "episode"},
+	{Locale: LocaleKO, NativeName: "한국어", OpenGraphLocale: "ko_KR", EpisodeSlug: "episode"},
+	{Locale: LocaleJA, NativeName: "日本語", OpenGraphLocale: "ja_JP", EpisodeSlug: "episode"},
 }
 
 var supportedLocales = func() []Locale {
@@ -67,6 +72,17 @@ func languageName(locale Locale) string {
 		}
 	}
 	return string(locale)
+}
+
+// episodeSlugWord is the locale's word for "episode" in watch URLs, falling
+// back to English for a locale that does not set one.
+func episodeSlugWord(locale Locale) string {
+	for _, definition := range localeDefinitions {
+		if definition.Locale == locale && definition.EpisodeSlug != "" {
+			return definition.EpisodeSlug
+		}
+	}
+	return "episode"
 }
 
 func openGraphLocale(locale Locale) string {
