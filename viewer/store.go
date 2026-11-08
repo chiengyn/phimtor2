@@ -228,13 +228,17 @@ type SitemapEntry struct {
 	UpdatedAt     time.Time
 }
 
-// SitemapTitles lists every title with its last-modified time, newest first,
-// for sitemap.xml. Missing timestamps fall back to "now" so the entry is still
-// emitted with a valid <lastmod>.
-func (s *Store) SitemapTitles(ctx context.Context, locale Locale) ([]SitemapEntry, error) {
+// SitemapTitles lists one page of titles, in id order, with each one's
+// last-modified time, for a sitemap-titles-N.xml file. Id order (not recency)
+// keeps a title in the same file from one crawl to the next, and lets every
+// locale's query over the same limit/offset return the same titles. Missing
+// timestamps fall back to "now" so the entry is still emitted with a valid
+// <lastmod>.
+func (s *Store) SitemapTitles(ctx context.Context, locale Locale, limit, offset int) ([]SitemapEntry, error) {
+	args := append(catalogLocaleArgs(locale), limit, offset)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT t.id, `+localizedTitleExpr+`, t.original_title, t.updated_at
-		 FROM titles t `+titleLocaleJoins+` ORDER BY t.updated_at DESC`, catalogLocaleArgs(locale)...)
+		 FROM titles t `+titleLocaleJoins+` ORDER BY t.id LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -255,6 +259,31 @@ func (s *Store) SitemapTitles(ctx context.Context, locale Locale) ([]SitemapEntr
 			e.UpdatedAt = time.Now()
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// SitemapTitleStamps returns every title's last-modified time in id order —
+// the same order SitemapTitles pages through — so the sitemap index can count
+// its title files and date each one without loading any titles.
+func (s *Store) SitemapTitleStamps(ctx context.Context) ([]time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT updated_at FROM titles ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []time.Time
+	for rows.Next() {
+		var updated sql.NullTime
+		if err := rows.Scan(&updated); err != nil {
+			return nil, err
+		}
+		if updated.Valid {
+			out = append(out, updated.Time)
+		} else {
+			out = append(out, time.Now())
+		}
 	}
 	return out, rows.Err()
 }

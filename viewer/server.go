@@ -443,6 +443,8 @@ func (s *Server) setupRouter() {
 	// Crawler endpoints.
 	r.Get("/robots.txt", s.handleRobots)
 	r.Get("/sitemap.xml", s.handleSitemap)
+	r.Get("/sitemap-pages.xml", s.handleSitemapPages)
+	r.Get("/sitemap-titles-{page}.xml", s.handleSitemapTitles)
 
 	// Every human-facing page has an explicit locale prefix. The neutral root is
 	// the only language-negotiated URL; all other unprefixed page routes are
@@ -1787,28 +1789,78 @@ func (s *Server) handleRobots(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: %s/sitemap.xml\n", s.baseURL(r))
 }
 
-// handleSitemap emits an XML sitemap of the home page plus every title detail
-// page, with each title's last-modified date so crawlers can prioritise updates.
+// sitemapTitlesPerFile is how many titles each sitemap-titles-N.xml carries.
+// Every title is listed once per locale, so a file holds this many times
+// len(supportedLocales) <url> entries, and the protocol caps a file at 50,000
+// entries and 50 MB uncompressed. 2,000 × 6 locales is 12,000 entries and
+// about 5 MB with the hreflang alternates. Keep the product under 50,000 when
+// adding a locale.
+const sitemapTitlesPerFile = 2000
+
+// sitemapIndexEntry is one <sitemap> in the index: a file and, when known, the
+// newest change it contains.
+type sitemapIndexEntry struct {
+	loc     string
+	lastmod time.Time
+}
+
+// sitemapTitleChunks groups title timestamps (in id order) into files of
+// perFile, returning the newest timestamp in each — the <lastmod> the index
+// gives that file, so a crawler only refetches the files that changed.
+func sitemapTitleChunks(stamps []time.Time, perFile int) []time.Time {
+	var out []time.Time
+	for start := 0; start < len(stamps); start += perFile {
+		end := min(start+perFile, len(stamps))
+		newest := stamps[start]
+		for _, t := range stamps[start+1 : end] {
+			if t.After(newest) {
+				newest = t
+			}
+		}
+		out = append(out, newest)
+	}
+	return out
+}
+
+// handleSitemap is the sitemap INDEX: one file of static pages, then one file
+// per sitemapTitlesPerFile titles. A single flat file outgrew the protocol's
+// comfort zone (19 MB and ~25,000 entries at 4,100 titles × 6 locales), and an
+// index also lets a crawler skip the files whose <lastmod> has not moved.
 func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
+	stamps, err := s.store.SitemapTitleStamps(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	base := s.baseURL(r)
-	localized := make(map[Locale][]SitemapEntry, len(supportedLocales))
-	byID := make(map[Locale]map[int64]SitemapEntry, len(supportedLocales))
-	for _, locale := range supportedLocales {
-		entries, err := s.store.SitemapTitles(r.Context(), locale)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		localized[locale] = entries
-		byID[locale] = make(map[int64]SitemapEntry, len(entries))
-		for _, entry := range entries {
-			byID[locale][entry.ID] = entry
-		}
+	entries := []sitemapIndexEntry{{loc: base + "/sitemap-pages.xml"}}
+	for i, newest := range sitemapTitleChunks(stamps, sitemapTitlesPerFile) {
+		entries = append(entries, sitemapIndexEntry{
+			loc:     fmt.Sprintf("%s/sitemap-titles-%d.xml", base, i+1),
+			lastmod: newest,
+		})
 	}
 
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
-	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">` + "\n")
+	b.WriteString(`<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` + "\n")
+	for _, e := range entries {
+		b.WriteString("  <sitemap><loc>" + e.loc + "</loc>")
+		if !e.lastmod.IsZero() {
+			b.WriteString("<lastmod>" + e.lastmod.Format("2006-01-02") + "</lastmod>")
+		}
+		b.WriteString("</sitemap>\n")
+	}
+	b.WriteString("</sitemapindex>\n")
+	writeSitemapXML(w, b.String())
+}
+
+// handleSitemapPages lists the pages that are not titles: each locale's home
+// and, when the TV app is published, its install guide. It needs no database.
+func (s *Server) handleSitemapPages(w http.ResponseWriter, r *http.Request) {
+	base := s.baseURL(r)
+	var b strings.Builder
+	b.WriteString(urlsetOpen)
 	for _, locale := range supportedLocales {
 		b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, localeHome(locale)))
 		for _, alternate := range supportedLocales {
@@ -1822,11 +1874,49 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 			}
 			b.WriteString("<changefreq>monthly</changefreq></url>\n")
 		}
+	}
+	b.WriteString("</urlset>\n")
+	writeSitemapXML(w, b.String())
+}
+
+// handleSitemapTitles is one page of title detail pages (1-based, id order),
+// each listed in every locale with hreflang alternates and its <lastmod>. A
+// page past the end, or one that is not a positive number, is a 404 — and is
+// rejected before touching the database.
+func (s *Server) handleSitemapTitles(w http.ResponseWriter, r *http.Request) {
+	page, err := strconv.Atoi(chi.URLParam(r, "page"))
+	if err != nil || page < 1 || strconv.Itoa(page) != chi.URLParam(r, "page") {
+		http.NotFound(w, r)
+		return
+	}
+	offset := (page - 1) * sitemapTitlesPerFile
+	localized := make(map[Locale][]SitemapEntry, len(supportedLocales))
+	byID := make(map[Locale]map[int64]SitemapEntry, len(supportedLocales))
+	for _, locale := range supportedLocales {
+		entries, err := s.store.SitemapTitles(r.Context(), locale, sitemapTitlesPerFile, offset)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		localized[locale] = entries
+		byID[locale] = make(map[int64]SitemapEntry, len(entries))
+		for _, entry := range entries {
+			byID[locale][entry.ID] = entry
+		}
+	}
+	if len(localized[supportedLocales[0]]) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+
+	base := s.baseURL(r)
+	var b strings.Builder
+	b.WriteString(urlsetOpen)
+	for _, locale := range supportedLocales {
 		for _, entry := range localized[locale] {
 			b.WriteString(fmt.Sprintf("  <url><loc>%s%s</loc>", base, titlePath(locale, entry.ID, entry.Title, entry.OriginalTitle)))
 			for _, alternate := range supportedLocales {
-				other, ok := byID[alternate][entry.ID]
-				if ok {
+				if other, ok := byID[alternate][entry.ID]; ok {
 					b.WriteString(fmt.Sprintf(`<xhtml:link rel="alternate" hreflang="%s" href="%s%s"/>`, alternate, base, titlePath(alternate, other.ID, other.Title, other.OriginalTitle)))
 				}
 			}
@@ -1834,9 +1924,15 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	b.WriteString("</urlset>\n")
+	writeSitemapXML(w, b.String())
+}
 
+const urlsetOpen = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+	`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">` + "\n"
+
+func writeSitemapXML(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	_, _ = w.Write([]byte(b.String()))
+	_, _ = w.Write([]byte(body))
 }
 
 // pageData is the root value every page template is executed with. Data is the

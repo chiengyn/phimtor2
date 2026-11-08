@@ -165,7 +165,7 @@ Flat single `main` package.
 
 - **Sign-in to watch** (`resolutionLock`, `auth.go`). Browsing is **public**:
   home, detail, bookmarks, plans and the **watch page** all render for a
-  signed-out visitor, and `robots.txt`/`sitemap.xml` list every title. What
+  signed-out visitor, and `robots.txt`/the sitemap list every title. What
   needs an account is **playing**: with accounts on, `resolutionLock` returns
   `lockMember` for every quality to an anonymous caller, so the watch page lists
   every source as a 🔒 sign-in chip and opens on its login gate
@@ -242,6 +242,13 @@ Flat single `main` package.
     the footer (the nav is hidden on phones). Gated on
     `TV_APK_DIR` like the APK routes, and listed in `sitemap.xml`.
   - `/static/*` — static assets (`style.css`, `bookmarks.js`).
+  - `GET /sitemap.xml` — a sitemap **index**, not a sitemap: it points at
+    `/sitemap-pages.xml` (each locale's home + the TV guide) and
+    `/sitemap-titles-N.xml`, one per `sitemapTitlesPerFile` (2,000) titles in
+    **id order**, each dated by its newest title. Every title is listed once per
+    locale with hreflang alternates, so a file holds `perFile × locales` entries
+    — keep that under the protocol's 50,000 (`TestSitemapTitleFilesFitTheProtocol`).
+    The single flat file it replaced had reached 19 MB.
   Unknown / bad ids render the `404.html` page (not a bare error).
 
 - **Watch page plays real torrents, viewer-mediated.** `handleWatchMovie`/
