@@ -598,6 +598,20 @@ Flat single `main` package.
     needed for local mode). Every storage access is `try/catch`-guarded so
     blocked storage degrades to "nothing saved".
 
+- **Ads** (`ads.go`, `Store.AdScript`). The script and on/off switch are set at
+  the admin's `/ads` page and stored in `ad_settings` (`0014`), which this service
+  only reads. `adCache` reloads them every 30 seconds, so rendering a page costs
+  no query, and a failed read keeps the last known value. A missing table (viewer
+  deployed before admin) logs an error and shows no ads.
+  - `newPageData` leaves `AdScript` empty for an active pass or comp holder, and
+    `layout.html` prints it just before `</body>` from the `ads` block. Title
+    unlock holders still see ads.
+  - `plans`, `invoice`, `login` and `link` override that block, because a
+    third-party script can read or change anything on a page where someone pays,
+    signs in or approves a TV. **The override must be `{{define "ads"}}{{""}}{{end}}`**:
+    Go ignores a `define` with an empty body, so `{{define "ads"}}{{end}}` silently
+    leaves the ads on. `TestAdScriptPerPage` pins this.
+
 - **Watch-session reaping** (`watchtracker.go`, `manager.go`
   `deleteTorrent`). So a torrent doesn't linger after the user leaves (wasting the
   streamer's peers/cache/disk until its ~30-min idle reaper), the watch page

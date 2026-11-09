@@ -445,6 +445,17 @@ func capRow(ts []TitleSummary) []TitleSummary {
 	return ts
 }
 
+// AdScript returns the ad script the admin configured, or "" while ads are off.
+func (s *Store) AdScript(ctx context.Context) (string, error) {
+	var script string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT script FROM ad_settings WHERE id = 1 AND enabled = 1`).Scan(&script)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return script, err
+}
+
 // FeaturedTitleIDs returns the ids of titles an admin hand-picked for the browse
 // hero billboard, in curated display order (featured_titles.position ascending),
 // capped at limit. Empty when nothing is featured, letting the caller fall back

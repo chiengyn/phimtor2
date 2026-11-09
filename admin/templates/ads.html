@@ -1,0 +1,77 @@
+{{/* The ad network script and its on/off switch (migrations/0014_ad_settings.sql).
+     A plain form POST + 303, like users.html. The viewer reads this row on an
+     interval and prints the script into its public pages. Here it only ever sits
+     inside the textarea, escaped, so it does not run on this page. */}}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phimtor2 — Quảng cáo</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0e1116; color: #e6edf3; line-height: 1.5;
+    }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 980px; margin: 0 auto; padding: 1.5rem; }
+    a { color: #79c0ff; }
+    .muted { color: #8b98a5; font-size: .85rem; }
+    .status { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+    .badge { display: inline-block; font-size: .8rem; padding: .15rem .6rem; border-radius: 999px; }
+    .badge.on { background: #0f2e1a; color: #86efac; }
+    .badge.off { background: #21262d; color: #8b98a5; }
+    .notice { padding: .6rem .85rem; border-radius: 8px; margin: 1rem 0; }
+    .notice.ok { background: #0f2e1a; color: #86efac; }
+    .notice.err { background: #2a141a; color: #ff8b94; }
+    label { display: block; margin-top: 1rem; }
+    .switch { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
+    .switch input { width: 1.1rem; height: 1.1rem; }
+    textarea {
+      display: block; width: 100%; min-height: 16rem; margin-top: .35rem; padding: .7rem;
+      font: .85rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      border-radius: 8px; border: 1px solid #303b48; background: #161b22; color: #e6edf3;
+    }
+    button {
+      font: inherit; margin-top: 1rem; padding: .55rem 1.1rem; border-radius: 8px; cursor: pointer;
+      border: 1px solid #2563eb; background: #2563eb; color: #e6edf3;
+    }
+    button:hover { background: #1d4ed8; }
+    ul { padding-left: 1.2rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📣 phimtor2 — Quảng cáo</h1>
+    <span><a href="/payments">Thanh toán</a> · <a href="/">Danh sách phim</a></span>
+  </header>
+  <main>
+    <div class="status">
+      {{ if .Enabled }}<span class="badge on">Đang bật</span>{{ else }}<span class="badge off">Đang tắt</span>{{ end }}
+      {{ if not .UpdatedAt.IsZero }}<span class="muted">Cập nhật lần cuối {{ .UpdatedAt.Format "02/01/2006 15:04" }}</span>{{ end }}
+    </div>
+
+    {{ if .Saved }}<div class="notice ok">Đã lưu. Trang công khai sẽ cập nhật trong khoảng 30 giây.</div>{{ end }}
+    {{ with .Error }}<div class="notice err">{{ . }}</div>{{ end }}
+
+    <form method="post" action="/ads">
+      <label class="switch">
+        <input type="checkbox" name="enabled" value="1" {{ if .Enabled }}checked{{ end }}>
+        Hiển thị quảng cáo trên trang công khai
+      </label>
+      <label for="script">Đoạn mã từ mạng quảng cáo</label>
+      <textarea id="script" name="script" spellcheck="false" placeholder="<script>…</script>">{{ .Script }}</textarea>
+      <button type="submit">Lưu</button>
+    </form>
+
+    <ul class="muted">
+      <li>Đoạn mã này chạy trên trình duyệt của mọi khách truy cập, nên chỉ dán mã từ nguồn bạn tin tưởng.</li>
+      <li>Không hiển thị cho người có gói 4K hoặc được tặng 4K, và không hiển thị trên các trang gói cước, hóa đơn, đăng nhập và liên kết TV.</li>
+      <li>Ứng dụng TV không bị ảnh hưởng.</li>
+    </ul>
+  </main>
+</body>
+</html>

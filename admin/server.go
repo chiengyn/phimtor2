@@ -191,6 +191,8 @@ func (s *Server) setupRouter() {
 	r.Post("/users/{id}/comp", s.handleSetUserComp)
 	r.Post("/users/{id}/block", s.handleSetUserBlocked)
 	r.Get("/payments", s.handlePaymentsPage)
+	r.Get("/ads", s.handleAdsPage)
+	r.Post("/ads", s.handleSaveAds)
 	r.Get("/watch-history", s.handleWatchHistoryPage)
 	r.Get("/sql", s.handleSQLPage)
 	r.Post("/sql", s.handleSQLQuery)

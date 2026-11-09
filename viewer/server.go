@@ -56,6 +56,10 @@ type Server struct {
 	// no-op — without accounts or with WATCH_LOG_FLUSH_SEC=0.
 	watchLog *watchLog
 
+	// ads holds the ad script configured at the admin's /ads page, refreshed from
+	// main. Nil means no ads.
+	ads *adCache
+
 	// publicURL is the viewer's own browser-facing origin (no trailing slash),
 	// used to build absolute canonical / Open Graph / sitemap URLs. Empty in
 	// local dev, where SEO URLs fall back to site-relative.
@@ -174,6 +178,9 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		log.Printf("Watch history enabled (flush every %ds)", cfg.WatchLogFlushSec)
 	} else {
 		log.Printf("Watch history disabled (needs accounts and WATCH_LOG_FLUSH_SEC > 0)")
+	}
+	if store != nil {
+		s.ads = newAdCache(store.AdScript)
 	}
 	// Bounds guessing at a television's short pairing code. Keyed by account
 	// (rateKey), because approving requires being signed in.
@@ -1994,6 +2001,10 @@ type pageData struct {
 	// Path is the current request's path+query, so the logout form returns the
 	// visitor to where they were.
 	Path string
+	// AdScript is the ad markup for this visitor, empty for an active pass or comp
+	// holder, who get the site ad-free. Pages that must never carry ads override
+	// the "ads" block in layout.html instead of checking this.
+	AdScript template.HTML
 }
 
 // newPageData wraps a handler's view model with the shared per-request chrome.
@@ -2017,6 +2028,9 @@ func (s *Server) newPageData(r *http.Request, data any) pageData {
 		User:               userFrom(r.Context()),
 		SavedIDsJSON:       "[]",
 		Path:               r.URL.RequestURI(),
+	}
+	if now := time.Now(); !pd.User.HasPass(now) && !pd.User.HasComp(now) {
+		pd.AdScript = s.ads.script()
 	}
 	// Detail pages use locale-specific slugs. Resolve every translation so the
 	// hreflang links and language menu point directly at canonical URLs rather

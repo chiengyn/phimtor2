@@ -57,6 +57,9 @@ func main() {
 	// when no crypto rail is configured, or when the poll interval is 0.
 	go server.billing.run(ctx)
 
+	// Keep the admin-configured ad script fresh.
+	go server.ads.run(ctx)
+
 	go func() {
 		log.Printf("phimtor2-viewer listening on http://%s", addr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -1,3 +1,4 @@
+{{/* No ads here: people pay, sign in or approve a TV on this page, and an ad script could read or change anything on it. The empty string is required: Go ignores a define with an empty body, so {{define "ads"}}{{end}} would not replace the block. */}}{{define "ads"}}{{""}}{{end}}
 {{define "head_title"}}{{t "link.title"}} – phimnet{{end}}
 {{define "head_extra"}}
 <meta name="description" content="{{t "link.description"}}">

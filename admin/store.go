@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -1413,6 +1414,37 @@ func (s *Store) SetUserComp(ctx context.Context, userID int64, until *time.Time)
 // the two services' writes to `users` stay disjoint.
 func (s *Store) SetUserBlocked(ctx context.Context, userID int64, blocked bool) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE users SET is_blocked = ? WHERE id = ?`, blocked, userID)
+	return err
+}
+
+// --- Ad settings ---------------------------------------------------------------
+
+// AdSettings is the single ad_settings row, edited at GET /ads and read by the
+// viewer.
+type AdSettings struct {
+	Enabled   bool
+	Script    string
+	UpdatedAt time.Time
+}
+
+// GetAdSettings returns the current settings, or a zero value if the row is gone.
+func (s *Store) GetAdSettings(ctx context.Context) (AdSettings, error) {
+	var a AdSettings
+	err := s.db.QueryRowContext(ctx,
+		`SELECT enabled, script, updated_at FROM ad_settings WHERE id = 1`).
+		Scan(&a.Enabled, &a.Script, &a.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AdSettings{}, nil
+	}
+	return a, err
+}
+
+// SaveAdSettings replaces the settings row.
+func (s *Store) SaveAdSettings(ctx context.Context, enabled bool, script string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO ad_settings (id, enabled, script) VALUES (1, ?, ?)
+		ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), script = VALUES(script)`,
+		enabled, script)
 	return err
 }
 

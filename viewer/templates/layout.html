@@ -125,5 +125,8 @@
 			{{end}}
 		</div>
 	</footer>
+	{{/* The ad script set at the admin's /ads page, empty for pass and comp holders
+	     (newPageData). A page that must never carry ads overrides this block. */}}
+	{{block "ads" .}}{{.AdScript}}{{end}}
 </body>
 </html>{{end}}

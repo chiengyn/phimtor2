@@ -86,6 +86,11 @@ other modules currently have no tests.
   UI provably unable to cancel a subscription somebody paid for — the `UPDATE`
   never names those columns. Keep it that way.
 
+`ad_settings` (`0014_ad_settings.sql`) runs the other way: the admin is its only
+writer, at `GET /ads`, and the viewer only reads it. Its script is printed
+unescaped into public pages, so the basic-auth admin page is the trust boundary
+for that value.
+
 `subtitles` is the one catalog table with two writers. A signed-in viewer can
 search a subtitle provider from the watch page and save the result for everyone;
 those rows carry `added_by_user_id` (`0011`), admin-curated ones leave it `NULL`.
