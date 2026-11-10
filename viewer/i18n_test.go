@@ -172,3 +172,40 @@ func TestLanguageOptionsPreservePageAndQuery(t *testing.T) {
 		t.Fatalf("Vietnamese option = %#v", last)
 	}
 }
+
+func TestParseLocaleRegionalVariants(t *testing.T) {
+	cases := map[string]Locale{
+		"th": LocaleTH, "th-TH": LocaleTH,
+		"id": LocaleID, "id-ID": LocaleID,
+		// Java and older Android still report Indonesian as "in".
+		"in": LocaleID, "in_ID": LocaleID,
+		"es": LocaleES, "es-419": LocaleES, "es-MX": LocaleES,
+		// Brazilian is the only Portuguese tree, so it serves Portugal too.
+		"pt": LocalePTBR, "pt-BR": LocalePTBR, "pt-PT": LocalePTBR,
+		"ru": LocaleRU, "ru-RU": LocaleRU,
+	}
+	for raw, want := range cases {
+		if got, ok := parseLocale(raw); !ok || got != want {
+			t.Errorf("parseLocale(%q) = %q, %v; want %q", raw, got, ok, want)
+		}
+	}
+}
+
+// Each locale's home row links to ?subtitle=<locale>, so every locale code must
+// survive as a filter, and anything else must be dropped rather than queried.
+func TestSubtitleFilterAcceptsEveryLocale(t *testing.T) {
+	for _, locale := range supportedLocales {
+		if got := subtitleFilterLanguage(string(locale)); got != string(locale) {
+			t.Errorf("subtitleFilterLanguage(%q) = %q", locale, got)
+		}
+		r := httptest.NewRequest(http.MethodGet, "/?subtitle="+string(locale), nil)
+		if got := filterFromQuery(r).Subtitle; got != string(locale) {
+			t.Errorf("filterFromQuery subtitle=%s kept %q", locale, got)
+		}
+	}
+	for _, raw := range []string{"", "fr", "pt-BR", "PT-BR", "vi-VN", "x' OR 1=1"} {
+		if got := subtitleFilterLanguage(raw); got != "" {
+			t.Errorf("subtitleFilterLanguage(%q) = %q, want it dropped", raw, got)
+		}
+	}
+}

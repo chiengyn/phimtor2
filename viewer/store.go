@@ -81,7 +81,7 @@ type TitleFilter struct {
 	Query    string // free-text match against the (localized) title or original title
 	GenreID  int    // TMDB genre id; 0 = any
 	Type     string // "movie" | "tv"; anything else = any
-	Subtitle string // "vi" | "en"; empty means any subtitle state
+	Subtitle string // a supported locale code (subtitleFilterLanguage); empty means any subtitle state
 }
 
 const titleLocaleJoins = `
@@ -116,9 +116,9 @@ func titleFilterClause(f TitleFilter) (string, []any) {
 		where = append(where, "t.type = ?")
 		args = append(args, f.Type)
 	}
-	if f.Subtitle == "vi" || f.Subtitle == "en" {
+	if lang := subtitleFilterLanguage(f.Subtitle); lang != "" {
 		where = append(where, "t.type = 'movie' AND EXISTS (SELECT 1 FROM subtitles sf WHERE sf.title_id = t.id AND sf.language = ?)")
-		args = append(args, f.Subtitle)
+		args = append(args, lang)
 	}
 	if len(where) == 0 {
 		return "", nil

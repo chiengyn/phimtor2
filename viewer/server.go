@@ -689,7 +689,7 @@ func filterFromQuery(r *http.Request) TitleFilter {
 	if id, err := strconv.Atoi(q.Get("genre")); err == nil && id > 0 {
 		f.GenreID = id
 	}
-	if sub := q.Get("subtitle"); sub == "vi" || sub == "en" {
+	if sub := subtitleFilterLanguage(q.Get("subtitle")); sub != "" {
 		f.Subtitle = sub
 	} else if q.Get("vietsub") == "1" {
 		f.Subtitle = "vi"

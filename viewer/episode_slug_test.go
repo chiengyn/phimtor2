@@ -16,6 +16,10 @@ func TestWatchEpisodePathIsLocalized(t *testing.T) {
 		{LocaleVI, "Euphoria", "/vi/watch/episode/euphoria-tap-1-168"},
 		{LocaleEN, "Euphoria", "/en/watch/episode/euphoria-episode-1-168"},
 		{LocaleJA, "Euphoria", "/ja/watch/episode/euphoria-episode-1-168"},
+		{LocaleES, "Euforia", "/es/watch/episode/euforia-episodio-1-168"},
+		{LocalePTBR, "Euphoria", "/pt-br/watch/episode/euphoria-episodio-1-168"},
+		// Cyrillic slugs to nothing, like CJK, and still gets the word.
+		{LocaleRU, "Эйфория", "/ru/watch/episode/episode-1-168"},
 		// An unsluggable (CJK-only) title still gets a readable word.
 		{LocaleZHCN, "亢奋", "/zh-cn/watch/episode/episode-1-168"},
 	}

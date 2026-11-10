@@ -10,7 +10,8 @@ Guidance for the **viewer** service
 The **read side** of the shared catalog: a server-rendered browse / discovery /
 watch UI — **public to browse, sign-in required to play** — over the movie/TV metadata that [`admin/`](../admin/CLAUDE.md)
 imports. It renders localized Go `html/template` pages under explicit `/vi/...`,
-`/en/...`, `/zh-cn/...`, `/zh-tw/...`, `/ko/...`, and `/ja/...` routes. `i18n.go` embeds `locales/*.json`; its
+`/en/...`, `/zh-cn/...`, `/zh-tw/...`, `/ko/...`, `/ja/...`, `/th/...`, `/id/...`,
+`/es/...`, `/pt-br/...`, and `/ru/...` routes. `i18n.go` embeds `locales/*.json`; its
 `localeDefinitions` registry drives supported routes, catalog loading, template
 parsing, SEO locale metadata, and the header language dropdown. The dropdown
 uses native `<details>` links and preserves the current page/query.
@@ -192,7 +193,8 @@ Flat single `main` package.
   registered locale prefix; `/` negotiates from the locale cookie / browser
   language, while old unprefixed page routes permanently redirect to Vietnamese.
   - `GET /{locale}/` — home, fully server-rendered. Supported locales are `vi`,
-    `en`, `zh-cn`, `zh-tw`, `ko`, and `ja`. With an active filter
+    `en`, `zh-cn`, `zh-tw`, `ko`, `ja`, `th`, `id`, `es`, `pt-br`, and `ru`
+    (English is the fallback and leads the menu). With an active filter
     (`q`/`genre`/`type`) it renders a paginated **grid** (`?page=N`, 1-based,
     clamped server-side); otherwise Netflix-style **rows**. `handleHome` first
     **redirects to the canonical URL** (`homeURL`): it drops empty/odd query
@@ -248,9 +250,12 @@ Flat single `main` package.
     **id order**, each dated by its newest title. Every title is listed once per
     locale with hreflang alternates, so a file holds `perFile × locales` entries
     — keep that under the protocol's 50,000 (`TestSitemapTitleFilesFitTheProtocol`).
-    A full file is 12,000 entries and about 9 MB; at ~750 bytes an entry the
-    entry cap binds before the 50 MB one. The single flat file it replaced had
-    reached 19 MB.
+    Each entry carries one ~110-byte alternate per locale, so a file grows with
+    the **square** of the locale count: at 11 locales a full file is 22,000
+    entries of ~1.3 KB, an estimated ~29 MB. That makes the protocol's 50 MB cap
+    the one that binds now, not the 50,000-entry one, and it is reached at
+    roughly 14 locales — lower `sitemapTitlesPerFile` before adding that many.
+    The single flat file it replaced had reached 19 MB.
   Unknown / bad ids render the `404.html` page (not a bare error).
 
 - **Watch page plays real torrents, viewer-mediated.** `handleWatchMovie`/

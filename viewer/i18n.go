@@ -23,6 +23,11 @@ const (
 	LocaleZHTW Locale = "zh-tw"
 	LocaleKO   Locale = "ko"
 	LocaleJA   Locale = "ja"
+	LocaleTH   Locale = "th"
+	LocaleID   Locale = "id"
+	LocaleES   Locale = "es"
+	LocalePTBR Locale = "pt-br"
+	LocaleRU   Locale = "ru"
 )
 
 // defaultLocale is the language used when nothing else picks one: a visitor
@@ -39,7 +44,8 @@ type localeDefinition struct {
 	// EpisodeSlug is the word in an episode watch URL ("<title>-<word>-<n>-<id>").
 	// It must be ASCII lowercase: slugify would drop CJK to nothing, so the
 	// Chinese, Korean and Japanese trees use the English word, as their title
-	// slugs already fall back to the Latin original.
+	// slugs already fall back to the Latin original. Thai and Russian do the same
+	// for the same reason.
 	EpisodeSlug string
 }
 
@@ -54,6 +60,11 @@ var localeDefinitions = []localeDefinition{
 	{Locale: LocaleZHTW, NativeName: "繁體中文", OpenGraphLocale: "zh_TW", EpisodeSlug: "episode"},
 	{Locale: LocaleKO, NativeName: "한국어", OpenGraphLocale: "ko_KR", EpisodeSlug: "episode"},
 	{Locale: LocaleJA, NativeName: "日本語", OpenGraphLocale: "ja_JP", EpisodeSlug: "episode"},
+	{Locale: LocaleTH, NativeName: "ไทย", OpenGraphLocale: "th_TH", EpisodeSlug: "episode"},
+	{Locale: LocaleID, NativeName: "Bahasa Indonesia", OpenGraphLocale: "id_ID", EpisodeSlug: "episode"},
+	{Locale: LocaleES, NativeName: "Español", OpenGraphLocale: "es_ES", EpisodeSlug: "episodio"},
+	{Locale: LocalePTBR, NativeName: "Português (Brasil)", OpenGraphLocale: "pt_BR", EpisodeSlug: "episodio"},
+	{Locale: LocaleRU, NativeName: "Русский", OpenGraphLocale: "ru_RU", EpisodeSlug: "episode"},
 	{Locale: LocaleVI, NativeName: "Tiếng Việt", OpenGraphLocale: "vi_VN", EpisodeSlug: "tap"},
 }
 
@@ -123,6 +134,21 @@ func parseLocale(raw string) (Locale, bool) {
 		return LocaleKO, true
 	case normalized == "ja" || strings.HasPrefix(normalized, "ja-"):
 		return LocaleJA, true
+	case normalized == "th" || strings.HasPrefix(normalized, "th-"):
+		return LocaleTH, true
+	// "in" is the pre-1989 ISO code for Indonesian that Java and older Android
+	// still report.
+	case normalized == "id" || strings.HasPrefix(normalized, "id-") ||
+		normalized == "in" || strings.HasPrefix(normalized, "in-"):
+		return LocaleID, true
+	case normalized == "es" || strings.HasPrefix(normalized, "es-"):
+		return LocaleES, true
+	// The only Portuguese tree is Brazilian, so European Portuguese lands there
+	// too: closer than English.
+	case normalized == "pt" || strings.HasPrefix(normalized, "pt-"):
+		return LocalePTBR, true
+	case normalized == "ru" || strings.HasPrefix(normalized, "ru-"):
+		return LocaleRU, true
 	default:
 		return "", false
 	}
@@ -142,6 +168,17 @@ func fallbackLocale(locale Locale) Locale {
 	// The catalog currently stores Vietnamese and English metadata. New UI
 	// locales use English metadata until matching TMDB translations are present.
 	return LocaleEN
+}
+
+// subtitleFilterLanguage validates a ?subtitle= filter value. Each locale's
+// home row lists movies with subtitles in that locale's language and links to
+// ?subtitle=<locale>, so any supported locale code is a valid filter; anything
+// else returns "" and the filter is dropped.
+func subtitleFilterLanguage(raw string) string {
+	if locale, ok := parseLocale(raw); ok && string(locale) == raw {
+		return raw
+	}
+	return ""
 }
 
 func localeOrigin(locale Locale) string { return "/" + string(locale) }
@@ -261,6 +298,8 @@ func formatDate(locale Locale, value time.Time) string {
 		return value.Format("2006年1月2日")
 	case LocaleKO:
 		return value.Format("2006년 1월 2일")
+	case LocaleRU:
+		return value.Format("02.01.2006")
 	default:
 		return value.Format("02/01/2006")
 	}
