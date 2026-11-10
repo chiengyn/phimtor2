@@ -26,7 +26,7 @@
 	var MSG = {};
 	try { MSG = JSON.parse(document.body.dataset.clientMessages || '{}'); } catch (e) {}
 	function msg(key, fallback) { return MSG[key] || fallback; }
-	var LOCALE = document.body.dataset.locale || 'vi';
+	var LOCALE = document.body.dataset.locale || 'en';
 
 	var SERVER = document.body.dataset.bmMode === 'server';
 	// Ids the signed-in visitor has saved, as strings so they compare cleanly

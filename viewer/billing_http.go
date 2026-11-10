@@ -143,7 +143,7 @@ func (s *Server) handleCreateInvoice(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	requestLocale, localeOK := parseLocale(r.Header.Get("X-Phimnet-Locale"))
 	if !localeOK {
-		requestLocale = LocaleVI
+		requestLocale = defaultLocale
 	}
 	var body struct {
 		PlanCode string `json:"plan_code"`

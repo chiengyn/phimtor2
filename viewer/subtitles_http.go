@@ -50,12 +50,12 @@ func subtitleStorageKey(titleID, episodeID *int64, provider, fileID, lang, forma
 
 // apiLocale resolves the locale for a JSON endpoint's user-facing messages. The
 // watch page sends X-Phimnet-Locale on every API call (same as the prepare
-// endpoint); anything unparseable falls back to Vietnamese.
+// endpoint); anything unparseable falls back to defaultLocale.
 func apiLocale(r *http.Request) Locale {
 	if locale, ok := parseLocale(r.Header.Get("X-Phimnet-Locale")); ok {
 		return locale
 	}
-	return LocaleVI
+	return defaultLocale
 }
 
 // handleSearchSubtitles proxies a provider search. The API keys never reach the

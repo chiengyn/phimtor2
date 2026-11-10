@@ -1002,7 +1002,7 @@ type cardPayload struct {
 func (s *Server) handleCatalogCards(w http.ResponseWriter, r *http.Request) {
 	locale, ok := parseLocale(r.URL.Query().Get("locale"))
 	if !ok {
-		locale = LocaleVI
+		locale = defaultLocale
 	}
 	rawIDs := strings.Split(r.URL.Query().Get("ids"), ",")
 	ids := make([]int64, 0, len(rawIDs))
@@ -1555,7 +1555,7 @@ func (s *Server) watchLanguageURLs(r *http.Request, titleID int64, build func(Lo
 func (s *Server) handlePrepareSource(w http.ResponseWriter, r *http.Request) {
 	locale, ok := parseLocale(r.Header.Get("X-Phimnet-Locale"))
 	if !ok {
-		locale = LocaleVI
+		locale = defaultLocale
 	}
 	id, err := strconv.ParseInt(chi.URLParam(r, "videoID"), 10, 64)
 	if err != nil {
@@ -2086,7 +2086,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, templates locali
 	w.Header().Set("Content-Language", string(locale))
 	t := templates[locale]
 	if t == nil {
-		t = templates[LocaleVI]
+		t = templates[defaultLocale]
 	}
 	if err := t.ExecuteTemplate(w, "layout", s.newPageData(r, data)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

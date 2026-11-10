@@ -128,7 +128,7 @@ func tvLocale(r *http.Request) Locale {
 	if locale, ok := parseLocale(r.URL.Query().Get("locale")); ok {
 		return locale
 	}
-	return LocaleVI
+	return defaultLocale
 }
 
 func toTVCard(t TitleSummary) tvCard {

@@ -356,12 +356,12 @@
 				<input type="text" id="sbs-query" value="{{.SearchQuery}}"
 					placeholder="{{t "watch.search_placeholder"}}" {{if not .SignedIn}}disabled{{end}}>
 				<select id="sbs-lang" {{if not .SignedIn}}disabled{{end}}>
-					<option value="vi">{{t "watch.lang_vi"}}</option>
 					<option value="en">{{t "watch.lang_en"}}</option>
 					<option value="zh-cn">{{t "watch.lang_zh_cn"}}</option>
 					<option value="zh-tw">{{t "watch.lang_zh_tw"}}</option>
 					<option value="ko">{{t "watch.lang_ko"}}</option>
 					<option value="ja">{{t "watch.lang_ja"}}</option>
+					<option value="vi">{{t "watch.lang_vi"}}</option>
 				</select>
 				<select id="sbs-provider" hidden {{if not .SignedIn}}disabled{{end}}></select>
 				{{if .SearchEpisode}}
@@ -416,7 +416,7 @@
 <script>
 const ROOT = document.querySelector('.watch');
 const D = ROOT.dataset;
-const LOCALE = document.body.dataset.locale || 'vi';
+const LOCALE = document.body.dataset.locale || 'en';
 const I18N = {
 	signInQuality: {{js (t "watch.sign_in_quality")}}, signIn: {{js (t "watch.sign_in")}},
 	upgradeQuality: {{js (t "watch.upgrade_quality")}}, upgrade: {{js (t "watch.upgrade")}},
@@ -1453,7 +1453,7 @@ async function searchSubtitles() {
 	if (!queryEl) return;
 	const params = new URLSearchParams({
 		query: queryEl.value.trim(),
-		languages: document.getElementById('sbs-lang').value || 'vi',
+		languages: document.getElementById('sbs-lang').value || 'en',
 	});
 	const provider = document.getElementById('sbs-provider');
 	if (provider && !provider.hidden && provider.value) params.set('provider', provider.value);

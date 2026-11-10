@@ -35,6 +35,9 @@ func TestLocalizedRouter(t *testing.T) {
 	if got := request("/", "en-US").Header().Get("Location"); got != "/en/" {
 		t.Fatalf("root location = %q, want /en/", got)
 	}
+	if got := request("/", "").Header().Get("Location"); got != "/en/" {
+		t.Fatalf("root location without a language = %q, want /en/", got)
+	}
 	if got := request("/", "zh-TW,zh;q=0.9").Header().Get("Location"); got != "/zh-tw/" {
 		t.Fatalf("Traditional Chinese root location = %q, want /zh-tw/", got)
 	}
@@ -121,6 +124,15 @@ func TestPreferredLocale(t *testing.T) {
 	if got := preferredLocale(r); got != LocaleZHTW {
 		t.Fatalf("Chinese script should be preserved: preferredLocale = %q, want zh-tw", got)
 	}
+	r = httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Accept-Language", "fr-FR,de;q=0.8")
+	if got := preferredLocale(r); got != LocaleEN {
+		t.Fatalf("unsupported languages should fall back to English: preferredLocale = %q", got)
+	}
+	r = httptest.NewRequest("GET", "/", nil)
+	if got := preferredLocale(r); got != LocaleEN {
+		t.Fatalf("no language signal should fall back to English: preferredLocale = %q", got)
+	}
 }
 
 func TestParseLocale(t *testing.T) {
@@ -152,10 +164,11 @@ func TestLanguageOptionsPreservePageAndQuery(t *testing.T) {
 	if len(options) != len(supportedLocales) {
 		t.Fatalf("got %d language options, want %d", len(options), len(supportedLocales))
 	}
-	if !options[1].Current || options[1].Name != "English" || options[1].URL != "/en/?genre=28&type=movie" {
-		t.Fatalf("English option = %#v", options[1])
+	if !options[0].Current || options[0].Name != "English" || options[0].URL != "/en/?genre=28&type=movie" {
+		t.Fatalf("English option = %#v", options[0])
 	}
-	if options[0].Current || options[0].Name != "Tiếng Việt" || options[0].URL != "/vi/?genre=28&type=movie" {
-		t.Fatalf("Vietnamese option = %#v", options[0])
+	last := options[len(options)-1]
+	if last.Current || last.Name != "Tiếng Việt" || last.URL != "/vi/?genre=28&type=movie" {
+		t.Fatalf("Vietnamese option = %#v", last)
 	}
 }

@@ -25,6 +25,13 @@ const (
 	LocaleJA   Locale = "ja"
 )
 
+// defaultLocale is the language used when nothing else picks one: a visitor
+// with no locale cookie and no supported Accept-Language, an API call without
+// a recognizable X-Phimnet-Locale, and the UI-string fallback in tr. The
+// legacy unprefixed URLs are the exception and still redirect to Vietnamese,
+// because they were Vietnamese pages before the locale prefixes existed.
+const defaultLocale = LocaleEN
+
 type localeDefinition struct {
 	Locale          Locale
 	NativeName      string
@@ -39,13 +46,15 @@ type localeDefinition struct {
 // localeDefinitions is the registry behind routing, template parsing, SEO, and
 // the language dropdown. Adding a locale here (plus its message catalog and
 // parser case) makes it appear in the menu without changing layout markup.
+// Its order is the menu's order: English leads as the site's main language and
+// Vietnamese sits last.
 var localeDefinitions = []localeDefinition{
-	{Locale: LocaleVI, NativeName: "Tiếng Việt", OpenGraphLocale: "vi_VN", EpisodeSlug: "tap"},
 	{Locale: LocaleEN, NativeName: "English", OpenGraphLocale: "en_US", EpisodeSlug: "episode"},
 	{Locale: LocaleZHCN, NativeName: "简体中文", OpenGraphLocale: "zh_CN", EpisodeSlug: "episode"},
 	{Locale: LocaleZHTW, NativeName: "繁體中文", OpenGraphLocale: "zh_TW", EpisodeSlug: "episode"},
 	{Locale: LocaleKO, NativeName: "한국어", OpenGraphLocale: "ko_KR", EpisodeSlug: "episode"},
 	{Locale: LocaleJA, NativeName: "日本語", OpenGraphLocale: "ja_JP", EpisodeSlug: "episode"},
+	{Locale: LocaleVI, NativeName: "Tiếng Việt", OpenGraphLocale: "vi_VN", EpisodeSlug: "tap"},
 }
 
 var supportedLocales = func() []Locale {
@@ -123,7 +132,7 @@ func localeFromContext(ctx context.Context) Locale {
 	if locale, ok := ctx.Value(localeContextKey{}).(Locale); ok {
 		return locale
 	}
-	return LocaleVI
+	return defaultLocale
 }
 
 func fallbackLocale(locale Locale) Locale {
@@ -146,7 +155,7 @@ func localeFromRequestPath(path string) Locale {
 			return locale
 		}
 	}
-	return LocaleVI
+	return defaultLocale
 }
 
 // localizedRequestURL keeps the visitor on the same page and query while
@@ -203,7 +212,7 @@ func preferredLocale(r *http.Request) Locale {
 			return locale
 		}
 	}
-	return LocaleVI
+	return defaultLocale
 }
 
 func setLocaleCookie(w http.ResponseWriter, r *http.Request, locale Locale) {
@@ -301,7 +310,7 @@ func tr(locale Locale, key string, args ...any) string {
 	}
 	value := messages[locale][key]
 	if value == "" {
-		value = messages[LocaleVI][key]
+		value = messages[defaultLocale][key]
 	}
 	if value == "" {
 		value = key
@@ -316,9 +325,9 @@ func validateMessages() error {
 	if err := loadMessages(); err != nil {
 		return err
 	}
-	reference, ok := messages[LocaleVI]
+	reference, ok := messages[defaultLocale]
 	if !ok {
-		return fmt.Errorf("default translation catalog %q is missing", LocaleVI)
+		return fmt.Errorf("default translation catalog %q is missing", defaultLocale)
 	}
 	for _, locale := range supportedLocales {
 		catalog, ok := messages[locale]
