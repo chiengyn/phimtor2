@@ -47,8 +47,15 @@ img { max-width: 100%; }
 
 :focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: 2px; }
 
-/* Full-bleed main; pages center their own content in .wrap. */
-main { width: 100%; }
+/* Full-bleed main; pages center their own content in .wrap.
+   overflow-x: clip trims decoration meant to bleed past .wrap, like the detail
+   page's .backdrop (4% past each side) and the browse rows' edge bleed. Past
+   the screen edge it would otherwise make the page scroll sideways, which hit
+   every title page below ~1620px wide. Unlike hidden, clip creates no scroll
+   container and leaves vertical overflow alone, so the hero still slides up
+   under the sticky header. Browsers without clip (Safari < 16) keep the old
+   behavior. */
+main { width: 100%; overflow-x: clip; }
 .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 4%; }
 
 /* --- Header ------------------------------------------------------------- */
