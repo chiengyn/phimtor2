@@ -51,6 +51,27 @@ class SiteLocaleTest {
         assertEquals("en", SiteLocale.fromAndroid(Locale.forLanguageTag("en-GB")))
         assertEquals("ko", SiteLocale.fromAndroid(Locale.forLanguageTag("ko-KR")))
         assertEquals("ja", SiteLocale.fromAndroid(Locale.forLanguageTag("ja-JP")))
+        assertEquals("th", SiteLocale.fromAndroid(Locale.forLanguageTag("th-TH")))
+        assertEquals("es", SiteLocale.fromAndroid(Locale.forLanguageTag("es-MX")))
+        assertEquals("ru", SiteLocale.fromAndroid(Locale.forLanguageTag("ru-RU")))
+    }
+
+    @Test
+    fun mapsIndonesianAndPortugueseOntoTheSitesCodes() {
+        assertEquals("id", SiteLocale.fromAndroid(Locale.forLanguageTag("id-ID")))
+        // The pre-1989 code older Android reports. A JDK 17+ JVM already rewrites
+        // it to "id", so this pins the input, not the "in" branch itself.
+        assertEquals("id", SiteLocale.fromAndroid(Locale.forLanguageTag("in-ID")))
+        assertEquals("pt-br", SiteLocale.fromAndroid(Locale.forLanguageTag("pt-BR")))
+        assertEquals("pt-br", SiteLocale.fromAndroid(Locale.forLanguageTag("pt-PT")))
+    }
+
+    @Test
+    fun pickerListsEnglishFirstAndVietnameseLast() {
+        assertEquals("en", SiteLocale.SUPPORTED.first())
+        assertEquals("vi", SiteLocale.SUPPORTED.last())
+        // Every code the picker offers has a real name, not the raw code.
+        SiteLocale.SUPPORTED.forEach { assertTrue(it, SiteLocale.nativeName(it) != it) }
     }
 
     @Test
@@ -64,6 +85,6 @@ class SiteLocaleTest {
 
     @Test
     fun anythingElseFallsBackToTheSitesDefault() {
-        assertEquals("vi", SiteLocale.fromAndroid(Locale.forLanguageTag("fr-FR")))
+        assertEquals("en", SiteLocale.fromAndroid(Locale.forLanguageTag("fr-FR")))
     }
 }

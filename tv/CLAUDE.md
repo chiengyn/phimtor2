@@ -208,14 +208,17 @@ would carry a live credential onto someone else's TV.
 
 ### Strings
 
-Six locales, like the site: `values` (en), `values-vi`, `values-b+zh+Hans`,
+Six locales of the site's eleven: `values` (en), `values-vi`, `values-b+zh+Hans`,
 `values-b+zh+Hant` (split by **script**, so zh-HK/zh-MO get Traditional — the
 same rule as `SiteLocale` and the site's `parseLocale`), `values-ko`, `values-ja`.
 They are **generated** by `tools/sync_strings.py`, which reuses the site's own
 translations from `viewer/locales/*.json` wherever the site already says it and
 refuses to write if any locale is missing a string. Edit the script, never the XML.
+The site's other five (th, id, es, pt-br, ru) have no app strings yet, so the
+chrome shows English there; `SiteLocale` still maps them, and `locales_config.xml`
+leaves them out because it lists chrome languages.
 Server-authored text (row labels, lock messages, episode captions) arrives
-already translated via `X-Phimnet-Locale`. Settings' language picker changes the
+already translated via `X-Phimnet-Locale`, in all eleven. Settings' language picker changes the
 **content** language; the app chrome follows the system (and Android 13+'s
 per-app language, via `localeConfig`).
 
@@ -284,7 +287,7 @@ viewer's `/api/tv/v1/app` manifest (version, SHA-256, size, absolute download UR
 
 ## Testing
 
-- **Unit tests** (`app/src/test`, 65): stream URLs, quality ladder, readiness,
+- **Unit tests** (`app/src/test`, 67): stream URLs, quality ladder, readiness,
   heartbeat timing, recovery classification, pairing flow (virtual time), server
   URL and locale parsing, the update policy and the verifying APK download, and
   the API client against MockWebServer.
