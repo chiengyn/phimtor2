@@ -86,10 +86,10 @@ other modules currently have no tests.
   UI provably unable to cancel a subscription somebody paid for — the `UPDATE`
   never names those columns. Keep it that way.
 
-`ad_settings` (`0014_ad_settings.sql`) runs the other way: the admin is its only
-writer, at `GET /ads`, and the viewer only reads it. Its script is printed
-unescaped into public pages, so the basic-auth admin page is the trust boundary
-for that value.
+`ad_settings` (`0014_ad_settings.sql`) and `ad_slots` (`0015_ad_slots.sql`) run
+the other way: the admin is their only writer, at `GET /ads`, and the viewer only
+reads them. Their code is printed unescaped into public pages, so the basic-auth
+admin page is the trust boundary for those values.
 
 `subtitles` is the one catalog table with two writers. A signed-in viewer can
 search a subtitle provider from the watch page and save the result for everyone;

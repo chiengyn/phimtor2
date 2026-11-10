@@ -88,6 +88,7 @@
 {{end}}
 
 <div class="wrap browse">
+	{{adSlot "home_top"}}
 	<form class="filters" method="get" action="{{homePath}}" role="search">
 		<input class="search" type="search" name="q" placeholder="{{t "search.placeholder"}}" value="{{.Query}}" aria-label="{{t "search.aria"}}">
 		<select name="genre" aria-label="{{t "search.genres"}}" onchange="this.form.submit()">

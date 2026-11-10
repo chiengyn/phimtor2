@@ -180,7 +180,7 @@ func NewServer(store *Store, cfg Config) (*Server, error) {
 		log.Printf("Watch history disabled (needs accounts and WATCH_LOG_FLUSH_SEC > 0)")
 	}
 	if store != nil {
-		s.ads = newAdCache(store.AdScript)
+		s.ads = newAdCache(store.AdConfig)
 	}
 	// Bounds guessing at a television's short pairing code. Keyed by account
 	// (rateKey), because approving requires being signed in.
@@ -257,6 +257,9 @@ func (s *Server) funcMap(locale Locale) template.FuncMap {
 		// tvAppOn tells the header whether to link the TV app install guide,
 		// which exists only when there is an APK to install.
 		"tvAppOn": func() bool { return s.tvApkDir != "" },
+		// adSlot places a banner slot configured at the admin's /ads page. It
+		// prints a marker that render fills per visitor (see renderPage).
+		"adSlot": adSlotMarker,
 	}
 	for k, v := range baseFuncMap {
 		fm[k] = v
@@ -2005,6 +2008,9 @@ type pageData struct {
 	// holder, who get the site ad-free. Pages that must never carry ads override
 	// the "ads" block in layout.html instead of checking this.
 	AdScript template.HTML
+	// adSlots fills the {{adSlot}} markers in the rendered page: with each
+	// slot's code, or with nothing for the same ad-free visitors.
+	adSlots *strings.Replacer
 }
 
 // newPageData wraps a handler's view model with the shared per-request chrome.
@@ -2029,8 +2035,10 @@ func (s *Server) newPageData(r *http.Request, data any) pageData {
 		SavedIDsJSON:       "[]",
 		Path:               r.URL.RequestURI(),
 	}
+	pd.adSlots = adStrip
 	if now := time.Now(); !pd.User.HasPass(now) && !pd.User.HasComp(now) {
 		pd.AdScript = s.ads.script()
+		pd.adSlots = s.ads.slots()
 	}
 	// Detail pages use locale-specific slugs. Resolve every translation so the
 	// hreflang links and language menu point directly at canonical URLs rather
@@ -2084,11 +2092,28 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, templates locali
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	locale := localeFromContext(r.Context())
 	w.Header().Set("Content-Language", string(locale))
-	t := templates[locale]
+	var page strings.Builder
+	if err := s.renderPage(&page, r, templates, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	io.WriteString(w, page.String())
+}
+
+// renderPage executes the layout into w with the ad slot markers filled in for
+// this visitor. The page is buffered whole because the markers can only be
+// filled once it is: inside a page body the dot is the handler's view model, not
+// the per-visitor pageData, so the template itself cannot tell who is looking.
+func (s *Server) renderPage(w io.Writer, r *http.Request, templates localizedTemplate, data any) error {
+	t := templates[localeFromContext(r.Context())]
 	if t == nil {
 		t = templates[defaultLocale]
 	}
-	if err := t.ExecuteTemplate(w, "layout", s.newPageData(r, data)); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	pd := s.newPageData(r, data)
+	var buf strings.Builder
+	if err := t.ExecuteTemplate(&buf, "layout", pd); err != nil {
+		return err
 	}
+	_, err := pd.adSlots.WriteString(w, buf.String())
+	return err
 }

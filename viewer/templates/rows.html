@@ -1,4 +1,4 @@
-{{define "rows"}}{{range .}}
+{{define "rows"}}{{range $i, $row := .}}
 <section class="row{{if .Ranked}} row-ranked{{end}}">
 	<h2 class="row-title">
 		{{if .Ranked}}<span>{{if .Label}}{{.Label}}{{else}}{{t .LabelKey}}{{end}}</span>{{else}}<a href="{{rowHref .}}">{{if .Label}}{{.Label}}{{else}}{{t .LabelKey}}{{end}} <span class="row-chevron">›</span></a>{{end}}
@@ -23,6 +23,8 @@
 		<button class="row-arrow row-arrow-next" type="button" aria-label="{{t "row.next"}}">›</button>
 	</div>
 </section>
+{{/* In-feed banner after the third row, out of the way of the Top 10 strip. */}}
+{{if eq $i 2}}{{adSlot "home_feed"}}{{end}}
 {{else}}
 <p class="empty">{{t "card.none"}}</p>
 {{end}}

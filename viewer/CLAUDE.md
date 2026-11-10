@@ -603,19 +603,51 @@ Flat single `main` package.
     needed for local mode). Every storage access is `try/catch`-guarded so
     blocked storage degrades to "nothing saved".
 
-- **Ads** (`ads.go`, `Store.AdScript`). The script and on/off switch are set at
-  the admin's `/ads` page and stored in `ad_settings` (`0014`), which this service
-  only reads. `adCache` reloads them every 30 seconds, so rendering a page costs
-  no query, and a failed read keeps the last known value. A missing table (viewer
-  deployed before admin) logs an error and shows no ads.
-  - `newPageData` leaves `AdScript` empty for an active pass or comp holder, and
-    `layout.html` prints it just before `</body>` from the `ads` block. Title
-    unlock holders still see ads.
-  - `plans`, `invoice`, `login` and `link` override that block, because a
-    third-party script can read or change anything on a page where someone pays,
-    signs in or approves a TV. **The override must be `{{define "ads"}}{{""}}{{end}}`**:
-    Go ignores a `define` with an empty body, so `{{define "ads"}}{{end}}` silently
-    leaves the ads on. `TestAdScriptPerPage` pins this.
+- **Ads** (`ads.go`, `Store.AdConfig`). Everything is set at the admin's `/ads`
+  page: a master switch and one global script in `ad_settings` (`0014`), plus
+  banner slots in `ad_slots` (`0015`). This service only reads them. `adCache`
+  reloads them every 30 seconds, so rendering a page costs no query, and a
+  failed read keeps the last known value. A missing table (viewer deployed
+  before admin) logs an error and shows no ads.
+  - **The slots** (`adSlotKeys`, mirrored by the admin's `adSlotDefs`):
+    `home_top` (under the hero, above the filters — not under the header, which
+    overlays the full-bleed hero), `home_feed` (after the third browse row, or
+    between the filtered grid and its pager), `detail` (under the info block,
+    above the seasons), `watch` (under the player and source chips, never over
+    or between them) and `footer` (above the footer). A slot with no code
+    renders nothing at all, not an empty box. `.ad-slot` clips overflow so a
+    728px banner cannot make a phone scroll sideways.
+  - **Desktop and mobile code.** Each slot has a desktop `code` and an optional
+    `mobile_code` (`AdSlotCode`). With only desktop code it is printed as is,
+    everywhere. With mobile code too, `adSlotMarkup` prints a one-line script
+    that `document.write`s the variant matching `adMobileQuery`
+    (`max-width: 800px`, repeated in the admin's `adMobileMaxWidth`) while the
+    page parses, so **only one variant ever loads or counts an impression** —
+    rendering both and hiding one with CSS would load both. The wrapper div is
+    written along with the code, so a mobile-only slot leaves no empty box on
+    desktop. It is screen width, not User-Agent, so it is right for tablets and
+    narrow windows and the HTML never varies by device. The variants are
+    embedded with `json.Marshal`, which escapes `<`, so a `</script>` in ad code
+    cannot end the switch early (`TestAdSlotMobileVariant`).
+  - **How a slot is filled.** A page body runs with the handler's view model as
+    its dot, not `pageData`, so it cannot know who is looking. `{{adSlot "key"}}`
+    therefore prints an inert `<!--phimnet-ad:key-->` marker, and `renderPage`
+    buffers the page and fills every marker in one `strings.Replacer` pass: with
+    `<div class="ad-slot">code</div>`, or with nothing for an ad-free visitor.
+    Page text cannot forge a marker, because html/template escapes `<` in
+    anything that is not `template.HTML`. An unknown key is a render error.
+    Inline filling (not client-side injection) is deliberate: most ad tags use
+    `document.write`, which only works while the page is parsing.
+  - `newPageData` leaves `AdScript` empty and picks the strip-everything
+    replacer for an active pass or comp holder. Title unlock holders still see
+    ads.
+  - `layout.html`'s `ads` block holds the `footer` slot and the global script,
+    just above `<footer>`. `plans`, `invoice`, `login` and `link` override that
+    block, because a third-party script can read or change anything on a page
+    where someone pays, signs in or approves a TV. Those pages place no other
+    slot. **The override must be `{{define "ads"}}{{""}}{{end}}`**: Go ignores a
+    `define` with an empty body, so `{{define "ads"}}{{end}}` silently leaves
+    the ads on. `TestAdScriptPerPage` and `TestAdSlotsPerPage` pin this.
 
 - **Watch-session reaping** (`watchtracker.go`, `manager.go`
   `deleteTorrent`). So a torrent doesn't linger after the user leaves (wasting the

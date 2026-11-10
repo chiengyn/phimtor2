@@ -208,14 +208,21 @@ Flat single `main` package. Layers, in request order:
       permanently holds those five bad rows, and an alarm that fired forever over
       a fixed fault would be ignored by the time it mattered. Superseded bad
       addresses stay visibly flagged in the table (`StaleAddresses`).
-  - `GET /ads` (`ads.html`, `ads.go`) — the ad network script and its on/off
-    switch, one row in `ad_settings` (`0014`). The viewer prints the script
-    unescaped into its public pages within about 30 seconds of a save, so
-    `POST /ads` uses the same `sameOriginPost` guard as the SQL console: a
-    cross-site form must not be able to plant a script on the public site.
-    `validateAdScript` catches paste mistakes only, and rejects anything not
-    starting with `<`, because bare JavaScript would print as visible text.
-    Migrations cannot seed a script, since the migrator splits on `;`.
+  - `GET /ads` (`ads.html`, `ads.go`) — the master on/off switch and global ad
+    script (one row in `ad_settings`, `0014`) plus one row per **banner slot**
+    in `ad_slots` (`0015`), each with its own switch, a desktop `code` and an
+    optional `mobile_code` (the viewer picks one by screen width, at
+    `adMobileMaxWidth` = 800px, and phones fall back to the desktop code), all
+    saved by one form in one transaction. `adSlotDefs` lists the slots with the copy the page
+    shows (where it sits, suggested size, a wireframe sketch). Its keys must
+    match the viewer's `adSlotKeys`. The master switch gates everything. The
+    viewer prints the code unescaped into its public pages within about 30
+    seconds of a save, so `POST /ads` uses the same `sameOriginPost` guard as
+    the SQL console: a cross-site form must not be able to plant a script on
+    the public site. `validateAdCode` catches paste mistakes only, and rejects
+    anything not starting with `<`, because bare JavaScript would print as
+    visible text. Migrations cannot seed a script, since the migrator splits on
+    `;`.
   - `GET /sql` (`sql.html`, `sqlconsole.go`) — a **raw SQL console** plus a
     **backup dump**, plain forms, no htmx.
     - `POST /sql` runs one statement (the DSN has no `multiStatements`) inside a
@@ -349,8 +356,8 @@ in filename order, each recorded in `schema_migrations` so it runs once. Rules:
   is told from a curated one; `DELETE /api/subtitles/{id}` here is the
   moderation path, and it already works on contributed rows unchanged. `0012`
   adds `tv_devices` and `0013` adds `watch_sessions` (watch history); both are
-  declared here and written only by the viewer. `0014` adds `ad_settings`, written
-  here and only read by the viewer. `featured_titles` is the
+  declared here and written only by the viewer. `0014` adds `ad_settings` and `0015`
+  adds `ad_slots`, both written here and only read by the viewer. `featured_titles` is the
   manual browse-hero curation list — `(title_id PK, position, created_at)` with a
   cascading FK to `titles`, ordered by `position` ascending; the catalog `titles`
   table stays untouched (deliberately a separate table, not a `titles` column).

@@ -1,7 +1,8 @@
-{{/* The ad network script and its on/off switch (migrations/0014_ad_settings.sql).
-     A plain form POST + 303, like users.html. The viewer reads this row on an
-     interval and prints the script into its public pages. Here it only ever sits
-     inside the textarea, escaped, so it does not run on this page. */}}
+{{/* Ads: the master switch + global script (migrations/0014_ad_settings.sql) and
+     the banner slots (0015_ad_slots.sql), all saved by one plain form POST + 303,
+     like users.html. The viewer reads both on an interval and prints the code into
+     its public pages. Here it only ever sits inside a textarea, escaped, so it
+     does not run on this page. */}}
 <!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -15,32 +16,66 @@
       margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       background: #0e1116; color: #e6edf3; line-height: 1.5;
     }
-    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header { padding: 1rem 1.5rem; border-bottom: 1px solid #222b36; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     header h1 { margin: 0; font-size: 1.2rem; }
     main { max-width: 980px; margin: 0 auto; padding: 1.5rem; }
     a { color: #79c0ff; }
+    h2 { font-size: 1.05rem; margin: 2rem 0 .25rem; }
     .muted { color: #8b98a5; font-size: .85rem; }
     .status { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-    .badge { display: inline-block; font-size: .8rem; padding: .15rem .6rem; border-radius: 999px; }
+    .badge { display: inline-block; font-size: .8rem; padding: .15rem .6rem; border-radius: 999px; white-space: nowrap; }
     .badge.on { background: #0f2e1a; color: #86efac; }
     .badge.off { background: #21262d; color: #8b98a5; }
     .notice { padding: .6rem .85rem; border-radius: 8px; margin: 1rem 0; }
     .notice.ok { background: #0f2e1a; color: #86efac; }
     .notice.err { background: #2a141a; color: #ff8b94; }
+    .err-text { color: #ff8b94; font-size: .85rem; margin: .35rem 0 0; }
     label { display: block; margin-top: 1rem; }
-    .switch { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
+    .switch { display: flex; align-items: center; gap: .5rem; cursor: pointer; margin-top: .5rem; }
     .switch input { width: 1.1rem; height: 1.1rem; }
+    .master { padding: 1rem; border: 1px solid #303b48; border-radius: 10px; background: #12171e; margin-top: 1rem; }
+    .master .switch { margin: 0; font-weight: 600; }
     textarea {
-      display: block; width: 100%; min-height: 16rem; margin-top: .35rem; padding: .7rem;
+      display: block; width: 100%; min-height: 9rem; margin-top: .35rem; padding: .7rem;
       font: .85rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       border-radius: 8px; border: 1px solid #303b48; background: #161b22; color: #e6edf3;
+      resize: vertical;
     }
+    .slot { display: grid; grid-template-columns: 1fr 120px; gap: 1rem 1.25rem; margin-top: 1rem; padding: 1rem; border: 1px solid #222b36; border-radius: 10px; background: #12171e; }
+    .slot.on { border-color: #1f5130; }
+    .slot.invalid { border-color: #7a2733; }
+    .slot-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+    .slot-head h3 { margin: 0; font-size: 1rem; }
+    .slot p { margin: .25rem 0 0; }
+    .slot code { color: #c9d1d9; }
+    /* A top-to-bottom sketch of the page, with this slot's position in red. */
+    .wire { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid #303b48; border-radius: 6px; background: #0b0e12; align-self: start; }
+    .wire span { display: block; border-radius: 2px; background: #2a323d; height: 8px; }
+    .wire .hero { height: 34px; background: #3a4350; }
+    .wire .player { height: 40px; background: #3a4350; }
+    .wire .info { height: 30px; }
+    .wire .seasons, .wire .subs, .wire .content { height: 18px; }
+    .wire .title { height: 6px; width: 60%; }
+    .wire .chips, .wire .search { height: 6px; width: 70%; }
+    .wire .row { height: 12px; }
+    .wire .footer { height: 10px; background: #1c2129; }
+    .wire .ad { height: 10px; background: #dc2626; }
+    .slot .full { grid-column: 1 / -1; }
+    .codes { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+    .codes .err-text { grid-column: 1 / -1; }
+    .code-label { margin: 0; font-size: .9rem; }
     button {
-      font: inherit; margin-top: 1rem; padding: .55rem 1.1rem; border-radius: 8px; cursor: pointer;
+      font: inherit; margin-top: 1.25rem; padding: .55rem 1.1rem; border-radius: 8px; cursor: pointer;
       border: 1px solid #2563eb; background: #2563eb; color: #e6edf3;
     }
     button:hover { background: #1d4ed8; }
+    .actions { position: sticky; bottom: 0; padding: .25rem 0 1rem; background: linear-gradient(transparent, #0e1116 35%); }
     ul { padding-left: 1.2rem; }
+    @media (max-width: 600px) {
+      main { padding: 1rem; }
+      .slot { grid-template-columns: 1fr 64px; }
+      .codes { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -50,7 +85,9 @@
   </header>
   <main>
     <div class="status">
-      {{ if .Enabled }}<span class="badge on">Đang bật</span>{{ else }}<span class="badge off">Đang tắt</span>{{ end }}
+      {{/* A rejected save re-renders what was typed, which is not what is live. */}}
+      {{ if .Error }}<span class="badge off">Chưa lưu</span>
+      {{ else if .Enabled }}<span class="badge on">Đang bật</span>{{ else }}<span class="badge off">Đang tắt</span>{{ end }}
       {{ if not .UpdatedAt.IsZero }}<span class="muted">Cập nhật lần cuối {{ .UpdatedAt.Format "02/01/2006 15:04" }}</span>{{ end }}
     </div>
 
@@ -58,17 +95,54 @@
     {{ with .Error }}<div class="notice err">{{ . }}</div>{{ end }}
 
     <form method="post" action="/ads">
-      <label class="switch">
-        <input type="checkbox" name="enabled" value="1" {{ if .Enabled }}checked{{ end }}>
-        Hiển thị quảng cáo trên trang công khai
-      </label>
-      <label for="script">Đoạn mã từ mạng quảng cáo</label>
+      <div class="master">
+        <label class="switch">
+          <input type="checkbox" name="enabled" value="1" {{ if .Enabled }}checked{{ end }}>
+          Hiển thị quảng cáo trên trang công khai
+        </label>
+        <p class="muted" style="margin:.35rem 0 0">Công tắc chính. Khi tắt, không vị trí nào và không đoạn mã chung nào được hiển thị, dù từng mục bên dưới đang bật.</p>
+      </div>
+
+      <h2>Đoạn mã chung</h2>
+      <p class="muted">Chèn một lần cuối mỗi trang, không chiếm chỗ hiển thị. Dùng cho popunder, social bar, quảng cáo đẩy… Để trống nếu chỉ dùng banner.</p>
       <textarea id="script" name="script" spellcheck="false" placeholder="<script>…</script>">{{ .Script }}</textarea>
-      <button type="submit">Lưu</button>
+
+      <h2>Vị trí banner</h2>
+      <p class="muted">Mỗi vị trí hiển thị đoạn mã của nó tại chỗ, căn giữa. Trang tự chọn mã theo độ rộng màn hình khi tải, và chỉ chạy một trong hai mã. Nếu chỉ có mã máy tính, điện thoại cũng dùng mã đó, và banner rộng hơn màn hình sẽ bị cắt bớt. Nếu chỉ có mã điện thoại, vị trí này chỉ hiện trên điện thoại.</p>
+      {{ range .Slots }}
+      <section class="slot{{ if .Enabled }} on{{ end }}{{ if .Error }} invalid{{ end }}" id="slot-{{ .Key }}">
+        <div>
+          <div class="slot-head">
+            <h3>{{ .Name }}</h3>
+            {{ if $.Error }}{{ else if .Enabled }}<span class="badge on">Bật</span>{{ else }}<span class="badge off">Tắt</span>{{ end }}
+          </div>
+          <p class="muted">{{ .Where }}</p>
+          <p class="muted">Kích thước gợi ý: {{ .Size }} · mã vị trí <code>{{ .Key }}</code></p>
+          <label class="switch">
+            <input type="checkbox" name="slot_{{ .Key }}_enabled" value="1" {{ if .Enabled }}checked{{ end }}>
+            Bật vị trí này
+          </label>
+        </div>
+        <div class="wire" aria-hidden="true">{{ range .Wire }}<span class="{{ . }}"></span>{{ end }}</div>
+        <div class="full codes">
+          <div>
+            <label class="code-label" for="slot-{{ .Key }}-code">🖥 Máy tính <span class="muted">— màn hình rộng hơn {{ $.MobileMaxWidth }}px</span></label>
+            <textarea id="slot-{{ .Key }}-code" name="slot_{{ .Key }}_code" spellcheck="false" placeholder="<script>…</script> hoặc <a href=…><img …></a>">{{ .Code }}</textarea>
+          </div>
+          <div>
+            <label class="code-label" for="slot-{{ .Key }}-mobile">📱 Điện thoại <span class="muted">— tùy chọn, màn hình từ {{ $.MobileMaxWidth }}px trở xuống</span></label>
+            <textarea id="slot-{{ .Key }}-mobile" name="slot_{{ .Key }}_mobile_code" spellcheck="false" placeholder="Để trống: điện thoại dùng mã máy tính">{{ .MobileCode }}</textarea>
+          </div>
+          {{ with .Error }}<p class="err-text">{{ . }}</p>{{ end }}
+        </div>
+      </section>
+      {{ end }}
+
+      <div class="actions"><button type="submit">Lưu tất cả</button></div>
     </form>
 
     <ul class="muted">
-      <li>Đoạn mã này chạy trên trình duyệt của mọi khách truy cập, nên chỉ dán mã từ nguồn bạn tin tưởng.</li>
+      <li>Các đoạn mã này chạy trên trình duyệt của mọi khách truy cập, nên chỉ dán mã từ nguồn bạn tin tưởng.</li>
       <li>Không hiển thị cho người có gói 4K hoặc được tặng 4K, và không hiển thị trên các trang gói cước, hóa đơn, đăng nhập và liên kết TV.</li>
       <li>Ứng dụng TV không bị ảnh hưởng.</li>
     </ul>

@@ -30,7 +30,7 @@
 </div>
 {{end}}
 
-{{define "grid"}}<div class="grid">{{range .Titles}}{{template "card" .}}{{else}}<p class="empty">{{t "card.empty"}}</p>{{end}}</div>{{with .Pager}}{{if .Show}}{{template "pager" .}}{{end}}{{end}}{{end}}
+{{define "grid"}}<div class="grid">{{range .Titles}}{{template "card" .}}{{else}}<p class="empty">{{t "card.empty"}}</p>{{end}}</div>{{adSlot "home_feed"}}{{with .Pager}}{{if .Show}}{{template "pager" .}}{{end}}{{end}}{{end}}
 
 {{/* pager renders numbered page controls as plain links, so each page is a real
      server-rendered navigation with its own shareable URL. */}}

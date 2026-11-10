@@ -445,15 +445,35 @@ func capRow(ts []TitleSummary) []TitleSummary {
 	return ts
 }
 
-// AdScript returns the ad script the admin configured, or "" while ads are off.
-func (s *Store) AdScript(ctx context.Context) (string, error) {
-	var script string
+// AdConfig returns the ads the admin configured: the global script plus every
+// enabled slot with code, or nothing while the master switch is off.
+func (s *Store) AdConfig(ctx context.Context) (AdConfig, error) {
+	var cfg AdConfig
 	err := s.db.QueryRowContext(ctx,
-		`SELECT script FROM ad_settings WHERE id = 1 AND enabled = 1`).Scan(&script)
+		`SELECT script FROM ad_settings WHERE id = 1 AND enabled = 1`).Scan(&cfg.Script)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return AdConfig{}, nil
 	}
-	return script, err
+	if err != nil {
+		return AdConfig{}, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT slot, code, mobile_code FROM ad_slots
+		WHERE enabled = 1 AND (code <> '' OR mobile_code <> '')`)
+	if err != nil {
+		return AdConfig{}, err
+	}
+	defer rows.Close()
+	cfg.Slots = map[string]AdSlotCode{}
+	for rows.Next() {
+		var slot string
+		var code AdSlotCode
+		if err := rows.Scan(&slot, &code.Desktop, &code.Mobile); err != nil {
+			return AdConfig{}, err
+		}
+		cfg.Slots[slot] = code
+	}
+	return cfg, rows.Err()
 }
 
 // FeaturedTitleIDs returns the ids of titles an admin hand-picked for the browse

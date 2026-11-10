@@ -767,6 +767,29 @@ a.language-option:hover, a.language-option:focus-visible { background: rgba(255,
 }
 .site-footer p { margin: 0; color: var(--faint); font-size: 0.86rem; max-width: 60ch; }
 
+/* --- Ad slots ----------------------------------------------------------- */
+/* A banner placed with {{adSlot}}, its code set at the admin's /ads page. The
+   div only exists when the slot has code, so an empty slot leaves no gap. It is
+   clipped rather than allowed to overflow: a fixed 728px banner on a phone must
+   not make the whole page scroll sideways. position/z-index lift it above the
+   detail page's absolutely positioned backdrop. */
+.ad-slot {
+	position: relative;
+	z-index: 1;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	max-width: 100%;
+	margin: 28px auto;
+	overflow: hidden;
+	text-align: center;
+}
+.ad-slot img { max-width: 100%; height: auto; }
+/* Outside .wrap (the footer slot) it needs the page gutter itself. */
+main + .ad-slot { max-width: var(--wrap); padding: 0 4%; }
+.browse > .ad-slot:first-child { margin-top: 4px; }
+.watch .ad-slot { margin: 18px auto; }
+
 /* --- 404 ---------------------------------------------------------------- */
 .notfound { text-align: center; padding: 120px 20px; }
 .notfound h1 { font-size: 5rem; margin: 0; color: var(--accent); font-weight: 900; }

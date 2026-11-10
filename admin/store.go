@@ -1439,13 +1439,57 @@ func (s *Store) GetAdSettings(ctx context.Context) (AdSettings, error) {
 	return a, err
 }
 
-// SaveAdSettings replaces the settings row.
-func (s *Store) SaveAdSettings(ctx context.Context, enabled bool, script string) error {
-	_, err := s.db.ExecContext(ctx, `
+// AdSlot is one banner slot row in ad_slots (0015), keyed by an adSlotDefs key.
+// Code is the desktop banner. MobileCode, when set, replaces it on narrow screens.
+type AdSlot struct {
+	Key        string
+	Enabled    bool
+	Code       string
+	MobileCode string
+}
+
+// GetAdSlots returns the saved slots by key. A slot never saved is absent.
+func (s *Store) GetAdSlots(ctx context.Context) (map[string]AdSlot, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT slot, enabled, code, mobile_code FROM ad_slots`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	slots := map[string]AdSlot{}
+	for rows.Next() {
+		var a AdSlot
+		if err := rows.Scan(&a.Key, &a.Enabled, &a.Code, &a.MobileCode); err != nil {
+			return nil, err
+		}
+		slots[a.Key] = a
+	}
+	return slots, rows.Err()
+}
+
+// SaveAds replaces the settings row and every given slot in one transaction, so
+// the viewer never loads half a save.
+func (s *Store) SaveAds(ctx context.Context, enabled bool, script string, slots []AdSlot) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ad_settings (id, enabled, script) VALUES (1, ?, ?)
 		ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), script = VALUES(script)`,
-		enabled, script)
-	return err
+		enabled, script); err != nil {
+		return err
+	}
+	for _, slot := range slots {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO ad_slots (slot, enabled, code, mobile_code) VALUES (?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), code = VALUES(code),
+				mobile_code = VALUES(mobile_code)`,
+			slot.Key, slot.Enabled, slot.Code, slot.MobileCode); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // --- Billing, read-only -------------------------------------------------------

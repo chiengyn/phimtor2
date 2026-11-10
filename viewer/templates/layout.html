@@ -111,6 +111,10 @@
 		</div>
 	</header>
 	<main>{{block "content" .Data}}{{end}}</main>
+	{{/* The "footer" banner slot plus the global ad script set at the admin's /ads
+	     page. Both are empty for pass and comp holders (newPageData). A page that
+	     must never carry ads overrides this block. */}}
+	{{block "ads" .}}{{adSlot "footer"}}{{.AdScript}}{{end}}
 	<footer class="site-footer">
 		<div class="wrap">
 			<span class="footer-brand">phimnet</span>
@@ -125,8 +129,5 @@
 			{{end}}
 		</div>
 	</footer>
-	{{/* The ad script set at the admin's /ads page, empty for pass and comp holders
-	     (newPageData). A page that must never carry ads overrides this block. */}}
-	{{block "ads" .}}{{.AdScript}}{{end}}
 </body>
 </html>{{end}}
