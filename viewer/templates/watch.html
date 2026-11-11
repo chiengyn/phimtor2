@@ -18,6 +18,13 @@
 		padding: 24px; color: var(--muted); font-size: 0.92rem; line-height: 1.5;
 	}
 	.player-placeholder.err { color: var(--accent); }
+	/* While a source loads (and if loading fails) the slot only carries one line
+	   of status, so it shrinks to a strip instead of an empty 16:9 screen. That
+	   keeps the loading panel under the source chips above the fold, where people
+	   can see the download moving. It grows to full size when the <video> is
+	   attached. The sign-in and upgrade gates have content of their own and keep
+	   the full 16:9 box. */
+	.player-placeholder.loading { aspect-ratio: auto; min-height: 0; height: 180px; }
 
 	/* Notice shown while the torrent is loading; hidden once playback starts.
 	   Torrents can take a while to find seeders/buffer, so this tells users to
@@ -165,11 +172,73 @@
 	.sub-row .sub-meta { flex: 0 0 auto; color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
 	.sub-empty { color: var(--muted); font-size: 0.85rem; }
 
-	/* Debug zone (progress + stats) — hidden unless revealed from the console. */
-	.progress-wrap { margin-top: 18px; }
-	.progress-bar { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+	/* Loading panel, right under the source chips. A torrent's first load can sit
+	   for a minute while it finds peers; without visible movement people assume
+	   the page is broken and leave. This shows that work is happening — download
+	   speed, how much of the file has arrived, and a piece map that lights up as
+	   pieces land — and, when there is more than one source, says the way out:
+	   pick another chip. Shown while a source loads (or stalls), hidden once the
+	   video plays. */
+	.load-panel {
+		margin-top: 14px; max-width: 720px; padding: 14px 16px;
+		background: var(--surface); border: 1px solid #2f2f2f; border-radius: var(--radius);
+	}
+	.load-panel[hidden] { display: none; }
+	/* The header is the <summary>: collapsing the panel leaves just this line,
+	   which still carries the spinner, speed, peers and seeders. */
+	.load-head {
+		display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-bottom: 12px;
+		list-style: none; cursor: pointer; user-select: none;
+	}
+	.load-head::-webkit-details-marker { display: none; }
+	.load-panel:not([open]) .load-head { margin-bottom: 0; }
+	.load-chevron {
+		flex: 0 0 auto; width: 8px; height: 8px; margin: 0 2px 3px 4px;
+		border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+		transform: rotate(45deg); transition: transform 0.15s var(--ease);
+	}
+	.load-panel:not([open]) .load-chevron { transform: rotate(-45deg); margin-bottom: 0; }
+	.load-head:hover .load-chevron { border-color: var(--text); }
+	.load-head .spinner {
+		flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%;
+		border: 2px solid rgba(255,255,255,0.25); border-top-color: var(--accent);
+		animation: load-notice-spin 0.8s linear infinite;
+	}
+	.load-panel.stalled .load-head .spinner { animation: none; border-top-color: rgba(255,255,255,0.25); }
+	.load-title { flex: 1 1 auto; font-size: 0.88rem; font-weight: 600; color: var(--text); }
+	/* Speed, peers, seeders: each figure stays on one line, but the group may
+	   wrap (Russian "Подключений: 21 / 42" is wide on a phone). */
+	.load-speed { flex: 0 1 auto; display: inline-flex; flex-wrap: wrap; gap: 2px 12px; color: var(--muted); font-size: 0.8rem; }
+	.load-speed span { white-space: nowrap; }
+	.load-speed b { color: var(--text); font-weight: 600; }
+	.progress-bar { height: 6px; background: var(--surface-3); border-radius: 3px; overflow: hidden; }
 	.progress-fill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.8s linear; }
-	.progress-text { color: var(--muted); font-size: 0.82rem; margin-top: 6px; }
+	.progress-text { color: var(--muted); font-size: 0.8rem; margin-top: 6px; }
+	/* Before the torrent's file info arrives (a magnet-only source resolving it
+	   from peers — often the longest wait) there is no size to show progress
+	   against. A sliding bar says "working" instead of a dead 0%. */
+	.load-panel.indeterminate .progress-fill { width: 30% !important; transition: none; animation: load-slide 1.4s var(--ease) infinite; }
+	@keyframes load-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+	@media (prefers-reduced-motion: reduce) {
+		.load-panel.indeterminate .progress-fill { animation: none; width: 100% !important; opacity: 0.35; }
+	}
+	/* One backing pixel per screen pixel (drawPieceMap buckets pieces into
+	   columns), so it stays crisp and no piece vanishes when there are thousands. */
+	.piece-map { display: block; width: 100%; height: 14px; margin-top: 12px; border-radius: 3px; background: var(--surface-3); }
+	.piece-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; color: var(--muted); font-size: 0.75rem; }
+	.piece-legend span { display: inline-flex; align-items: center; gap: 6px; }
+	.piece-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+	.piece-legend .pc-done { background: var(--accent); }
+	.piece-legend .pc-partial { background: #a3a3a3; }
+	.piece-legend .pc-missing { background: var(--surface-3); border: 1px solid #3a3a3a; }
+	.load-hint {
+		margin: 12px 0 0; padding-top: 12px; border-top: 1px solid #2a2a2a;
+		color: var(--muted); font-size: 0.82rem; line-height: 1.5;
+	}
+	.load-hint[hidden] { display: none; }
+	.load-hint b { color: var(--text); font-weight: 600; }
+
+	/* Debug zone (peer stats) — hidden unless revealed from the console. */
 	.stats { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; color: var(--muted); font-size: 0.8rem; }
 	.stat { white-space: nowrap; }
 	.stat b { color: var(--text); font-weight: 600; }
@@ -240,6 +309,7 @@
 	/* --- Responsive (phones) --- */
 	@media (max-width: 600px) {
 		.watch .plyr video { max-height: 56vh; }
+		.player-placeholder.loading { height: 120px; }
 		.watch-meta-top h1 { font-size: 1.4rem; }
 		.player { margin: 12px 0 18px; }
 		.ctrl-group { margin-top: 16px; }
@@ -278,12 +348,29 @@
 	</div>
 
 	<div class="player" id="player-wrap">
-		<div class="player-placeholder" id="player-placeholder"></div>
+		<div class="player-placeholder loading" id="player-placeholder"></div>
 	</div>
 
 	<div class="ctrl-group">
 		<span class="ctrl-label">{{t "watch.sources"}}</span>
 		<div class="source-chips" id="source-chips"></div>
+		<details class="load-panel" id="load-panel" open hidden>
+			<summary class="load-head">
+				<span class="spinner" aria-hidden="true"></span>
+				<span class="load-title">{{t "watch.load_title"}}</span>
+				<span class="load-speed" id="load-speed"></span>
+				<span class="load-chevron" aria-hidden="true"></span>
+			</summary>
+			<div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+			<div class="progress-text" id="progress-text">{{t "watch.preparing"}}</div>
+			<canvas class="piece-map" id="piece-map" role="img" aria-label="{{t "watch.piece_map"}}"></canvas>
+			<div class="piece-legend">
+				<span><i class="pc-done"></i> {{t "watch.piece_done"}}</span>
+				<span><i class="pc-partial"></i> {{t "watch.piece_partial"}}</span>
+				<span><i class="pc-missing"></i> {{t "watch.piece_missing"}}</span>
+			</div>
+			<p class="load-hint" id="load-hint" hidden>{{t "watch.load_hint"}}</p>
+		</details>
 	</div>
 
 	{{/* Below the player and the source chips, never over or between them. */}}
@@ -393,10 +480,6 @@
 	</div>
 
 	<div id="debug-zone" hidden>
-		<div class="progress-wrap">
-			<div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-			<div class="progress-text" id="progress-text">{{t "watch.preparing"}}</div>
-		</div>
 		<div class="stats" id="stats"><span class="loading-text">…</span></div>
 	</div>
 
@@ -450,6 +533,8 @@ const I18N = {
 	statDownload: {{js (t "watch.stat_download")}}, statUpload: {{js (t "watch.stat_upload")}},
 	statSeeders: {{js (t "watch.stat_seeders")}}, statPeers: {{js (t "watch.stat_peers")}},
 	statPending: {{js (t "watch.stat_pending")}}, statHalfOpen: {{js (t "watch.stat_half_open")}}, statPieces: {{js (t "watch.stat_pieces")}},
+	loadProgress: {{js (t "watch.load_progress")}}, loadPeers: {{js (t "watch.load_peers")}},
+	loadSeeders: {{js (t "watch.load_seeders")}},
 };
 function i18nFormat(value, ...args) {
 	let i = 0;
@@ -478,6 +563,7 @@ const UPGRADE_URL = D.upgradeUrl || '';
 
 let player = null;
 let currentInfoHash = null;
+let currentFileIndex = null; // file inside the torrent, for the piece map
 let activeVideoID = null;
 let statsTimer = null;
 let subtitleURL = null;
@@ -512,6 +598,56 @@ function hideLoadNotice() {
 	if (el) el.hidden = true;
 }
 
+// The loading panel under the source chips (progress bar + piece map). Opened
+// when a source starts loading — and again if playback stalls for a while —
+// and closed the moment the video actually plays, so it never competes with
+// the film for attention. `fresh` clears the previous source's numbers.
+function loadPanelEl() { return document.getElementById('load-panel'); }
+function loadPanelOpen() { const el = loadPanelEl(); return !!el && !el.hidden; }
+
+function showLoadPanel(fresh) {
+	const el = loadPanelEl();
+	if (!el) return;
+	if (fresh) {
+		document.getElementById('progress-fill').style.width = '0%';
+		document.getElementById('progress-text').textContent = I18N.preparing;
+		document.getElementById('load-speed').innerHTML = '';
+		drawPieceMap('');
+	}
+	el.classList.remove('stalled');
+	if (fresh) el.classList.add('indeterminate');
+	// "Switch to another source" only makes sense when there is another source
+	// this visitor can actually play.
+	const playable = VIDEOS.filter(v => !v.lock && v.available !== false).length;
+	document.getElementById('load-hint').hidden = playable < 2;
+	const wasHidden = el.hidden;
+	el.hidden = false;
+	if (wasHidden) refreshStats(); // don't wait a whole poll tick for numbers
+}
+
+// Open on every page load; collapsing lasts only for this visit. Reopening
+// fetches fresh numbers instead of showing a piece map that went stale (it is
+// not polled while shut).
+(function initLoadPanelToggle() {
+	const el = loadPanelEl();
+	if (!el) return;
+	el.addEventListener('toggle', () => { if (el.open && !el.hidden) refreshStats(); });
+})();
+
+function hideLoadPanel() {
+	const el = loadPanelEl();
+	if (el) el.hidden = true;
+}
+
+// stallLoadPanel freezes the spinner when loading has given up (the stream
+// never became ready), leaving the numbers and the switch-source hint on screen.
+function stallLoadPanel() {
+	const el = loadPanelEl();
+	if (!el) return;
+	el.classList.remove('indeterminate');
+	el.classList.add('stalled');
+}
+
 // showPlayerStatus puts a status message in the player slot (replacing any
 // current player) so loading/error text appears where the video will be, rather
 // than below it. buildPlayer later swaps this out for the real <video>.
@@ -521,7 +657,7 @@ function showPlayerStatus(text, isErr) {
 	remuxAbort = null;
 	if (player) { try { player.destroy(); } catch(e) {} player = null; }
 	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
-	wrap.innerHTML = '<div class="player-placeholder" id="player-placeholder"></div>';
+	wrap.innerHTML = '<div class="player-placeholder loading" id="player-placeholder"></div>';
 	if (isErr) hideLoadNotice(); // loading failed — stop telling the user to wait
 	setPlayerStatus(text, isErr);
 }
@@ -531,7 +667,7 @@ function setPlayerStatus(text, isErr) {
 	const ph = document.getElementById('player-placeholder');
 	if (!ph) return;
 	ph.textContent = text || '';
-	ph.className = 'player-placeholder' + (isErr ? ' err' : '');
+	ph.classList.toggle('err', !!isErr); // keep .loading
 }
 
 // --- Watch-session heartbeat ----------------------------------------------
@@ -707,6 +843,7 @@ function resetPlayerSurface() {
 	if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
 	if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
 	hideLoadNotice();
+	hideLoadPanel();
 	const wrap = document.getElementById('player-wrap');
 	wrap.innerHTML = '';
 	return wrap;
@@ -803,8 +940,9 @@ async function playSource(videoID, opts = {}) {
 	if (v && v.available === false) return; // nobody can play this yet
 	setStatus('');
 	showLoadNotice();
+	// A recovery re-prepare resumes the same torrent, so keep its numbers.
+	showLoadPanel(videoID !== activeVideoID);
 	showPlayerStatus(I18N.preparingSource);
-	document.getElementById('progress-text').textContent = I18N.preparing;
 	let data;
 	try {
 		const res = await fetch(`/api/sources/${videoID}/prepare`, { method: 'POST', headers: { 'X-Phimnet-Locale': LOCALE } });
@@ -817,10 +955,12 @@ async function playSource(videoID, opts = {}) {
 		if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
 		data = await res.json();
 	} catch(e) {
+		hideLoadPanel(); // nothing is downloading, so there is no progress to show
 		showPlayerStatus(i18nFormat(I18N.prepareError, e.message), true);
 		return;
 	}
 	currentInfoHash = data.infoHash;
+	currentFileIndex = data.fileIndex;
 	streamerBase = (data.streamerPublicURL || '').replace(/\/$/, '');
 	activeVideoID = videoID;
 	renderSourceChips();
@@ -929,6 +1069,7 @@ async function waitForStreamReady(infoHash, videoID) {
 	}
 	if (activeVideoID === videoID) {
 		showPlayerStatus(I18N.slow, true);
+		stallLoadPanel();
 	}
 	return false;
 }
@@ -1080,13 +1221,19 @@ function buildPlayer(streamURL, resumeAt, contentType) {
 		if (bufferWatchdog) clearTimeout(bufferWatchdog);
 		bufferWatchdog = setTimeout(() => {
 			setStatus(I18N.downloading);
+			showLoadPanel(false); // a long stall: show that data is still arriving
 		}, 20000);
 	};
+	// Ready to play is the end of loading, even when the browser blocks autoplay
+	// (no gesture yet, sound on) and the video waits on its play button —
+	// otherwise the panel would keep spinning "loading" over a finished load.
+	video.addEventListener('canplay', () => { hideLoadNotice(); hideLoadPanel(); }, { once: true });
 	video.addEventListener('waiting', armWatchdog);
 	video.addEventListener('stalled', armWatchdog);
 	video.addEventListener('playing', () => {
 		if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
 		hideLoadNotice();
+		hideLoadPanel();
 		setStatus('');
 	});
 
@@ -1192,27 +1339,107 @@ document.addEventListener('keydown', (e) => {
 	if (handled) e.preventDefault();
 });
 
-// --- Stats / progress (debug only) ----------------------------------------
+// --- Stats / progress -------------------------------------------------------
+//
+// Feeds two surfaces: the user-facing loading panel (progress bar, speed, piece
+// map) while a source loads, and the console-only debug zone. When neither is
+// visible a tick is a no-op, so a two-hour film does not poll the streamer
+// for numbers nobody sees.
 
 function startStatsPolling() {
 	if (statsTimer) clearInterval(statsTimer);
 	refreshStats();
-	statsTimer = setInterval(refreshStats, 3000);
+	statsTimer = setInterval(refreshStats, 2000);
 }
 
 async function refreshStats() {
-	if (!currentInfoHash || !streamerBase) return;
+	const hash = currentInfoHash, base = streamerBase, fileIndex = currentFileIndex;
+	if (!hash || !base) return;
+	const panel = loadPanelOpen();
+	const debug = !document.getElementById('debug-zone').hidden;
+	if (!panel && !debug) return;
+	let s;
 	try {
-		const res = await fetch(`${streamerBase}/api/torrents/${currentInfoHash}/stats`);
+		const res = await fetch(`${base}/api/torrents/${hash}/stats`);
 		if (!res.ok) return;
-		const s = await res.json();
-		const pct = s.totalBytes ? Math.round(s.bytesCompleted / s.totalBytes * 100) : 0;
-		document.getElementById('progress-fill').style.width = pct + '%';
-		document.getElementById('progress-text').textContent = s.totalBytes
-			? `${pct}% · ${formatBytes(s.bytesCompleted)} / ${formatBytes(s.totalBytes)}`
-			: I18N.metadata;
-		document.getElementById('stats').innerHTML = statsChips(s);
+		s = await res.json();
+	} catch(e) { return; /* ignore poll errors */ }
+	if (hash !== currentInfoHash) return; // source switched while in flight
+	document.getElementById('stats').innerHTML = statsChips(s);
+	document.getElementById('load-speed').innerHTML = `
+		<span title="${escHtml(I18N.statDownload)}">↓ <b>${formatSpeed(s.downloadSpeed)}</b></span>
+		<span title="${escHtml(I18N.statPeers)}">${i18nFormat(escHtml(I18N.loadPeers), `<b>${s.activePeers || 0}</b>`, s.totalPeers || 0)}</span>
+		<span title="${escHtml(I18N.statSeeders)}">${i18nFormat(escHtml(I18N.loadSeeders), `<b>${s.connectedSeeders || 0}</b>`)}</span>`;
+	// Until metadata arrives, waitForStreamReady owns the text (with its seconds
+	// counter); writing here too would make the two flicker against each other.
+	if (!s.totalBytes) return;
+	// Torrent-wide numbers first, so the bar moves even if the piece call fails.
+	// For a season pack they cover every episode, which is why the per-file
+	// piece map below replaces them when it answers.
+	setLoadProgress(s.bytesCompleted, s.totalBytes);
+	// The piece map is only worth fetching while someone can see it.
+	if (panel && loadPanelEl().open && fileIndex != null) refreshPieces(hash, base, fileIndex);
+}
+
+function setLoadProgress(done, total) {
+	loadPanelEl()?.classList.remove('indeterminate');
+	const pct = total ? Math.min(100, Math.floor(done / total * 100)) : 0;
+	document.getElementById('progress-fill').style.width = pct + '%';
+	document.getElementById('progress-text').textContent =
+		i18nFormat(I18N.loadProgress, pct, formatBytes(done), formatBytes(total));
+}
+
+// refreshPieces draws the per-file piece map from the streamer's public pieces
+// endpoint (same data plane as stats) and points the bar at THIS file.
+async function refreshPieces(hash, base, fileIndex) {
+	try {
+		const res = await fetch(`${base}/api/torrents/${hash}/files/${fileIndex}/pieces`);
+		if (!res.ok) return;
+		const p = await res.json();
+		if (hash !== currentInfoHash || fileIndex !== currentFileIndex) return;
+		drawPieceMap(p.pieces || '');
+		if (p.length > 0 && p.numPieces > 0) {
+			const done = Math.min(p.length, (p.piecesComplete || 0) * (p.pieceLength || 0));
+			setLoadProgress(done, p.length);
+		}
 	} catch(e) { /* ignore poll errors */ }
+}
+
+// drawPieceMap paints the piece string ('2' complete, '1' partial, else missing)
+// at one backing pixel per screen pixel. A file can have thousands of pieces, so
+// each column summarises the pieces it covers: any piece mid-download lights it
+// grey (that is the "something is happening" signal, so it must never be lost
+// to downscaling), otherwise it shades from empty to red by how many are done.
+// Colours match the legend: --accent, #a3a3a3, --surface-3.
+const PIECE_DONE = [229, 9, 20], PIECE_PARTIAL = [163, 163, 163], PIECE_MISSING = [44, 44, 44];
+function drawPieceMap(pieces) {
+	const canvas = document.getElementById('piece-map');
+	if (!canvas) return;
+	const ctx = canvas.getContext('2d');
+	const n = pieces.length;
+	const w = Math.max(1, Math.round(canvas.clientWidth * (window.devicePixelRatio || 1)));
+	if (canvas.width !== w) canvas.width = w;
+	canvas.height = 1;
+	if (!n) { ctx.clearRect(0, 0, w, 1); return; }
+	const img = ctx.createImageData(w, 1);
+	for (let x = 0; x < w; x++) {
+		const from = Math.floor(x * n / w);
+		const to = Math.max(from + 1, Math.floor((x + 1) * n / w));
+		let done = 0, partial = 0;
+		for (let i = from; i < to; i++) {
+			const c = pieces[i];
+			if (c === '2') done++; else if (c === '1') partial++;
+		}
+		let rgb;
+		if (partial) rgb = PIECE_PARTIAL;
+		else {
+			const f = done / (to - from);
+			rgb = PIECE_MISSING.map((m, k) => Math.round(m + (PIECE_DONE[k] - m) * f));
+		}
+		const o = x * 4;
+		img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+	}
+	ctx.putImageData(img, 0, 0);
 }
 
 function formatBytes(bytes) {

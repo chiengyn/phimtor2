@@ -267,8 +267,18 @@ Flat single `main` package.
   the magnet via the manager **server-to-server** (`manager.go`) and returns
   `{infoHash, fileIndex, streamerPublicURL}`. The browser then streams from, and
   polls `…/stats` on, **that streamer's** public endpoints directly. The stats poll feeds a
-  user-facing **progress bar** plus a collapsed **debug panel** (speeds/peers —
-  not meant for end users). A **source selector** appears when more than one
+  user-facing **loading panel** under the source chips — download speed, peers,
+  a progress bar and a piece map (`…/files/{i}/pieces`, so a season pack shows
+  the episode, not the whole pack), plus a "switch to another source" hint when
+  there is another playable one. It exists because a cold torrent can take a
+  minute and an unmoving page loses the viewer. It opens when a source loads (or
+  stalls 20s mid-play), slides indeterminately until the file info is known, and
+  closes on `canplay`/`playing` — `canplay` too, because a blocked autoplay
+  would otherwise leave it spinning over a ready video. It is a `<details>`,
+  open on every load (deliberately not remembered); collapsed it keeps its
+  header line of live figures and stops fetching the piece map. Polling is a no-op while
+  both it and the console-only **debug panel** (`streamDebug()`) are hidden. A
+  **source selector** appears when more than one
   video exists. Saved subtitles are listed as chips (first auto-loaded); the user
   can also load a local `.srt`/`.vtt`, or search a provider — see *Contributed
   subtitles* below.
