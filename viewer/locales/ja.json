@@ -201,6 +201,8 @@
   "watch.load_progress": "%d%% ダウンロード済み · %s / %s",
   "watch.load_seeders": "シーダー %d",
   "watch.load_title": "動画を読み込み中",
+  "watch.load_title_playing": "ダウンロードの進行状況",
+  "watch.load_weak": "このソースは再生速度よりダウンロードが遅いため（接続中のシーダー %d）、バッファリングで止まることがあります。カクつく場合は上の別のソースに切り替えてください。",
   "watch.loading_info": "情報を読み込み中…",
   "watch.loading_info_seconds": "情報を読み込み中…（%d秒）",
   "watch.metadata": "メタデータを読み込み中…",

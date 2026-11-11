@@ -201,6 +201,8 @@
   "watch.load_progress": "%d%% 다운로드됨 · %s / %s",
   "watch.load_seeders": "시더 %d명",
   "watch.load_title": "영상 불러오는 중",
+  "watch.load_title_playing": "다운로드 진행률",
+  "watch.load_weak": "이 소스는 재생 속도보다 느리게 다운로드되고 있어(연결된 시더 %d명) 버퍼링으로 멈출 수 있습니다. 끊기면 위에서 다른 소스로 바꿔 보세요.",
   "watch.loading_info": "정보 불러오는 중…",
   "watch.loading_info_seconds": "정보 불러오는 중… (%d초)",
   "watch.metadata": "메타데이터 불러오는 중…",

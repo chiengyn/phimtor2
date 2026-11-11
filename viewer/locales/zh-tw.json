@@ -201,6 +201,8 @@
   "watch.load_progress": "已下載 %d%% · %s / %s",
   "watch.load_seeders": "%d 個種子",
   "watch.load_title": "正在載入影片",
+  "watch.load_title_playing": "下載進度",
+  "watch.load_weak": "此片源的下載速度跟不上播放速度（已連線 %d 個種子），可能會暫停緩衝。如果卡頓，請切換到上方的其他片源。",
   "watch.loading_info": "正在載入資訊…",
   "watch.loading_info_seconds": "正在載入資訊…（%d 秒）",
   "watch.metadata": "正在載入中繼資料…",

@@ -201,6 +201,8 @@
   "watch.load_progress": "%d%% terunduh · %s / %s",
   "watch.load_seeders": "%d seeder",
   "watch.load_title": "Memuat video",
+  "watch.load_title_playing": "Progres unduhan",
+  "watch.load_weak": "Sumber ini mengunduh lebih lambat daripada kecepatan video diputar (%d seeder terhubung), jadi bisa berhenti untuk buffering. Jika tersendat, ganti ke sumber lain di atas.",
   "watch.loading_info": "Memuat informasi…",
   "watch.loading_info_seconds": "Memuat informasi… (%d dtk)",
   "watch.metadata": "Memuat metadata…",

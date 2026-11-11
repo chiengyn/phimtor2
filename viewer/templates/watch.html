@@ -205,6 +205,10 @@
 		animation: load-notice-spin 0.8s linear infinite;
 	}
 	.load-panel.stalled .load-head .spinner { animation: none; border-top-color: rgba(255,255,255,0.25); }
+	/* Once the video plays the panel stays as a download readout: no spinner,
+	   and no "taking too long to start?" hint. */
+	.load-panel.playing .load-head .spinner { display: none; }
+	.load-panel.playing .load-hint { display: none; }
 	.load-title { flex: 1 1 auto; font-size: 0.88rem; font-weight: 600; color: var(--text); }
 	/* Speed, peers, seeders: each figure stays on one line, but the group may
 	   wrap (Russian "Подключений: 21 / 42" is wide on a phone). */
@@ -237,6 +241,15 @@
 	}
 	.load-hint[hidden] { display: none; }
 	.load-hint b { color: var(--text); font-weight: 600; }
+	/* "This source can't keep up" — the site's warning treatment (same tint as
+	   .load-notice). Outside the <details>, so it shows even when collapsed. */
+	.load-weak {
+		margin: 10px 0 0; max-width: 720px; padding: 10px 14px;
+		background: rgba(229,9,20,0.10); border: 1px solid rgba(229,9,20,0.35);
+		border-radius: var(--radius); color: var(--text); font-size: 0.85rem; line-height: 1.5;
+	}
+	.load-weak[hidden] { display: none; }
+	.load-weak b { font-weight: 700; }
 
 	/* Debug zone (peer stats) — hidden unless revealed from the console. */
 	.stats { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; color: var(--muted); font-size: 0.8rem; }
@@ -357,7 +370,7 @@
 		<details class="load-panel" id="load-panel" open hidden>
 			<summary class="load-head">
 				<span class="spinner" aria-hidden="true"></span>
-				<span class="load-title">{{t "watch.load_title"}}</span>
+				<span class="load-title" id="load-title">{{t "watch.load_title"}}</span>
 				<span class="load-speed" id="load-speed"></span>
 				<span class="load-chevron" aria-hidden="true"></span>
 			</summary>
@@ -371,6 +384,7 @@
 			</div>
 			<p class="load-hint" id="load-hint" hidden>{{t "watch.load_hint"}}</p>
 		</details>
+		<p class="load-weak" id="load-weak" role="status" hidden></p>
 	</div>
 
 	{{/* Below the player and the source chips, never over or between them. */}}
@@ -535,6 +549,8 @@ const I18N = {
 	statPending: {{js (t "watch.stat_pending")}}, statHalfOpen: {{js (t "watch.stat_half_open")}}, statPieces: {{js (t "watch.stat_pieces")}},
 	loadProgress: {{js (t "watch.load_progress")}}, loadPeers: {{js (t "watch.load_peers")}},
 	loadSeeders: {{js (t "watch.load_seeders")}},
+	loadWeak: {{js (t "watch.load_weak")}},
+	loadTitle: {{js (t "watch.load_title")}}, loadTitlePlaying: {{js (t "watch.load_title_playing")}},
 };
 function i18nFormat(value, ...args) {
 	let i = 0;
@@ -598,10 +614,12 @@ function hideLoadNotice() {
 	if (el) el.hidden = true;
 }
 
-// The loading panel under the source chips (progress bar + piece map). Opened
-// when a source starts loading — and again if playback stalls for a while —
-// and closed the moment the video actually plays, so it never competes with
-// the film for attention. `fresh` clears the previous source's numbers.
+// The download panel under the source chips (progress bar + piece map). It is
+// shown for as long as a source is active: in its "loading" state while the
+// source prepares (or when playback stalls for a while), and as a quieter
+// download readout once the video plays. It is hidden only when nothing is
+// downloading — a sign-in/upgrade gate, or a failed prepare. `fresh` clears
+// the previous source's numbers.
 function loadPanelEl() { return document.getElementById('load-panel'); }
 function loadPanelOpen() { const el = loadPanelEl(); return !!el && !el.hidden; }
 
@@ -609,12 +627,14 @@ function showLoadPanel(fresh) {
 	const el = loadPanelEl();
 	if (!el) return;
 	if (fresh) {
+		resetSourceHealth();
 		document.getElementById('progress-fill').style.width = '0%';
 		document.getElementById('progress-text').textContent = I18N.preparing;
 		document.getElementById('load-speed').innerHTML = '';
 		drawPieceMap('');
 	}
-	el.classList.remove('stalled');
+	el.classList.remove('stalled', 'playing');
+	document.getElementById('load-title').textContent = I18N.loadTitle;
 	if (fresh) el.classList.add('indeterminate');
 	// "Switch to another source" only makes sense when there is another source
 	// this visitor can actually play.
@@ -631,12 +651,23 @@ function showLoadPanel(fresh) {
 (function initLoadPanelToggle() {
 	const el = loadPanelEl();
 	if (!el) return;
-	el.addEventListener('toggle', () => { if (el.open && !el.hidden) refreshStats(); });
+	el.addEventListener('toggle', () => { if (el.open && !el.hidden) { lastStatsAt = 0; refreshStats(); } });
 })();
+
+// markLoadPanelPlaying switches the panel from "loading" to a plain download
+// readout once the video can play.
+function markLoadPanelPlaying() {
+	const el = loadPanelEl();
+	if (!el || el.hidden) return;
+	el.classList.remove('stalled');
+	el.classList.add('playing');
+	document.getElementById('load-title').textContent = I18N.loadTitlePlaying;
+}
 
 function hideLoadPanel() {
 	const el = loadPanelEl();
 	if (el) el.hidden = true;
+	resetSourceHealth();
 }
 
 // stallLoadPanel freezes the spinner when loading has given up (the stream
@@ -1221,19 +1252,22 @@ function buildPlayer(streamURL, resumeAt, contentType) {
 		if (bufferWatchdog) clearTimeout(bufferWatchdog);
 		bufferWatchdog = setTimeout(() => {
 			setStatus(I18N.downloading);
-			showLoadPanel(false); // a long stall: show that data is still arriving
+			// Mid-playback, a long stall is the lag the weak-source warning is
+			// about, so say that; before playback it is still a slow start.
+			if (loadPanelEl()?.classList.contains('playing')) flagWeakSource();
+			else showLoadPanel(false);
 		}, 20000);
 	};
 	// Ready to play is the end of loading, even when the browser blocks autoplay
 	// (no gesture yet, sound on) and the video waits on its play button —
 	// otherwise the panel would keep spinning "loading" over a finished load.
-	video.addEventListener('canplay', () => { hideLoadNotice(); hideLoadPanel(); }, { once: true });
+	video.addEventListener('canplay', () => { hideLoadNotice(); markLoadPanelPlaying(); }, { once: true });
 	video.addEventListener('waiting', armWatchdog);
 	video.addEventListener('stalled', armWatchdog);
 	video.addEventListener('playing', () => {
 		if (bufferWatchdog) { clearTimeout(bufferWatchdog); bufferWatchdog = null; }
 		hideLoadNotice();
-		hideLoadPanel();
+		markLoadPanelPlaying();
 		setStatus('');
 	});
 
@@ -1352,12 +1386,17 @@ function startStatsPolling() {
 	statsTimer = setInterval(refreshStats, 2000);
 }
 
+let lastStatsAt = 0;
 async function refreshStats() {
 	const hash = currentInfoHash, base = streamerBase, fileIndex = currentFileIndex;
 	if (!hash || !base) return;
 	const panel = loadPanelOpen();
 	const debug = !document.getElementById('debug-zone').hidden;
 	if (!panel && !debug) return;
+	// Every 2s while loading; once the film plays the readout is background
+	// information, so a tick every ~6s is plenty for a two-hour session.
+	if (loadPanelEl().classList.contains('playing') && !debug && Date.now() - lastStatsAt < 5500) return;
+	lastStatsAt = Date.now();
 	let s;
 	try {
 		const res = await fetch(`${base}/api/torrents/${hash}/stats`);
@@ -1373,12 +1412,74 @@ async function refreshStats() {
 	// Until metadata arrives, waitForStreamReady owns the text (with its seconds
 	// counter); writing here too would make the two flicker against each other.
 	if (!s.totalBytes) return;
+	evaluateSourceHealth(s);
 	// Torrent-wide numbers first, so the bar moves even if the piece call fails.
 	// For a season pack they cover every episode, which is why the per-file
 	// piece map below replaces them when it answers.
 	setLoadProgress(s.bytesCompleted, s.totalBytes);
 	// The piece map is only worth fetching while someone can see it.
 	if (panel && loadPanelEl().open && fileIndex != null) refreshPieces(hash, base, fileIndex);
+}
+
+// --- Weak-source warning ----------------------------------------------------
+//
+// While the video plays, warn when this source cannot keep up and suggest
+// another one. The test is download speed against what the video needs (file
+// size / duration, with 20% headroom), NOT the seeder count alone: one seeder
+// plus thirty fast peers streams fine, and a count-only rule would push people
+// off a source that works. Seeders are what the message names, because that is
+// the number the visitor can compare across sources. Without a known duration
+// it falls back to "fewer than WEAK_MIN_SEEDERS seeders". Three readings in a
+// row (~18s at the playing poll rate) to show it and three to clear it, so one
+// slow tick never flashes it. A real mid-playback stall shows it at once. Only
+// offered when another playable source exists — otherwise it is advice the
+// visitor cannot take.
+const WEAK_STREAK = 3, WEAK_MIN_SEEDERS = 3, WEAK_HEADROOM = 1.2;
+let weakStreak = 0, okStreak = 0, weakShown = false, lastSeeders = 0, fileFraction = null;
+
+function resetSourceHealth() {
+	weakStreak = okStreak = 0; weakShown = false; lastSeeders = 0; fileFraction = null;
+	const el = document.getElementById('load-weak');
+	if (el) el.hidden = true;
+}
+
+function otherPlayableSource() {
+	return VIDEOS.filter(v => !v.lock && v.available !== false).length > 1;
+}
+
+function renderWeakNote() {
+	const el = document.getElementById('load-weak');
+	if (!el) return;
+	el.hidden = !(weakShown && otherPlayableSource());
+	if (!el.hidden) el.innerHTML = i18nFormat(escHtml(I18N.loadWeak), `<b>${lastSeeders}</b>`);
+}
+
+function flagWeakSource() {
+	weakStreak = WEAK_STREAK; okStreak = 0; weakShown = true;
+	renderWeakNote();
+}
+
+function evaluateSourceHealth(s) {
+	lastSeeders = s.connectedSeeders || 0;
+	if (!loadPanelEl()?.classList.contains('playing')) { renderWeakNote(); return; }
+	// Prefer the played file's own completion (the piece map); fall back to the
+	// torrent's, which is the same thing for a single-file torrent.
+	const frac = fileFraction != null ? fileFraction : (s.totalBytes ? s.bytesCompleted / s.totalBytes : 0);
+	let weak;
+	if (frac >= 0.98) {
+		weak = false; // all here: nothing left to lag on
+	} else {
+		const v = VIDEOS.find(x => x.id === activeVideoID);
+		const video = document.getElementById('player');
+		const dur = video && isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+		weak = (dur && v && v.file_size)
+			? (s.downloadSpeed || 0) < (v.file_size / dur) * WEAK_HEADROOM
+			: lastSeeders < WEAK_MIN_SEEDERS;
+	}
+	if (weak) { weakStreak++; okStreak = 0; } else { okStreak++; weakStreak = 0; }
+	if (weakStreak >= WEAK_STREAK) weakShown = true;
+	if (okStreak >= WEAK_STREAK) weakShown = false;
+	renderWeakNote();
 }
 
 function setLoadProgress(done, total) {
@@ -1399,6 +1500,7 @@ async function refreshPieces(hash, base, fileIndex) {
 		if (hash !== currentInfoHash || fileIndex !== currentFileIndex) return;
 		drawPieceMap(p.pieces || '');
 		if (p.length > 0 && p.numPieces > 0) {
+			fileFraction = (p.piecesComplete || 0) / p.numPieces;
 			const done = Math.min(p.length, (p.piecesComplete || 0) * (p.pieceLength || 0));
 			setLoadProgress(done, p.length);
 		}

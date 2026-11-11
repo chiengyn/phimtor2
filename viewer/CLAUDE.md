@@ -271,10 +271,21 @@ Flat single `main` package.
   a progress bar and a piece map (`…/files/{i}/pieces`, so a season pack shows
   the episode, not the whole pack), plus a "switch to another source" hint when
   there is another playable one. It exists because a cold torrent can take a
-  minute and an unmoving page loses the viewer. It opens when a source loads (or
-  stalls 20s mid-play), slides indeterminately until the file info is known, and
-  closes on `canplay`/`playing` — `canplay` too, because a blocked autoplay
-  would otherwise leave it spinning over a ready video. It is a `<details>`,
+  minute and an unmoving page loses the viewer. It shows while a source loads,
+  slides indeterminately until the file info is known, and **stays visible for
+  the whole session**: on `canplay`/`playing` it turns into a "Download
+  progress" readout (no spinner, no switch-source hint, polled every ~6s
+  instead of 2s), and a 20s mid-play stall flips it back to its loading state.
+  `canplay` counts too, because a blocked autoplay would otherwise leave it
+  spinning over a ready video. Only a sign-in/upgrade gate or a failed prepare
+  hides it. During playback a **weak-source warning** (just below the panel, so
+  collapsing does not hide it) tells the visitor to switch source when the
+  download cannot keep up: speed below file size ÷ duration × 1.2 for three
+  readings in a row (or fewer than 3 seeders when the duration is unknown), or
+  a real 20s stall. It is deliberately not a bare seeder threshold — one seeder
+  plus many fast peers streams fine. It names the seeder count, clears after
+  three good readings, never shows once the file is ≥98% downloaded, and only
+  shows when another playable source exists. It is a `<details>`,
   open on every load (deliberately not remembered); collapsed it keeps its
   header line of live figures and stops fetching the piece map. Polling is a no-op while
   both it and the console-only **debug panel** (`streamDebug()`) are hidden. A

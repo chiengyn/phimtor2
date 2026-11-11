@@ -201,6 +201,8 @@
   "watch.load_progress": "%d%% downloaded · %s / %s",
   "watch.load_seeders": "%d seeders",
   "watch.load_title": "Loading the video",
+  "watch.load_title_playing": "Download progress",
+  "watch.load_weak": "This source is downloading slower than the video plays (%d seeders connected), so it may pause to buffer. If it lags, switch to another source above.",
   "watch.loading_info": "Loading information…",
   "watch.loading_info_seconds": "Loading information… (%ds)",
   "watch.metadata": "Loading metadata…",

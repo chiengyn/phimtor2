@@ -201,6 +201,8 @@
   "watch.load_progress": "%d%% baixado · %s / %s",
   "watch.load_seeders": "%d seeders",
   "watch.load_title": "Carregando o vídeo",
+  "watch.load_title_playing": "Progresso do download",
+  "watch.load_weak": "Esta fonte está baixando mais devagar do que o vídeo é reproduzido (%d seeders conectados), então pode pausar para carregar. Se travar, troque para outra fonte acima.",
   "watch.loading_info": "Carregando informações…",
   "watch.loading_info_seconds": "Carregando informações… (%d s)",
   "watch.metadata": "Carregando metadados…",

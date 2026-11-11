@@ -201,6 +201,8 @@
   "watch.load_progress": "Đã tải %d%% · %s / %s",
   "watch.load_seeders": "%d seeder",
   "watch.load_title": "Đang tải video",
+  "watch.load_title_playing": "Tiến độ tải",
+  "watch.load_weak": "Nguồn này đang tải chậm hơn tốc độ phát (%d seeder đang kết nối) nên video có thể bị dừng để tải thêm. Nếu bị giật, hãy chuyển sang nguồn khác ở trên.",
   "watch.loading_info": "Đang tải thông tin…",
   "watch.loading_info_seconds": "Đang tải thông tin… (%ds)",
   "watch.metadata": "Đang tải metadata…",
