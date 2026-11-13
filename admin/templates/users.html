@@ -114,16 +114,16 @@
           <span class="badge plan-{{ .Plan }}">{{ .Plan }}</span>
           {{/* HasPass, not `with .PlanExpiresAt` — a non-nil expiry in the past
                is an EXPIRED pass, and this badge used to claim it was active. */}}
-          {{ if .HasPass }}<span class="badge">4K trả phí đến {{ .PlanExpiresAt.Format "02/01/2006" }}</span>{{ end }}
-          {{ if .HasComp }}<span class="badge comp">4K tặng · {{ .CompLabel }}</span>{{ end }}
+          {{ if .HasPass }}<span class="badge">4K trả phí đến {{ localtime .PlanExpiresAt "02/01/2006" }}</span>{{ end }}
+          {{ if .HasComp }}<span class="badge comp">4K tặng · {{ if .CompForever }}vĩnh viễn{{ else }}đến {{ localtime .CompExpiresAt "02/01/2006" }}{{ end }}</span>{{ end }}
           {{ if not .EmailVerified }}<span class="badge unverified">chưa xác thực email</span>{{ end }}
           {{ if .IsBlocked }}<span class="badge blocked">bị khoá</span>{{ end }}
         </div>
       </div>
       <div class="user-stats">
         <div><b>{{ .BookmarkCount }}</b> phim đã lưu</div>
-        <div>Đăng ký {{ .CreatedAt.Format "02/01/2006" }}</div>
-        <div>{{ with .LastLoginAt }}Đăng nhập {{ .Format "02/01/2006 15:04" }}{{ else }}Chưa đăng nhập lại{{ end }}</div>
+        <div>Đăng ký {{ localtime .CreatedAt "02/01/2006" }}</div>
+        <div>{{ with .LastLoginAt }}Đăng nhập {{ localtime . "02/01/2006 15:04" }}{{ else }}Chưa đăng nhập lại{{ end }}</div>
         <div><a href="/watch-history?user={{ .ID }}">Lịch sử xem</a></div>
       </div>
       <div class="user-actions">
@@ -177,5 +177,6 @@
     </nav>
     {{ end }}{{ end }}
   </main>
+<script src="/static/localtime.js" defer></script>
 </body>
 </html>

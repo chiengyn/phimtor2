@@ -230,17 +230,6 @@ func (u User) CompForever() bool {
 	return u.CompExpiresAt != nil && u.CompExpiresAt.Year() >= compForeverDate.Year()
 }
 
-// CompLabel describes the grant for the badge, never printing the year 9999.
-func (u User) CompLabel() string {
-	switch {
-	case !u.HasComp():
-		return ""
-	case u.CompForever():
-		return "vĩnh viễn"
-	}
-	return "đến " + u.CompExpiresAt.Format("02/01/2006")
-}
-
 // DisplayName is what the users list shows: the provider's name, falling back to
 // the local part of the email so the column is never blank.
 func (u User) DisplayName() string {

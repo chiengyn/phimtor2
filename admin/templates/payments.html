@@ -168,7 +168,7 @@
           <tr>
             <td><b>{{ .Label }}</b></td>
             <td><code>{{ .Cursor }}</code></td>
-            <td>{{ .Age }} <span class="muted">({{ .UpdatedAt.Format "02/01 15:04" }})</span></td>
+            <td>{{ .Age }} <span class="muted">({{ localtime .UpdatedAt "02/01 15:04" }})</span></td>
             <td>{{ if .Stale }}<span class="badge stale">đã dừng</span>{{ else }}<span class="badge live">đang quét</span>{{ end }}</td>
           </tr>
           {{- end }}
@@ -197,7 +197,7 @@
           <tr>
             <td><code>{{ $a.Address }}</code></td>
             <td class="num">{{ $a.Invoices }}</td>
-            <td>{{ $a.LastUsed.Format "02/01/2006 15:04" }}</td>
+            <td>{{ localtime $a.LastUsed "02/01/2006 15:04" }}</td>
             <td>
               {{- if eq $i 0 }}
                 {{- if $a.Valid }}<span class="badge live">đang dùng · hợp lệ</span>
@@ -247,7 +247,7 @@
         <tbody>
           {{- range .Invoices }}
           <tr>
-            <td>{{ .CreatedAt.Format "02/01 15:04" }}</td>
+            <td>{{ localtime .CreatedAt "02/01 15:04" }}</td>
             <td class="wrap">
               <div>{{ .Buyer }}</div>
               <div class="muted"><code>{{ .ShortRef }}</code></div>
@@ -261,7 +261,7 @@
             </td>
             <td>
               <span class="badge {{ .StatusClass }}">{{ .StatusLabel }}</span>
-              {{ if .PaidAt }}<div class="muted">{{ .PaidAt.Format "02/01 15:04" }}</div>{{ end }}
+              {{ if .PaidAt }}<div class="muted">{{ localtime .PaidAt "02/01 15:04" }}</div>{{ end }}
             </td>
             <td>
               {{/* An explorer link needs a chain this build knows about; an
@@ -292,5 +292,6 @@
     </nav>
     {{ end }}{{ end }}
   </main>
+<script src="/static/localtime.js" defer></script>
 </body>
 </html>

@@ -96,7 +96,7 @@
         <tbody>
           {{- range .Sessions }}
           <tr>
-            <td>{{ .StartedAt.Format "02/01 15:04" }}</td>
+            <td>{{ localtime .StartedAt "02/01 15:04" }}</td>
             <td class="wrap">
               {{ if $.UserID }}{{ .Who }}{{ else }}<a href="/watch-history?user={{ .UserID }}">{{ .Who }}</a>{{ end }}
               {{ if .UserName }}<div class="muted">{{ .UserEmail }}</div>{{ end }}
@@ -108,7 +108,7 @@
             <td>{{ if eq .Client "tv" }}<span class="badge tv">TV</span>{{ else }}<span class="badge">Web</span>{{ end }}</td>
             <td>{{ with .Resolution }}<span class="badge res">{{ . }}</span>{{ else }}<span class="muted">—</span>{{ end }}</td>
             <td class="num">{{ .Duration }}</td>
-            <td>{{ .LastSeenAt.Format "02/01 15:04" }}</td>
+            <td>{{ localtime .LastSeenAt "02/01 15:04" }}</td>
           </tr>
           {{- end }}
         </tbody>
@@ -128,5 +128,6 @@
     </nav>
     {{ end }}{{ end }}
   </main>
+<script src="/static/localtime.js" defer></script>
 </body>
 </html>

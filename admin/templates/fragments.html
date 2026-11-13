@@ -47,11 +47,11 @@
   <div class="crawl-job">
     <strong>Phim mới từ YTS:</strong>
     {{ if .NewMovies.Running }}
-      <span class="muted">Đang chạy… (bắt đầu {{ .NewMovies.StartedAt.Format "15:04:05" }})</span>
+      <span class="muted">Đang chạy… (bắt đầu {{ localtime .NewMovies.StartedAt "15:04:05" }})</span>
     {{ else if .NewMovies.Err }}
       <span class="err">Lỗi: {{ .NewMovies.Err }}</span>
     {{ else if .NewMovies.Summary }}
-      <span class="ok">{{ .NewMovies.Summary }} (lúc {{ .NewMovies.FinishedAt.Format "15:04:05" }})</span>
+      <span class="ok">{{ .NewMovies.Summary }} (lúc {{ localtime .NewMovies.FinishedAt "15:04:05" }})</span>
     {{ else }}
       <span class="muted">Chưa chạy lần nào.</span>
     {{ end }}
@@ -59,11 +59,11 @@
   <div class="crawl-job">
     <strong>Top rated TMDB:</strong>
     {{ if .TopRated.Running }}
-      <span class="muted">Đang chạy… (bắt đầu {{ .TopRated.StartedAt.Format "15:04:05" }})</span>
+      <span class="muted">Đang chạy… (bắt đầu {{ localtime .TopRated.StartedAt "15:04:05" }})</span>
     {{ else if .TopRated.Err }}
       <span class="err">Lỗi: {{ .TopRated.Err }}</span>
     {{ else if .TopRated.Summary }}
-      <span class="ok">{{ .TopRated.Summary }} (lúc {{ .TopRated.FinishedAt.Format "15:04:05" }})</span>
+      <span class="ok">{{ .TopRated.Summary }} (lúc {{ localtime .TopRated.FinishedAt "15:04:05" }})</span>
     {{ else }}
       <span class="muted">Chưa chạy lần nào.</span>
     {{ end }}

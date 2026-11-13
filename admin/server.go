@@ -60,7 +60,33 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	},
 	// filesize renders a byte count as a human-readable size.
 	"filesize": filesize,
+	// localtime renders a timestamp for static/localtime.js to rewrite in the
+	// browser's time zone (the page must load that script).
+	"localtime": localtime,
 }).ParseFS(templatesFS, "templates/*.html"))
+
+// localtime wraps t, formatted with the Go layout in the server's zone as the
+// no-JS fallback, in a <time> carrying the instant and the layout, so
+// static/localtime.js can re-render it in the viewer's own zone. It takes a
+// time.Time or *time.Time; nil and zero times render nothing.
+func localtime(v any, layout string) template.HTML {
+	var t time.Time
+	switch x := v.(type) {
+	case time.Time:
+		t = x
+	case *time.Time:
+		if x != nil {
+			t = *x
+		}
+	}
+	if t.IsZero() {
+		return ""
+	}
+	return template.HTML(fmt.Sprintf(`<time datetime="%s" data-fmt="%s">%s</time>`,
+		t.UTC().Format(time.RFC3339),
+		template.HTMLEscapeString(layout),
+		template.HTMLEscapeString(t.Format(layout))))
+}
 
 // filesize renders a byte count as a human-readable size ("—" when unknown).
 func filesize(n int64) string {

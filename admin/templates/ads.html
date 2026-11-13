@@ -88,7 +88,7 @@
       {{/* A rejected save re-renders what was typed, which is not what is live. */}}
       {{ if .Error }}<span class="badge off">Chưa lưu</span>
       {{ else if .Enabled }}<span class="badge on">Đang bật</span>{{ else }}<span class="badge off">Đang tắt</span>{{ end }}
-      {{ if not .UpdatedAt.IsZero }}<span class="muted">Cập nhật lần cuối {{ .UpdatedAt.Format "02/01/2006 15:04" }}</span>{{ end }}
+      {{ if not .UpdatedAt.IsZero }}<span class="muted">Cập nhật lần cuối {{ localtime .UpdatedAt "02/01/2006 15:04" }}</span>{{ end }}
     </div>
 
     {{ if .Saved }}<div class="notice ok">Đã lưu. Trang công khai sẽ cập nhật trong khoảng 30 giây.</div>{{ end }}
@@ -147,5 +147,6 @@
       <li>Ứng dụng TV không bị ảnh hưởng.</li>
     </ul>
   </main>
+<script src="/static/localtime.js" defer></script>
 </body>
 </html>
