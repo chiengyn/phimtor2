@@ -639,9 +639,13 @@ Flat single `main` package.
   `/api/catalog/cards` rather than being stored.
   - Positions under 30s are not saved; ≥95% counts as finished, as does
     `ended`. A finished entry is never offered for resume.
-  - **The resume prompt asks first.** The source keeps preparing behind it;
-    only `buildPlayer` waits for the answer (`opts.resumeAt` may be a Promise).
-    "Start over" forgets the saved position.
+  - **The resume offer is a non-blocking popup.** Playback always starts at
+    0; on the player's first `playing` event `showResumePopup` overlays the
+    video (inside Plyr's container, so fullscreen keeps it). Continue seeks to
+    the saved point; Cancel or Escape just closes it. While `resumeOffer` is
+    open nothing is recorded, or the playback underneath would overwrite the
+    position being offered. A rebuilt player (source switch, recovery) shows
+    it again until it is answered.
   - `resumeFloor` blocks saving a position below the requested start until
     the seek there lands. Without it, a slow seek — or the compatibility
     transcode, which is unseekable and restarts at 0 — would overwrite the
