@@ -127,6 +127,23 @@
 	}
 	.ep-chip:hover { border-color: var(--muted); }
 	.ep-chip.active { border-color: var(--accent); background: rgba(229,9,20,0.18); color: var(--accent); cursor: default; }
+	.ep-chip { position: relative; overflow: hidden; }
+	.ep-chip .wp-bar { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 0; }
+
+	/* "Continue from 12:34?" banner above the player. */
+	.resume-prompt {
+		display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px;
+		margin: 16px 0 0; padding: 14px 16px;
+		background: var(--surface-2); border: 1px solid #3a3a3a; border-radius: var(--radius);
+	}
+	.resume-prompt[hidden] { display: none; }
+	.resume-prompt + .player { margin-top: 12px; }
+	.resume-info { flex: 1 1 220px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+	.resume-text { color: var(--text); font-weight: 600; }
+	.resume-info .wp-bar { max-width: 320px; }
+	.resume-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+	.btn-resume { background: var(--accent); }
+	.btn-resume:hover { background: var(--accent-hover); }
 
 	/* Keyboard-shortcut legend + the on-screen toast shown when a key fires. */
 	.watch .player { position: relative; }
@@ -338,6 +355,9 @@
 <section class="watch wrap"
 	data-owner-kind="{{.OwnerKind}}"
 	data-owner-id="{{.OwnerID}}"
+	data-title-id="{{.TitleID}}"
+	data-season="{{.SeasonNumber}}"
+	data-episode="{{.EpisodeNumber}}"
 	data-videos="{{.VideosJSON}}"
 	data-subs="{{.SubtitlesJSON}}"
 	data-login-url="{{.LoginURL}}"
@@ -358,6 +378,21 @@
 	<div class="load-notice" id="load-notice" hidden>
 		<span class="spinner"></span>
 		<span>{{t "watch.notice"}}</span>
+	</div>
+
+	{{/* "Continue from 12:34?" — shown by the page script when this browser's
+	     watch progress (static/progress.js) has an unfinished position here.
+	     It sits outside #player-wrap because every status update repaints that
+	     element. The source keeps preparing while it waits for an answer. */}}
+	<div class="resume-prompt" id="resume-prompt" role="group" aria-labelledby="resume-text" hidden>
+		<div class="resume-info">
+			<span class="resume-text" id="resume-text"></span>
+			<div class="wp-bar" aria-hidden="true"><span id="resume-bar"></span></div>
+		</div>
+		<div class="resume-actions">
+			<button type="button" class="btn btn-sm btn-resume" id="resume-continue"></button>
+			<button type="button" class="btn btn-sm btn-clear" id="resume-restart">↺ {{t "watch.resume_restart"}}</button>
+		</div>
 	</div>
 
 	<div class="player" id="player-wrap">
@@ -507,7 +542,7 @@
 		<span class="ctrl-label">{{t "detail.season" .SeasonNumber}}</span>
 		<div class="ep-nav">
 			{{range .Episodes}}
-			<a class="ep-chip{{if eq .ID $.OwnerID}} active{{end}}"
+			<a class="ep-chip{{if eq .ID $.OwnerID}} active{{end}}" data-progress="episode:{{.ID}}"
 				href="{{watchEpisodePath .ID .EpisodeNumber $.Heading}}"
 				title="{{if .Name}}{{.Name}}{{else}}{{t "detail.episode" .EpisodeNumber}}{{end}}">{{.EpisodeNumber}}</a>
 			{{end}}
@@ -551,6 +586,8 @@ const I18N = {
 	loadSeeders: {{js (t "watch.load_seeders")}},
 	loadWeak: {{js (t "watch.load_weak")}},
 	loadTitle: {{js (t "watch.load_title")}}, loadTitlePlaying: {{js (t "watch.load_title_playing")}},
+	resumePrompt: {{js (t "watch.resume_prompt")}}, resumeContinue: {{js (t "watch.resume_continue")}},
+	resumeWaiting: {{js (t "watch.resume_waiting")}},
 };
 function i18nFormat(value, ...args) {
 	let i = 0;
@@ -750,14 +787,14 @@ function sendLeave() {
 // the torrent would strand the restored player on a 404. For the freeze case we
 // stay quiet and let pageshow re-assert the heartbeat (or the server's idle sweep
 // clean up if we never return). More reliable than unload, which bfcache skips.
-window.addEventListener('pagehide', (e) => { if (!e.persisted) sendLeave(); });
+window.addEventListener('pagehide', (e) => { recordProgress(true); if (!e.persisted) sendLeave(); });
 
 // On return — restored from bfcache, or the tab/app refocused — re-send a
 // heartbeat immediately so the server re-counts this viewer before its TTL sweep
 // can drop the torrent. If the torrent was already dropped while we were away, the
 // player's next request 404s and its error handler re-prepares the source.
 window.addEventListener('pageshow', (e) => { if (e.persisted) sendHeartbeat(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) sendHeartbeat(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) recordProgress(true); else sendHeartbeat(); });
 
 // --- Sources --------------------------------------------------------------
 
@@ -783,6 +820,101 @@ function savedQuality() {
 
 function saveQuality(res) {
 	try { localStorage.setItem(QUALITY_KEY, res || ''); } catch(e) {}
+}
+
+// Watch progress ------------------------------------------------------------
+//
+// Where this movie / episode was left off, in this browser's localStorage. The
+// storage format and the card bars live in static/progress.js (loaded deferred
+// from layout.html, which is why init waits for DOMContentLoaded); this page
+// is its only writer. Progress is per movie / episode, not per source, so
+// switching quality continues from the same point.
+const PROGRESS = {
+	kind: D.ownerKind === 'episode' ? 'episode' : 'movie',
+	id: Number(D.ownerId),
+	title: Number(D.titleId) || 0,
+	s: Number(D.season) || 0,
+	e: Number(D.episode) || 0,
+};
+const PROGRESS_SAVE_MS = 5000;
+let lastProgressSave = 0;
+// resumeFloor is the position this player was asked to start at, until the
+// seek there lands. Below it, a position means the seek has not happened (or
+// never can: the compatibility transcode is unseekable and restarts at 0), so
+// recording it would wipe out the real place the visitor stopped.
+let resumeFloor = 0;
+// pendingResume is the resume prompt's answer (a Promise of the start
+// position) while it is still unanswered.
+let pendingResume = null;
+
+function progressStore() { return window.phimnetProgress || null; }
+
+function recordProgress(force) {
+	const P = progressStore();
+	const video = document.getElementById('player');
+	if (!P || !player || !video || !PROGRESS.id) return;
+	if (video.ended) return; // recordFinished has it; a duration-less save would undo "done"
+	const t = video.currentTime;
+	if (!(t >= P.MIN_SECONDS)) return;
+	if (resumeFloor && t < resumeFloor - 10) return;
+	const now = Date.now();
+	if (!force && now - lastProgressSave < PROGRESS_SAVE_MS) return;
+	lastProgressSave = now;
+	P.save(PROGRESS.kind, PROGRESS.id, { title: PROGRESS.title, s: PROGRESS.s, e: PROGRESS.e, t, d: video.duration });
+	redrawEpisodeBars();
+}
+
+// The episode chips were drawn at page load; keep this episode's bar moving.
+function redrawEpisodeBars() {
+	const nav = document.querySelector('.ep-nav');
+	if (nav && progressStore()) progressStore().decorate(nav);
+}
+
+function recordFinished() {
+	const P = progressStore();
+	const video = document.getElementById('player');
+	if (!P || !video || !PROGRESS.id) return;
+	const d = isFinite(video.duration) && video.duration > 0 ? video.duration : video.currentTime;
+	P.save(PROGRESS.kind, PROGRESS.id, { title: PROGRESS.title, s: PROGRESS.s, e: PROGRESS.e, t: d, d, done: true });
+	redrawEpisodeBars();
+}
+
+// askResume shows the "continue from 12:34?" prompt and resolves with the
+// position to start at: the saved one, or 0 for "start over" (which also
+// forgets the saved position).
+function askResume(entry) {
+	const P = progressStore();
+	const box = document.getElementById('resume-prompt');
+	if (!P || !box) return 0;
+	const at = P.formatTime(entry.t);
+	document.getElementById('resume-text').textContent = entry.d > 0
+		? i18nFormat(I18N.resumePrompt, at) + ' / ' + P.formatTime(entry.d)
+		: i18nFormat(I18N.resumePrompt, at);
+	document.getElementById('resume-bar').style.width = P.percent(entry).toFixed(1) + '%';
+	const cont = document.getElementById('resume-continue');
+	const restart = document.getElementById('resume-restart');
+	cont.textContent = '▶ ' + i18nFormat(I18N.resumeContinue, at);
+	box.hidden = false;
+	try { cont.focus({ preventScroll: true }); } catch(e) {}
+	pendingResume = new Promise(resolve => {
+		const answer = (t) => {
+			box.hidden = true;
+			pendingResume = null;
+			cont.onclick = restart.onclick = null;
+			resolve(t);
+		};
+		cont.onclick = () => answer(entry.t);
+		restart.onclick = () => { P.remove(PROGRESS.kind, PROGRESS.id); answer(0); };
+	});
+	return pendingResume;
+}
+
+// currentPosition is where a source switch should continue from: the playing
+// position, or the prompt's answer when it is still waiting for one.
+function currentPosition() {
+	if (pendingResume) return pendingResume;
+	const video = document.getElementById('player');
+	return (player && video && video.currentTime) || 0;
 }
 
 // Qualities we will auto-start, best first. 2160p is deliberately absent: 4K is
@@ -817,7 +949,7 @@ function pickDefaultVideo() {
 function chooseSource(videoID) {
 	const v = VIDEOS.find(x => x.id === videoID);
 	if (v) saveQuality(v.resolution);
-	playSource(videoID);
+	playSource(videoID, { resumeAt: currentPosition() });
 }
 
 // renderSourceChips shows every source as a chip (even a single one) and
@@ -1018,7 +1150,17 @@ async function playSource(videoID, opts = {}) {
 	// we decide between letting the browser demux and remuxing it ourselves.
 	const contentType = await prebufferStream(rawStreamURL(src), videoID);
 	if (activeVideoID !== videoID) return; // user switched sources during prebuffer
-	buildPlayer(src, opts.resumeAt || 0, contentType);
+	// resumeAt may be the resume prompt's pending answer. The torrent has kept
+	// warming up behind the prompt; only attaching the player waits for it.
+	let resumeAt = opts.resumeAt || 0;
+	if (typeof resumeAt.then === 'function') {
+		// "Playback will start automatically" is not true while we wait on them.
+		hideLoadNotice();
+		setPlayerStatus(I18N.resumeWaiting);
+		resumeAt = await resumeAt;
+		if (activeVideoID !== videoID) return; // switched sources while asking
+	}
+	buildPlayer(src, resumeAt, contentType);
 	setStatus('');
 }
 
@@ -1120,7 +1262,8 @@ async function recoverStream() {
 	if (recovering || activeVideoID == null) return;
 	recovering = true;
 	const vid = activeVideoID;
-	const resumeAt = (player && player.currentTime) || 0;
+	// A resume seek that has not landed yet still names the real position.
+	const resumeAt = resumeFloor || (player && player.currentTime) || 0;
 	try {
 		await playSource(vid, { force: true, resumeAt });
 	} finally {
@@ -1214,7 +1357,17 @@ function buildPlayer(streamURL, resumeAt, contentType) {
 		video.appendChild(source);
 	}
 
-	// Resume near where we left off after a recovery re-prepare.
+	// Resume where we left off: after a recovery re-prepare, a source switch, or
+	// the resume prompt.
+	resumeFloor = resumeAt > 0 ? resumeAt : 0;
+	lastProgressSave = 0;
+	video.addEventListener('seeked', () => {
+		if (resumeFloor && Math.abs(video.currentTime - resumeFloor) < 15) resumeFloor = 0;
+		recordProgress(false);
+	});
+	video.addEventListener('timeupdate', () => recordProgress(false));
+	video.addEventListener('pause', () => recordProgress(true));
+	video.addEventListener('ended', recordFinished);
 	if (resumeAt > 0) {
 		video.addEventListener('loadedmetadata', () => {
 			try { video.currentTime = resumeAt; } catch(e) {}
@@ -2001,7 +2154,7 @@ function resetSubStyle() {
 
 // --- Init -----------------------------------------------------------------
 
-(async function init() {
+async function init() {
 	loadSubStyle();
 	initSubStyleControls();
 	syncSubStyleControls();
@@ -2018,7 +2171,9 @@ function resetSubStyle() {
 	const memberVideo = VIDEOS.find(v => v.lock === 'member');
 	const upgradeVideo = VIDEOS.find(v => v.lock === 'upgrade');
 	if (defaultVideo) {
-		await playSource(defaultVideo.id);
+		const P = progressStore();
+		const saved = P && P.resumable(PROGRESS.kind, PROGRESS.id);
+		await playSource(defaultVideo.id, { resumeAt: saved ? askResume(saved) : 0 });
 		if (SAVED_SUBS.length) applySavedSubtitle(SAVED_SUBS[0].id);
 	} else if (memberVideo) {
 		// Nothing free here — every source needs an account. Ask for one.
@@ -2029,7 +2184,11 @@ function resetSubStyle() {
 	} else if (VIDEOS.length) {
 		showPlayerStatus(I18N.unavailable4K, true);
 	}
-})();
+}
+// Deferred scripts (static/progress.js among them) run just before
+// DOMContentLoaded, and this inline script runs earlier, while the page parses.
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
 </script>
 {{end}}
 {{end}}

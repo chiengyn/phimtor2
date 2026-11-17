@@ -243,6 +243,8 @@
 		function draw(entries) {
 			grid.textContent = '';
 			entries.forEach(function (entry) { grid.appendChild(buildCard(entry)); });
+			// Cards built here missed progress.js's first pass over the page.
+			if (window.phimnetProgress) window.phimnetProgress.decorate(grid);
 			syncEmptyState();
 		}
 		if (!list.length) { draw([]); return; }

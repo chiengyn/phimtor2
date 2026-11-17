@@ -19,8 +19,9 @@ The browse/discovery flow is **fully server-rendered with no JS framework**:
 filtering is a GET `<form>` and pagination is plain `<a>` links, so every state
 has a real, shareable URL (search/genre/type/page all live in the query string). The only
 JS is plain vanilla, no build step: the Plyr-based watch page's inline script,
-small inline carousel helpers, `static/bookmarks.js` (loaded site-wide from
-`layout.html`, see *Bookmarks* below), and `static/mkvplayer.js` (an ES module the
+small inline carousel helpers, `static/bookmarks.js` and `static/progress.js`
+(both loaded site-wide from `layout.html`, see *Bookmarks* and *Watch
+progress* below), and `static/mkvplayer.js` (an ES module the
 watch page `import()`s only when it meets a container the browser cannot demux —
 see *Playing `.mkv`* below).
 
@@ -623,6 +624,31 @@ Flat single `main` package.
     `buildCard` in the JS in sync with that partial's classes** (it is still
     needed for local mode). Every storage access is `try/catch`-guarded so
     blocked storage degrades to "nothing saved".
+
+- **Watch progress / "continue watching"** (`static/progress.js`,
+  `templates/watch.html`). Where each movie and episode was left off, in
+  **localStorage only** (`phimnet.progress`, newest-first, capped at 300) — it
+  never reaches the server, works signed out, and does not follow an account
+  across devices. Keyed per movie/episode, **not per source**, so a quality
+  switch continues from the same point (`chooseSource` passes the current
+  position). The watch page is the only writer; `progress.js` owns the format
+  and reads it for bars on poster cards (newest unfinished entry of that
+  title), on `[data-progress="episode:<id>"]` elements (detail-page episode
+  rows, watch-page episode chips; a finished one shows a full grey bar), and
+  for the home's `#continue-row`, whose card metadata comes localized from
+  `/api/catalog/cards` rather than being stored.
+  - Positions under 30s are not saved; ≥95% counts as finished, as does
+    `ended`. A finished entry is never offered for resume.
+  - **The resume prompt asks first.** The source keeps preparing behind it;
+    only `buildPlayer` waits for the answer (`opts.resumeAt` may be a Promise).
+    "Start over" forgets the saved position.
+  - `resumeFloor` blocks saving a position below the requested start until
+    the seek there lands. Without it, a slow seek — or the compatibility
+    transcode, which is unseekable and restarts at 0 — would overwrite the
+    real position after 30s.
+  - `progress.js` is deferred, so the watch page's `init` runs on
+    `DOMContentLoaded`, after it. `bookmarks.js` calls `decorate()` on the
+    cards it builds itself.
 
 - **Ads** (`ads.go`, `Store.AdConfig`). Everything is set at the admin's `/ads`
   page: a master switch and one global script in `ad_settings` (`0014`), plus

@@ -1006,3 +1006,30 @@ main + .ad-slot { max-width: var(--wrap); padding: 0 4%; }
 	}
 	* { transition: none !important; }
 }
+
+/* --- Watch progress bar ------------------------------------------------- */
+/* Drawn by static/progress.js: at the foot of a poster card, under an episode
+   row's text, along an episode chip, and in the watch page's resume prompt. */
+.wp-bar {
+	height: 4px; border-radius: 2px; overflow: hidden;
+	background: rgba(255,255,255,0.22);
+}
+.wp-bar > span { display: block; height: 100%; width: 0; background: var(--accent); }
+.wp-bar.is-done > span { background: var(--muted); }
+.poster > .wp-bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; border-radius: 0; }
+/* The subtitle badge sits bottom-right; lift it clear of the bar. */
+.poster:has(> .wp-bar) .card-vietsub { bottom: 12px; }
+.ep-body > .wp-bar { margin-top: 8px; max-width: 240px; }
+
+/* "Continue watching" cards swap the save button for a remove one, top-right. */
+.card-remove {
+	position: absolute; top: 6px; right: 6px; z-index: 4;
+	width: 28px; height: 28px; padding: 0;
+	display: flex; align-items: center; justify-content: center;
+	border: none; border-radius: 50%; cursor: pointer;
+	background: rgba(0,0,0,0.66); color: var(--text); font-size: 0.8rem;
+	opacity: 0; transition: opacity 0.25s var(--ease), background 0.2s var(--ease);
+}
+.card:hover .card-remove, .card-remove:focus-visible { opacity: 1; }
+.card-remove:hover { background: rgba(0,0,0,0.85); }
+@media (hover: none) { .card-remove { opacity: 1; } }

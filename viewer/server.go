@@ -1169,6 +1169,11 @@ type watchData struct {
 	// Same-season episode navigation (episode watch page only; empty for movies).
 	SeasonNumber int
 	Episodes     []Episode
+	// TitleID and EpisodeNumber label this page's entry in the browser's watch
+	// progress (static/progress.js), which the "Continue watching" row groups by
+	// title. TitleID equals OwnerID on a movie; EpisodeNumber is 0 there.
+	TitleID       int64
+	EpisodeNumber int
 
 	// --- Subtitle search panel ---
 	//
@@ -1467,6 +1472,7 @@ func (s *Server) handleWatchMovie(w http.ResponseWriter, r *http.Request) {
 		HasVideo:      len(videos) > 0,
 		LoginURL:      s.loginURL(r),
 		UpgradeURL:    s.upgradeURL(locale, title.ID),
+		TitleID:       title.ID,
 	}
 	s.fillSubtitleSearch(&data, r, title.ID, firstNonEmpty(title.OriginalTitle, title.Title), 0, 0)
 	data.languageURLs = s.watchLanguageURLs(r, title.ID, func(l Locale, n TitleNames) string {
@@ -1524,6 +1530,8 @@ func (s *Server) handleWatchEpisode(w http.ResponseWriter, r *http.Request) {
 		UpgradeURL:    s.upgradeURL(locale, ec.TitleID),
 		SeasonNumber:  ec.SeasonNumber,
 		Episodes:      eps,
+		TitleID:       ec.TitleID,
+		EpisodeNumber: ec.EpisodeNumber,
 	}
 	s.fillSubtitleSearch(&data, r, ec.TitleID, ec.TitleName, ec.SeasonNumber, ec.EpisodeNumber)
 	data.languageURLs = s.watchLanguageURLs(r, ec.TitleID, func(l Locale, n TitleNames) string {
@@ -2024,6 +2032,9 @@ func (s *Server) newPageData(r *http.Request, data any) pageData {
 		"typeMovie":            tr(locale, "type.movie"),
 		"typeTV":               tr(locale, "type.tv"),
 		"subtitleBadge":        tr(locale, "card.subtitle"),
+		"episodeLabel":         tr(locale, "watch.episode_sub"),
+		"continueRemove":       tr(locale, "home.continue_remove"),
+		"continueRemaining":    tr(locale, "home.continue_remaining"),
 	}
 	pd := pageData{
 		Data:               data,

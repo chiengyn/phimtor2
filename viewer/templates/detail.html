@@ -64,7 +64,7 @@
 				{{range .Episodes}}
 				<div class="episode">
 					<span class="ep-num">{{.EpisodeNumber}}</span>
-					<div class="ep-body">
+					<div class="ep-body" data-progress="episode:{{.ID}}">
 						<div class="ep-title">{{if .Name}}{{.Name}}{{else}}{{t "detail.episode" .EpisodeNumber}}{{end}}</div>
 						{{if .Overview}}<div class="ep-overview">{{.Overview}}</div>{{end}}
 					</div>

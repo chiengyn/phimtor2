@@ -104,6 +104,17 @@
 		</select>
 		<button class="filter-btn" type="submit">{{t "search.submit"}}</button>
 	</form>
-	<div id="results">{{if .Filtered}}{{template "grid" .Grid}}{{else}}{{template "rows" .Rows}}{{end}}</div>
+	<div id="results">{{if .Filtered}}{{template "grid" .Grid}}{{else}}
+	{{/* Filled by static/progress.js from this browser's watch progress; it stays
+	     hidden for a visitor who has nothing unfinished. */}}
+	<section class="row" id="continue-row" hidden>
+		<h2 class="row-title"><span>{{t "home.continue_watching"}}</span></h2>
+		<div class="row-rail">
+			<button class="row-arrow row-arrow-prev" type="button" aria-label="{{t "row.prev"}}" hidden>‹</button>
+			<div class="row-track"></div>
+			<button class="row-arrow row-arrow-next" type="button" aria-label="{{t "row.next"}}">›</button>
+		</div>
+	</section>
+	{{template "rows" .Rows}}{{end}}</div>
 </div>
 {{end}}
